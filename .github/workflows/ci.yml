@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore:
+      - 'v*.*.*'
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'tsconfig.json'
+      - 'vitest.config.ts'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'tsconfig.json'
+      - 'vitest.config.ts'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: corepack enable
+      - run: corepack prepare yarn@4.12.0 --activate
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - run: yarn install --immutable
+      - run: yarn lint
+      - run: yarn build
+      - run: yarn test --run --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}

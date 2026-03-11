@@ -1,0 +1,42 @@
+{
+  "name": "@libraz/node-cli",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "author": "libraz <libraz@libraz.net>",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage",
+    "lint": "biome check src tests",
+    "format": "biome format --write src tests",
+    "check": "biome check --write src tests",
+    "prepack": "cp README.md .readme-backup && cp README.npm.md README.md",
+    "postpack": "mv .readme-backup README.md"
+  },
+  "volta": {
+    "node": "22.14.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "@types/node": "^25.4.0",
+    "@vitest/coverage-v8": "^3.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

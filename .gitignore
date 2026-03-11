@@ -1,0 +1,27 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.yarn/
+
+# Claude
+.claude/
+CLAUDE.md
+AGENT.md
+
+# Editor
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup
+backup/
+
+# Misc
+*.log
+.readme-backup
