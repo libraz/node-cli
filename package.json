@@ -26,8 +26,8 @@
     "lint": "biome check src tests",
     "format": "biome format --write src tests",
     "check": "biome check --write src tests",
-    "prepack": "cp README.md .readme-backup && cp README.npm.md README.md",
-    "postpack": "mv .readme-backup README.md"
+    "prepack": "cp README.md .readme-backup && cp README.npm.md .npm-readme-backup && cp README.npm.md README.md && rm README.npm.md",
+    "postpack": "mv .readme-backup README.md && mv .npm-readme-backup README.npm.md"
   },
   "volta": {
     "node": "22.14.0"

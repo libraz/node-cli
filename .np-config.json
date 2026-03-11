@@ -1,0 +1,7 @@
+{
+  "yarn": true,
+  "tests": true,
+  "cleanup": true,
+  "publish": false,
+  "releaseDraft": false
+}
