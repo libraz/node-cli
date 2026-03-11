@@ -43,6 +43,7 @@ describe("color", () => {
   });
 
   it("throws on unknown style", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: testing unknown style access
     expect(() => (color as any).foobar("test")).toThrow("Unknown style");
   });
 });

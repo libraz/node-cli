@@ -4,6 +4,7 @@ import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
 import { CommandNotFoundError, MissingArgumentError } from "../src/errors.js";
 import { HelpGenerator } from "../src/help/generator.js";
+import type { Shell } from "../src/shell/repl.js";
 import { createMockStdout } from "./helpers.js";
 
 function setup() {
@@ -92,7 +93,7 @@ describe("CommandRouter", () => {
     const action = vi.fn();
     new CommandBuilder(registry, "test").action(action);
 
-    const mockShell = {} as any;
+    const mockShell = {} as unknown as Shell;
     await router.execute("test", { shell: mockShell });
     expect(action.mock.calls[0][0].shell).toBe(mockShell);
   });

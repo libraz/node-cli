@@ -85,7 +85,7 @@ export function parseDefinitionString(definition: string): {
     }
   }
 
-  const name = names.pop()!;
+  const name = names.pop() as string;
   const parentPath = names;
 
   return { parentPath, name, argDefs };

@@ -348,7 +348,7 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
       masking = true;
 
       // Override write to mask characters
-      let inputLength = 0;
+      let _inputLength = 0;
       (stdout as NodeJS.WriteStream).write = function (
         this: NodeJS.WriteStream,
         chunk: string | Uint8Array,
@@ -356,8 +356,9 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
       ): boolean {
         if (masking && typeof chunk === "string") {
           // Replace visible characters with *
+          // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence matching requires control characters
           const masked = chunk.replace(/[^\r\n\x1b[\d;]*[^\r\n\x1b[\d;]/g, (match: string) => {
-            inputLength += match.length;
+            _inputLength += match.length;
             return "*".repeat(match.length);
           });
           return writeOriginal.call(stdout, masked, ...args);

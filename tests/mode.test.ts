@@ -54,12 +54,12 @@ describe("mode command", () => {
 
   it("command action can enter mode via shell", () => {
     const registry = new CommandRegistry();
-    const router = new CommandRouter(registry);
+    const _router = new CommandRouter(registry);
 
     const modeAction = vi.fn();
     new CommandBuilder(registry, "sql").action((ctx) => {
-      if (ctx.shell && "enterMode" in ctx.shell) {
-        (ctx.shell as any).enterMode({
+      if (ctx.shell) {
+        ctx.shell.enterMode({
           prompt: "sql> ",
           action: modeAction,
           message: "Entering SQL mode",

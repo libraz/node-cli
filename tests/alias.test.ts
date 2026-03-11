@@ -18,29 +18,29 @@ describe("command aliases", () => {
     const registry = createRegistry();
     const cmd = registry.resolve(["d"]);
     expect(cmd).toBeDefined();
-    expect(cmd!.name).toBe("deploy");
+    expect(cmd?.name).toBe("deploy");
   });
 
   it("resolves command by second alias", () => {
     const registry = createRegistry();
     const cmd = registry.resolve(["dep"]);
     expect(cmd).toBeDefined();
-    expect(cmd!.name).toBe("deploy");
+    expect(cmd?.name).toBe("deploy");
   });
 
   it("resolves command by canonical name", () => {
     const registry = createRegistry();
     const cmd = registry.resolve(["deploy"]);
     expect(cmd).toBeDefined();
-    expect(cmd!.name).toBe("deploy");
+    expect(cmd?.name).toBe("deploy");
   });
 
   it("matchCommandPath works with alias", () => {
     const registry = createRegistry();
     const match = registry.matchCommandPath(["d", "prod"]);
     expect(match).toBeDefined();
-    expect(match!.command.name).toBe("deploy");
-    expect(match!.consumed).toBe(1);
+    expect(match?.command.name).toBe("deploy");
+    expect(match?.consumed).toBe(1);
   });
 
   it("subcommand aliases work", () => {
@@ -53,11 +53,11 @@ describe("command aliases", () => {
 
     const cmd = registry.resolve(["user", "c"]);
     expect(cmd).toBeDefined();
-    expect(cmd!.name).toBe("create");
+    expect(cmd?.name).toBe("create");
 
     const cmd2 = registry.resolve(["user", "new"]);
     expect(cmd2).toBeDefined();
-    expect(cmd2!.name).toBe("create");
+    expect(cmd2?.name).toBe("create");
   });
 
   it("completion includes aliases", () => {

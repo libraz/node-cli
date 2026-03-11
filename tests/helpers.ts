@@ -33,7 +33,7 @@ export function createMockTTY(): Writable & { getOutput(): string; isTTY: true }
 
   const ttyStream = stream as Writable & { getOutput(): string; isTTY: true };
   ttyStream.getOutput = () => buffer;
-  (ttyStream as any).isTTY = true;
+  (ttyStream as unknown as Record<string, boolean>).isTTY = true;
 
   return ttyStream;
 }

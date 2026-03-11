@@ -154,10 +154,12 @@ export class HelpGenerator {
     if (command.subcommands.size > 0) {
       lines.push("", "Commands:");
       // Deduplicate: aliases point to the same definition object
-      const subEntries: [string, string][] = [...new Set(command.subcommands.values())].map((sub) => {
-        const usage = formatCommandUsage(sub);
-        return [usage, sub.description ?? ""];
-      });
+      const subEntries: [string, string][] = [...new Set(command.subcommands.values())].map(
+        (sub) => {
+          const usage = formatCommandUsage(sub);
+          return [usage, sub.description ?? ""];
+        },
+      );
       const maxWidth = Math.max(...subEntries.map(([u]) => stringWidth(u)));
 
       for (const [usage, desc] of subEntries) {
@@ -206,7 +208,7 @@ function formatOptionEntries(options: OptionDef[]): [string, string][] {
 
     // Aliases
     if (opt.aliases.length > 0) {
-      parts.push(opt.aliases.map((a) => `-${a}`).join(", ") + ",");
+      parts.push(`${opt.aliases.map((a) => `-${a}`).join(", ")},`);
     } else {
       parts.push("   ");
     }

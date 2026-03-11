@@ -73,7 +73,7 @@ export class History {
   async save(): Promise<void> {
     try {
       await mkdir(dirname(this.filePath), { recursive: true });
-      await writeFile(this.filePath, this.lines.join("\n") + "\n", "utf-8");
+      await writeFile(this.filePath, `${this.lines.join("\n")}\n`, "utf-8");
     } catch (err) {
       process.stderr.write(`Warning: Could not save history to ${this.filePath}: ${err}\n`);
     }

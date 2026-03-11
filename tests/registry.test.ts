@@ -45,8 +45,8 @@ describe("CommandRegistry", () => {
 
     const config = registry.resolve(["config"]);
     expect(config).toBeDefined();
-    expect(config!.name).toBe("config");
-    expect(config!.action).toBeUndefined();
+    expect(config?.name).toBe("config");
+    expect(config?.action).toBeUndefined();
   });
 
   it("merges existing definitions", () => {
@@ -56,8 +56,8 @@ describe("CommandRegistry", () => {
     registry.register(makeDef("deploy", { action, description: "Deploy app" }));
 
     const resolved = registry.resolve(["deploy"]);
-    expect(resolved!.action).toBe(action);
-    expect(resolved!.description).toBe("Deploy app");
+    expect(resolved?.action).toBe(action);
+    expect(resolved?.description).toBe("Deploy app");
   });
 
   it("matchCommandPath finds longest match", () => {
@@ -67,8 +67,8 @@ describe("CommandRegistry", () => {
 
     const result = registry.matchCommandPath(["user", "create", "foo"]);
     expect(result).toBeDefined();
-    expect(result!.command.name).toBe("create");
-    expect(result!.consumed).toBe(2);
+    expect(result?.command.name).toBe("create");
+    expect(result?.consumed).toBe(2);
   });
 
   it("matchCommandPath returns undefined for no match", () => {
@@ -92,16 +92,20 @@ describe("CommandRegistry", () => {
     const registry = new CommandRegistry();
     registry.register(makeDef("create"), ["user"]);
 
-    const createCmd = registry.resolve(["user", "create"])!;
-    expect(registry.getCommandPath(createCmd)).toEqual(["user", "create"]);
+    const createCmd = registry.resolve(["user", "create"]);
+    expect(createCmd).toBeDefined();
+    if (createCmd) {
+      expect(registry.getCommandPath(createCmd)).toEqual(["user", "create"]);
+    }
   });
 
   it("sets parent reference on nested commands", () => {
     const registry = new CommandRegistry();
     registry.register(makeDef("create"), ["user"]);
 
-    const createCmd = registry.resolve(["user", "create"])!;
-    expect(createCmd.parent).toBeDefined();
-    expect(createCmd.parent!.name).toBe("user");
+    const createCmd = registry.resolve(["user", "create"]);
+    expect(createCmd).toBeDefined();
+    expect(createCmd?.parent).toBeDefined();
+    expect(createCmd?.parent?.name).toBe("user");
   });
 });

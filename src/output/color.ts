@@ -160,6 +160,7 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
 // ── Strip ANSI ──
 
 /** Regular expression matching all ANSI escape sequences. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence matching requires control characters
 const ansiRegex = /\x1b\[[0-9;]*m/g;
 
 /**
@@ -186,7 +187,7 @@ export function stringWidth(text: string): number {
   const stripped = stripAnsi(text);
   let width = 0;
   for (const char of stripped) {
-    const code = char.codePointAt(0)!;
+    const code = char.codePointAt(0) as number;
     width += getCharWidth(code);
   }
   return width;

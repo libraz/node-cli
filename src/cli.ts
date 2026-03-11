@@ -233,7 +233,7 @@ export class CLI {
 
   private registerHelpCommand(): void {
     const helpGenerator = this.helpGenerator;
-    const registry = this.registry;
+    const _registry = this.registry;
 
     new CommandBuilder(this.registry, "help [...command]")
       .description("Show help information")

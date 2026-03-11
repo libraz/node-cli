@@ -15,8 +15,8 @@ describe("CLI (integration)", () => {
     cli.command("greet <name>").action(action);
 
     // Redirect stderr to avoid error output
-    const stderr = createMockStdout();
-    const origStderr = process.stderr.write;
+    const _stderr = createMockStdout();
+    const _origStderr = process.stderr.write;
 
     await cli.start(["greet", "world"]);
     expect(action).toHaveBeenCalledOnce();

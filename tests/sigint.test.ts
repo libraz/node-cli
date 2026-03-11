@@ -11,7 +11,7 @@ describe("custom SIGINT handler", () => {
 
     const cmd = registry.resolve(["longrun"]);
     expect(cmd).toBeDefined();
-    expect(cmd!.cancelHandler).toBe(handler);
+    expect(cmd?.cancelHandler).toBe(handler);
   });
 
   it("cancel handler is accessible after registration", () => {
@@ -22,7 +22,7 @@ describe("custom SIGINT handler", () => {
     new CommandBuilder(registry, "task").action(actionFn).cancel(cancelFn);
 
     const cmd = registry.resolve(["task"]);
-    expect(cmd!.cancelHandler).toBe(cancelFn);
-    expect(cmd!.action).toBe(actionFn);
+    expect(cmd?.cancelHandler).toBe(cancelFn);
+    expect(cmd?.action).toBe(actionFn);
   });
 });

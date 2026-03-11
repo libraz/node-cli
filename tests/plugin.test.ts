@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CLI } from "../src/cli.js";
 import { createMockStdout } from "./helpers.js";
 
@@ -73,7 +73,7 @@ describe("plugin system", () => {
       registered = true;
     });
 
-    const stream = createMockStdout();
+    const _stream = createMockStdout();
     // start with explicit argv triggers direct mode
     await cli.start(["async-cmd"]);
     expect(registered).toBe(true);
