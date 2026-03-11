@@ -354,6 +354,57 @@ cli.command("sql").action((ctx) => {
 
 Type `exit` or `quit` to return to the main shell.
 
+## Tab Completion
+
+The interactive shell provides automatic tab completion for command names, subcommands, and option flags.
+
+### Option Value Completion
+
+Options with `choices` are automatically completed. You can also provide explicit `autocomplete` candidates:
+
+```typescript
+cli.command("deploy <env>")
+  .option("--region <region>", {
+    autocomplete: ["us-east-1", "us-west-2", "eu-west-1"],
+  })
+  .option("--profile <profile>", {
+    // Dynamic completions (async supported)
+    autocomplete: async (current) => {
+      const profiles = await loadProfiles();
+      return profiles.map((p) => p.name);
+    },
+  });
+```
+
+### Custom Command Completer
+
+Use `.complete()` to provide custom completions for a command's arguments:
+
+```typescript
+cli.command("connect <host>")
+  .complete((ctx) => {
+    return ["localhost", "example.com", "192.168.1.1"];
+  })
+  .action((ctx) => { /* ... */ });
+```
+
+### Progressive Completion (Tab Iteration)
+
+The `CompletionContext.iteration` counter tracks consecutive Tab presses, enabling progressive completions:
+
+```typescript
+cli.command("ssh <host>")
+  .complete((ctx) => {
+    if (ctx.iteration === 1) {
+      // First Tab: show recent hosts
+      return ["server-1", "server-2"];
+    }
+    // Second+ Tab: show all hosts
+    return ["server-1", "server-2", "server-3", "server-4", "server-5"];
+  })
+  .action((ctx) => { /* ... */ });
+```
+
 ## Custom SIGINT Handler
 
 Register a handler for when SIGINT (Ctrl+C) is received during command execution:

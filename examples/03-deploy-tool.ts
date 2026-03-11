@@ -17,10 +17,12 @@ const cli = createCLI({ name: "deploy-tool" });
 // ── Events for logging ──
 
 cli.on("beforeExecute", (ctx) => {
+  if (ctx.commandPath[0] === "help") return;
   ctx.stderr.write(c`{dim [${new Date().toISOString()}] Running: ${ctx.commandPath.join(" ")}}\n`);
 });
 
 cli.on("afterExecute", (ctx) => {
+  if (ctx.commandPath[0] === "help") return;
   ctx.stderr.write(c`{dim [${new Date().toISOString()}] Done}\n`);
 });
 

@@ -86,7 +86,7 @@ Type "help <command>" for more information.
 
 The interactive shell provides:
 - Command history (persisted to disk)
-- Tab completion for commands, subcommands, and options
+- Tab completion for commands, subcommands, options, and option values
 - Built-in `help`, `exit`, and `quit` commands
 
 ## CLI Configuration

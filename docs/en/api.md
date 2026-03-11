@@ -160,10 +160,19 @@ type Action = (ctx: CommandContext) => void | Promise<void>
 
 #### `complete(fn: Completer): this`
 
-Set a custom tab-completion provider.
+Set a custom tab-completion provider. The `CompletionContext` includes an `iteration` counter (1-based) that tracks consecutive Tab presses, allowing progressive completions.
 
 ```typescript
 type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>
+
+interface CompletionContext {
+  line: string;           // Full input line
+  current: string;        // Current word being completed
+  commandPath: string[];  // Resolved command path
+  args: Record<string, unknown>;
+  options: Record<string, unknown>;
+  iteration: number;      // Consecutive Tab press count (1-based)
+}
 ```
 
 #### `alias(...names: string[]): this`
@@ -251,6 +260,7 @@ interface OptionSchema {
 | `parse` | — | Custom parser for raw string value |
 | `validate` | — | Custom validator (throw on invalid) |
 | `hidden` | `false` | Hide from help output |
+| `autocomplete` | — | Completion candidates for option values. Array of strings or `(current: string) => string[] \| Promise<string[]>` |
 
 ---
 

@@ -160,10 +160,19 @@ type Action = (ctx: CommandContext) => void | Promise<void>
 
 #### `complete(fn: Completer): this`
 
-カスタムタブ補完プロバイダを設定。
+カスタムタブ補完プロバイダを設定。`CompletionContext` には連続 Tab 押下回数を示す `iteration`（1始まり）が含まれ、段階的な補完候補の提示が可能。
 
 ```typescript
 type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>
+
+interface CompletionContext {
+  line: string;           // 入力行全体
+  current: string;        // 補完中の単語
+  commandPath: string[];  // 解決済みコマンドパス
+  args: Record<string, unknown>;
+  options: Record<string, unknown>;
+  iteration: number;      // 連続 Tab 押下回数（1始まり）
+}
 ```
 
 #### `alias(...names: string[]): this`
@@ -251,6 +260,7 @@ interface OptionSchema {
 | `parse` | — | 生の文字列値のカスタムパーサー |
 | `validate` | — | カスタムバリデーター（無効時に例外を投げる） |
 | `hidden` | `false` | ヘルプ出力から非表示 |
+| `autocomplete` | — | オプション値の補完候補。文字列配列または `(current: string) => string[] \| Promise<string[]>` |
 
 ---
 

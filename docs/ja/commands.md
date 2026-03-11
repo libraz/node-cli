@@ -354,6 +354,57 @@ cli.command("sql").action((ctx) => {
 
 `exit` または `quit` でメインシェルに戻ります。
 
+## タブ補完
+
+インタラクティブシェルでは、コマンド名、サブコマンド、オプションフラグの自動補完が動作します。
+
+### オプション値の補完
+
+`choices` を持つオプションは自動的に補完されます。`autocomplete` で明示的に候補を指定することもできます:
+
+```typescript
+cli.command("deploy <env>")
+  .option("--region <region>", {
+    autocomplete: ["us-east-1", "us-west-2", "eu-west-1"],
+  })
+  .option("--profile <profile>", {
+    // 動的な補完（async 対応）
+    autocomplete: async (current) => {
+      const profiles = await loadProfiles();
+      return profiles.map((p) => p.name);
+    },
+  });
+```
+
+### カスタムコマンド補完
+
+`.complete()` でコマンドの引数に対するカスタム補完を提供できます:
+
+```typescript
+cli.command("connect <host>")
+  .complete((ctx) => {
+    return ["localhost", "example.com", "192.168.1.1"];
+  })
+  .action((ctx) => { /* ... */ });
+```
+
+### 段階的補完（Tab イテレーション）
+
+`CompletionContext.iteration` で連続 Tab 押下回数を追跡し、段階的な補完が可能です:
+
+```typescript
+cli.command("ssh <host>")
+  .complete((ctx) => {
+    if (ctx.iteration === 1) {
+      // 1回目の Tab: 最近のホストを表示
+      return ["server-1", "server-2"];
+    }
+    // 2回目以降: すべてのホストを表示
+    return ["server-1", "server-2", "server-3", "server-4", "server-5"];
+  })
+  .action((ctx) => { /* ... */ });
+```
+
 ## カスタム SIGINT ハンドラ
 
 コマンド実行中に SIGINT (Ctrl+C) を受信した時のハンドラを登録:

@@ -39,6 +39,8 @@ export interface OptionSchema {
   validate?: (value: unknown, ctx: CommandContext) => void;
   /** If true, the option is hidden from help output. */
   hidden?: boolean;
+  /** Completion candidates for this option's value. Can be a static array or a function. */
+  autocomplete?: string[] | ((current: string) => string[] | Promise<string[]>);
 }
 
 /**
@@ -158,6 +160,8 @@ export interface CompletionContext {
   args: Record<string, unknown>;
   /** Options parsed so far. */
   options: Record<string, unknown>;
+  /** Number of consecutive Tab presses (1-based). Resets on any other input. */
+  iteration: number;
 }
 
 // ── CLI Options ──

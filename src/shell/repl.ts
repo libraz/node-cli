@@ -63,6 +63,47 @@ export class Shell {
   }
 
   /**
+   * Creates (or recreates) the readline interface with current history.
+   */
+  private openReadline(history: string[]): void {
+    this.rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: this.mode ? this.mode.prompt : this.promptStr,
+      history,
+      completer: (line: string) => this.completer.complete(line),
+      terminal: true,
+    });
+    this.rl.on("close", () => {
+      this.running = false;
+    });
+  }
+
+  /**
+   * Reads the next line of user input via the readline interface.
+   * Returns `null` on EOF / close.
+   */
+  private readNextLine(): Promise<string | null> {
+    return new Promise<string | null>((resolve) => {
+      const rl = this.rl;
+      if (!rl) {
+        resolve(null);
+        return;
+      }
+      const onLine = (line: string) => {
+        rl.off("close", onClose);
+        resolve(line);
+      };
+      const onClose = () => {
+        rl.off("line", onLine);
+        resolve(null);
+      };
+      rl.once("line", onLine);
+      rl.once("close", onClose);
+    });
+  }
+
+  /**
    * Starts the interactive shell loop.
    * Loads history, sets up readline with tab-completion, and processes
    * user input until "exit", "quit", or EOF is received.
@@ -71,34 +112,23 @@ export class Shell {
   async start(): Promise<void> {
     const historyEntries = await this.history.load();
 
-    this.rl = createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      prompt: this.promptStr,
-      history: historyEntries,
-      completer: (line: string) => this.completer.complete(line),
-      terminal: true,
-    });
-
     this.running = true;
-
-    this.rl.on("close", () => {
-      this.running = false;
-    });
 
     if (this.banner) {
       process.stdout.write(`${this.banner}\n`);
     }
 
-    this.rl.prompt();
+    this.openReadline(historyEntries);
 
-    for await (const line of this.rl) {
-      if (!this.running) break;
+    while (this.running) {
+      this.rl?.prompt();
+
+      const line = await this.readNextLine();
+      if (line === null) break;
 
       const trimmed = line.trim();
 
       if (trimmed === "") {
-        this.rl.prompt();
         continue;
       }
 
@@ -111,6 +141,12 @@ export class Shell {
       }
 
       this.history.add(trimmed);
+
+      // Close readline to fully release stdin before command execution.
+      // This prevents input contention when commands use prompt.* or
+      // create their own readline interface on process.stdin.
+      this.rl?.close();
+      this.rl = undefined;
 
       if (this.mode) {
         try {
@@ -135,14 +171,17 @@ export class Shell {
         }
       }
 
+      // Recreate readline with updated history for the next prompt cycle.
       if (this.running) {
-        this.rl.prompt();
+        this.openReadline(this.history.entries());
       }
     }
 
     await this.history.save();
     await this.router.emit("exit");
-    this.rl.close();
+    if (this.rl) {
+      this.rl.close();
+    }
   }
 
   /**
@@ -179,10 +218,6 @@ export class Shell {
     if (config.message) {
       process.stdout.write(`${config.message}\n`);
     }
-    if (this.rl) {
-      this.rl.setPrompt(config.prompt);
-      this.rl.prompt();
-    }
   }
 
   /**
@@ -190,9 +225,5 @@ export class Shell {
    */
   exitMode(): void {
     this.mode = null;
-    if (this.rl) {
-      this.rl.setPrompt(this.promptStr);
-      this.rl.prompt();
-    }
   }
 }
