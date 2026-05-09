@@ -8,7 +8,7 @@ import { color as c } from "./color.js";
 /**
  * Base options shared by all prompt types.
  */
-interface PromptBaseOptions {
+export interface PromptBaseOptions {
   /** Default value returned when the user provides no input. */
   default?: unknown;
   /** Validation function; throw an Error to reject the value. */
@@ -26,7 +26,7 @@ interface PromptBaseOptions {
 /**
  * Options for a text input prompt.
  */
-interface TextOptions extends PromptBaseOptions {
+export interface TextOptions extends PromptBaseOptions {
   /** Default text value. */
   default?: string;
   /** Placeholder text displayed as a hint. */
@@ -36,7 +36,7 @@ interface TextOptions extends PromptBaseOptions {
 /**
  * Options for a yes/no confirmation prompt.
  */
-interface ConfirmOptions extends PromptBaseOptions {
+export interface ConfirmOptions extends PromptBaseOptions {
   /** Default boolean value. Defaults to false. */
   default?: boolean;
 }
@@ -44,7 +44,7 @@ interface ConfirmOptions extends PromptBaseOptions {
 /**
  * Represents a single selectable choice with a display label and underlying value.
  */
-interface SelectChoice<T> {
+export interface SelectChoice<T> {
   /** Display label shown to the user. */
   label: string;
   /** Value returned when this choice is selected. */
@@ -56,7 +56,7 @@ interface SelectChoice<T> {
 /**
  * Options for a multiselect prompt.
  */
-interface MultiselectOptions<T> extends PromptBaseOptions {
+export interface MultiselectOptions<T> extends PromptBaseOptions {
   /** Pre-selected default values. */
   default?: T[];
   /** Minimum number of items that must be selected. */
@@ -68,7 +68,7 @@ interface MultiselectOptions<T> extends PromptBaseOptions {
 /**
  * A choice can be either a raw value or a SelectChoice object with label/value/hint.
  */
-type Choice<T> = T | SelectChoice<T>;
+export type Choice<T> = T | SelectChoice<T>;
 
 // ── Helpers ──
 
@@ -123,7 +123,12 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
   } = options;
 
   const rl = createRl(stdin, stdout);
-  const hint = defaultValue !== undefined ? c.dim(` (${defaultValue})`) : "";
+  const hint =
+    defaultValue !== undefined
+      ? c.dim(` (${defaultValue})`)
+      : options.placeholder
+        ? c.dim(` (${options.placeholder})`)
+        : "";
 
   try {
     while (true) {

@@ -23,6 +23,14 @@ export type {
   SpinnerOptions,
 } from "./output/progress.js";
 export { progress } from "./output/progress.js";
+export type {
+  Choice,
+  ConfirmOptions,
+  MultiselectOptions,
+  PromptBaseOptions,
+  SelectChoice,
+  TextOptions,
+} from "./output/prompt.js";
 export { prompt } from "./output/prompt.js";
 export type { TableChars, TableOptions, TableStyle } from "./output/table.js";
 export { table } from "./output/table.js";
