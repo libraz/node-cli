@@ -15,6 +15,12 @@
   ],
   "license": "MIT",
   "author": "libraz <libraz@libraz.net>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/libraz/node-cli.git"
+  },
+  "homepage": "https://github.com/libraz/node-cli",
+  "bugs": "https://github.com/libraz/node-cli/issues",
   "engines": {
     "node": ">=20"
   },
