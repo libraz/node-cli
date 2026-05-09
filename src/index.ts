@@ -3,8 +3,13 @@ export { CLI } from "./cli.js";
 export {
   CLIError,
   CommandNotFoundError,
+  ExtraArgumentError,
+  InvalidOptionError,
   MissingArgumentError,
+  MissingOptionError,
   PromptCancelError,
+  UnknownOptionError,
+  ValidationError,
 } from "./errors.js";
 export { c, color, setColorEnabled, stringWidth, stripAnsi } from "./output/color.js";
 export type { Logger, LoggerOptions, LogLevel } from "./output/logger.js";

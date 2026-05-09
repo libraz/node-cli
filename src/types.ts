@@ -198,6 +198,8 @@ export interface ParseResult {
   args: Record<string, unknown>;
   /** Parsed options keyed by option long-name. */
   options: Record<string, unknown>;
+  /** Positional arguments that were not consumed by the command definition. */
+  extraArgs?: string[];
   /** The original raw input string. */
   rawInput: string;
   /** The matched command definition, if found. */

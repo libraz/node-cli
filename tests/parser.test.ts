@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { parse, parseDefinitionString, parseOptionFlags, tokenize } from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
+import { InvalidOptionError, UnknownOptionError } from "../src/errors.js";
 
 describe("tokenize", () => {
   it("splits by spaces", () => {
@@ -105,7 +106,9 @@ describe("parse", () => {
     const registry = new CommandRegistry();
     new CommandBuilder(registry, "deploy <env>")
       .option("--force", { type: "boolean" })
-      .option("-t, --tag <tag>", { type: "string" });
+      .option("-t, --tag <tag>", { type: "string" })
+      .option("-p, --port <port>", { type: "number" })
+      .option("-l, --label <label>", { type: "string[]" });
 
     new CommandBuilder(registry, "user create <name>");
     new CommandBuilder(registry, "user delete <name>");
@@ -140,6 +143,12 @@ describe("parse", () => {
     expect(result.options.tag).toBe("v3");
   });
 
+  it("accumulates array options with = style", () => {
+    const registry = createRegistry();
+    const result = parse("deploy prod --label=a --label=b -l=c", registry);
+    expect(result.options.label).toEqual(["a", "b", "c"]);
+  });
+
   it("parses short alias", () => {
     const registry = createRegistry();
     const result = parse("deploy prod -t v2", registry);
@@ -166,5 +175,55 @@ describe("parse", () => {
     expect(result.commandPath).toEqual(["deploy"]);
     expect(result.args.env).toBe("prod");
     expect(result.options.force).toBe(true);
+  });
+
+  it("throws on unknown long options", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod --unknown", registry)).toThrow(UnknownOptionError);
+    expect(() => parse("deploy prod --unknown=value", registry)).toThrow(UnknownOptionError);
+  });
+
+  it("throws on unknown short options", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod -x", registry)).toThrow(UnknownOptionError);
+  });
+
+  it("throws when a value option is missing its value", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod --tag", registry)).toThrow(InvalidOptionError);
+    expect(() => parse("deploy prod -t", registry)).toThrow(InvalidOptionError);
+  });
+
+  it("does not consume the next known option as a missing value", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod --tag --force", registry)).toThrow(InvalidOptionError);
+  });
+
+  it("does not consume the next unknown option as a string value", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod --tag --unknown", registry)).toThrow(InvalidOptionError);
+  });
+
+  it("accepts negative numeric option values", () => {
+    const registry = createRegistry();
+    const result = parse("deploy prod --port -1", registry);
+    expect(result.options.port).toBe("-1");
+  });
+
+  it("accepts dash-prefixed string option values with equals syntax", () => {
+    const registry = createRegistry();
+    const result = parse("deploy prod --tag=-beta", registry);
+    expect(result.options.tag).toBe("-beta");
+  });
+
+  it("rejects negation for non-boolean options", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod --no-tag", registry)).toThrow(InvalidOptionError);
+  });
+
+  it("tracks extra positional args", () => {
+    const registry = createRegistry();
+    const result = parse("deploy prod extra", registry);
+    expect(result.extraArgs).toEqual(["extra"]);
   });
 });

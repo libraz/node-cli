@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLI } from "../src/cli.js";
+import { CLI, ExtraArgumentError, UnknownOptionError } from "../src/index.js";
 import { createMockStdout } from "./helpers.js";
 
 describe("programmatic exec", () => {
@@ -36,6 +36,17 @@ describe("programmatic exec", () => {
     await expect(cli.exec("nonexistent", { stdout: stream, stderr: stream })).rejects.toThrow(
       "Command not found",
     );
+  });
+
+  it("throws exported errors for invalid user input", async () => {
+    const cli = new CLI();
+    cli
+      .command("deploy <env>")
+      .option("--force")
+      .action(() => {});
+
+    await expect(cli.exec("deploy prod --unknown")).rejects.toThrow(UnknownOptionError);
+    await expect(cli.exec("deploy prod extra")).rejects.toThrow(ExtraArgumentError);
   });
 
   it("events fire during exec", async () => {

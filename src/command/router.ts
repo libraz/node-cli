@@ -1,5 +1,5 @@
 import { PassThrough, type Readable, type Writable } from "node:stream";
-import { CommandNotFoundError, MissingArgumentError } from "../errors.js";
+import { CommandNotFoundError, ExtraArgumentError, MissingArgumentError } from "../errors.js";
 import type { HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
 import type { Shell } from "../shell/repl.js";
@@ -186,6 +186,10 @@ export class CommandRouter {
         const usage = formatUsage(result.commandPath, command);
         throw new MissingArgumentError(argDef.name, usage);
       }
+    }
+
+    if (result.extraArgs && result.extraArgs.length > 0) {
+      throw new ExtraArgumentError(result.extraArgs[0]);
     }
 
     // Build context (needed for option resolver)

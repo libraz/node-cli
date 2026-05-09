@@ -1,3 +1,4 @@
+import { InvalidOptionError, UnknownOptionError } from "../errors.js";
 import type { ArgDef, CommandDefinition, ParseResult } from "../types.js";
 import type { CommandRegistry } from "./registry.js";
 
@@ -174,9 +175,9 @@ export function parse(input: string | string[], registry: CommandRegistry): Pars
   const { positional, options } = extractOptionsAndArgs(remaining, command);
 
   // Map positional args
-  const args = mapPositionalArgs(positional, command.argDefs);
+  const { args, extraArgs } = mapPositionalArgs(positional, command.argDefs);
 
-  return { commandPath, args, options, rawInput, command };
+  return { commandPath, args, options, extraArgs, rawInput, command };
 }
 
 /**
@@ -224,6 +225,13 @@ function extractOptionsAndArgs(
 
     if (token.startsWith("--no-")) {
       const name = token.slice(5);
+      const def = optionDefs.get(name);
+      if (!def) {
+        throw new UnknownOptionError(`--no-${name}`);
+      }
+      if (def.schema.type !== "boolean") {
+        throw new InvalidOptionError(`Option --no-${name} can only be used with boolean options`);
+      }
       options[name] = false;
       i++;
       continue;
@@ -233,26 +241,37 @@ function extractOptionsAndArgs(
       const eqIndex = token.indexOf("=");
       if (eqIndex !== -1) {
         const name = token.slice(2, eqIndex);
-        options[name] = token.slice(eqIndex + 1);
+        const def = optionDefs.get(name);
+        if (!def) {
+          throw new UnknownOptionError(`--${name}`);
+        }
+        appendOption(options, name, token.slice(eqIndex + 1), def);
         i++;
         continue;
       }
 
       const name = token.slice(2);
       const def = optionDefs.get(name);
-      const isBool = def?.schema.type === "boolean" || (!def?.takesValue && !def);
+      if (!def) {
+        if (name === "help") {
+          options.help = true;
+          i++;
+          continue;
+        }
+        throw new UnknownOptionError(`--${name}`);
+      }
+      const isBool = def.schema.type === "boolean";
 
       if (isBool) {
         options[name] = true;
         i++;
       } else {
         const nextToken = tokens[i + 1];
-        if (nextToken !== undefined) {
+        if (nextToken !== undefined && !looksLikeOption(nextToken, def)) {
           appendOption(options, name, nextToken, def);
           i += 2;
         } else {
-          options[name] = true;
-          i++;
+          throw new InvalidOptionError(`Option --${name} expects a value`);
         }
       }
       continue;
@@ -263,7 +282,10 @@ function extractOptionsAndArgs(
       if (eqIndex !== -1) {
         const alias = token.slice(1, eqIndex);
         const name = aliasMap.get(alias) ?? alias;
-        options[name] = token.slice(eqIndex + 1);
+        if (!optionDefs.has(name)) {
+          throw new UnknownOptionError(`-${alias}`);
+        }
+        appendOption(options, name, token.slice(eqIndex + 1), optionDefs.get(name));
         i++;
         continue;
       }
@@ -272,25 +294,36 @@ function extractOptionsAndArgs(
       if (chars.length === 1) {
         const name = aliasMap.get(chars) ?? chars;
         const def = optionDefs.get(name);
-        const isBool = def?.schema.type === "boolean" || (!def?.takesValue && !def);
+        if (!def) {
+          throw new UnknownOptionError(`-${chars}`);
+        }
+        const isBool = def.schema.type === "boolean";
 
         if (isBool) {
           options[name] = true;
           i++;
         } else {
           const nextToken = tokens[i + 1];
-          if (nextToken !== undefined) {
+          if (nextToken !== undefined && !looksLikeOption(nextToken, def)) {
             appendOption(options, name, nextToken, def);
             i += 2;
           } else {
-            options[name] = true;
-            i++;
+            throw new InvalidOptionError(`Option -${chars} expects a value`);
           }
         }
       } else {
         // Multiple short booleans: -abc → -a -b -c
         for (const ch of chars) {
           const name = aliasMap.get(ch) ?? ch;
+          const def = optionDefs.get(name);
+          if (!def) {
+            throw new UnknownOptionError(`-${ch}`);
+          }
+          if (def.schema.type !== "boolean") {
+            throw new InvalidOptionError(
+              `Option -${ch} expects a value and cannot be combined with other short flags`,
+            );
+          }
           options[name] = true;
         }
         i++;
@@ -303,6 +336,15 @@ function extractOptionsAndArgs(
   }
 
   return { positional, options };
+}
+
+function looksLikeOption(token: string, currentDef: { schema: { type?: string } }): boolean {
+  if (token === "--") return true;
+  if (!token.startsWith("-") || token === "-") return false;
+  if (currentDef.schema.type === "number" || currentDef.schema.type === "number[]") {
+    return Number.isNaN(Number(token));
+  }
+  return true;
 }
 
 /**
@@ -345,7 +387,10 @@ function appendOption(
  * @param argDefs - The argument definitions declared by the command.
  * @returns A record mapping argument names to their parsed values.
  */
-function mapPositionalArgs(positional: string[], argDefs: ArgDef[]): Record<string, unknown> {
+function mapPositionalArgs(
+  positional: string[],
+  argDefs: ArgDef[],
+): { args: Record<string, unknown>; extraArgs: string[] } {
   const args: Record<string, unknown> = {};
 
   for (let i = 0; i < argDefs.length; i++) {
@@ -353,7 +398,7 @@ function mapPositionalArgs(positional: string[], argDefs: ArgDef[]): Record<stri
 
     if (def.variadic) {
       args[def.name] = positional.slice(i);
-      return args;
+      return { args, extraArgs: [] };
     }
 
     if (i < positional.length) {
@@ -364,7 +409,7 @@ function mapPositionalArgs(positional: string[], argDefs: ArgDef[]): Record<stri
     }
   }
 
-  return args;
+  return { args, extraArgs: positional.slice(argDefs.length) };
 }
 
 /**

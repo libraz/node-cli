@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
-import { CommandNotFoundError, MissingArgumentError } from "../src/errors.js";
+import { CommandNotFoundError, ExtraArgumentError, MissingArgumentError } from "../src/errors.js";
 import { HelpGenerator } from "../src/help/generator.js";
 import type { Shell } from "../src/shell/repl.js";
 import { createMockStdout } from "./helpers.js";
@@ -50,6 +50,15 @@ describe("CommandRouter", () => {
     new CommandBuilder(registry, "deploy <env>").action(() => {});
 
     await expect(router.execute("deploy")).rejects.toThrow(MissingArgumentError);
+  });
+
+  it("throws ExtraArgumentError for unexpected positional args", async () => {
+    const { registry, router } = setup();
+    const action = vi.fn();
+    new CommandBuilder(registry, "deploy <env>").action(action);
+
+    await expect(router.execute("deploy prod extra")).rejects.toThrow(ExtraArgumentError);
+    expect(action).not.toHaveBeenCalled();
   });
 
   it("shows help for group commands without action", async () => {
