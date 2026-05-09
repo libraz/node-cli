@@ -32,6 +32,7 @@ export class Shell {
   private readonly completer: ShellCompleter;
   private rl?: Interface;
   private running = false;
+  private reopeningReadline = false;
   private mode: ModeConfig | null = null;
 
   /**
@@ -75,7 +76,9 @@ export class Shell {
       terminal: true,
     });
     this.rl.on("close", () => {
-      this.running = false;
+      if (!this.reopeningReadline) {
+        this.running = false;
+      }
     });
   }
 
@@ -145,7 +148,9 @@ export class Shell {
       // Close readline to fully release stdin before command execution.
       // This prevents input contention when commands use prompt.* or
       // create their own readline interface on process.stdin.
+      this.reopeningReadline = true;
       this.rl?.close();
+      this.reopeningReadline = false;
       this.rl = undefined;
 
       if (this.mode) {
@@ -218,6 +223,7 @@ export class Shell {
     if (config.message) {
       process.stdout.write(`${config.message}\n`);
     }
+    this.rl?.setPrompt(config.prompt);
   }
 
   /**
@@ -225,5 +231,6 @@ export class Shell {
    */
   exitMode(): void {
     this.mode = null;
+    this.rl?.setPrompt(this.promptStr);
   }
 }
