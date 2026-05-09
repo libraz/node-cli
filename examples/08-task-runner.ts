@@ -11,6 +11,7 @@
  *   npx tsx examples/08-task-runner.ts run all
  *   npx tsx examples/08-task-runner.ts list
  */
+import type { Writable } from "node:stream";
 import { createCLI, color, c, table, progress, logger } from "../src/index.js";
 
 const log = logger({ prefix: "runner", timestamp: true });
@@ -21,6 +22,11 @@ interface Task {
   duration: number; // simulated ms
   status: "pending" | "running" | "done" | "failed";
 }
+
+type TaskContext = {
+  stdout: Writable;
+  stderr: Writable;
+};
 
 const tasks: Task[] = [
   { name: "lint", description: "Run linter", duration: 800, status: "pending" },
@@ -83,11 +89,11 @@ cli
     }
   });
 
-async function runSingle(task: Task, ctx: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream }, verbose: boolean) {
+async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
   const spinner = progress.spinner({
     label: c`Running {bold ${task.name}}...`,
     color: "cyan",
-    stream: ctx.stdout as import("node:stream").Writable,
+    stream: ctx.stdout,
   });
 
   task.status = "running";
@@ -114,14 +120,14 @@ async function runSingle(task: Task, ctx: { stdout: NodeJS.WritableStream; stder
   }
 }
 
-async function runAll(ctx: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream }, verbose: boolean) {
+async function runAll(ctx: TaskContext, verbose: boolean) {
   ctx.stdout.write(c`{bold Running all tasks...}\n\n`);
 
   const bar = progress.bar({
     total: tasks.length,
     label: "Overall",
     color: "green",
-    stream: ctx.stdout as import("node:stream").Writable,
+    stream: ctx.stdout,
   });
 
   for (let i = 0; i < tasks.length; i++) {

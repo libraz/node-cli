@@ -58,7 +58,7 @@ cli
   .action((ctx) => {
     const env = ctx.args.env as string;
     const tag = ctx.options.tag as string;
-    const dryRun = ctx.options.dry_run as boolean;
+    const dryRun = ctx.options["dry-run"] as boolean;
 
     if (dryRun) {
       ctx.stdout.write(c`{yellow [DRY RUN]} Would deploy {bold ${tag}} to {bold ${env}}\n`);
