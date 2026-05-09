@@ -294,17 +294,12 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
  * Creates a multi-bar manager that renders multiple progress bars simultaneously.
  */
 function createMultiBar(): MultiBar {
-  const bars: { bar: Bar; options: BarOptions; current: number }[] = [];
+  const bars: { options: BarOptions; current: number; startTime: number }[] = [];
   let initialized = false;
 
   return {
     add(options: BarOptions): Bar {
-      const innerBar = createBar({
-        ...options,
-        stream: undefined as unknown as Writable, // We manage rendering ourselves
-      });
-
-      const entry = { bar: innerBar, options, current: 0 };
+      const entry = { options, current: 0, startTime: Date.now() };
       bars.push(entry);
 
       // Create a wrapper that tracks and re-renders
@@ -354,7 +349,7 @@ function createMultiBar(): MultiBar {
     initialized = true;
 
     for (const entry of bars) {
-      const { options: opts, current } = entry;
+      const { options: opts, current, startTime } = entry;
       const total = opts.total;
       const width = opts.width ?? 30;
       const filled = opts.filled ?? "█";
@@ -362,9 +357,26 @@ function createMultiBar(): MultiBar {
       const label = opts.label ?? "";
 
       const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+      const elapsed = Date.now() - startTime;
+      const rate = elapsed > 0 ? (current / elapsed) * 1000 : 0;
+      const eta = rate > 0 ? ((total - current) / rate) * 1000 : 0;
+
+      if (opts.format) {
+        stream.write(`\r\x1b[K${opts.format({ current, total, percent, elapsed, eta, rate })}\n`);
+        continue;
+      }
+
       const filledCount = Math.round((percent / 100) * width);
       const emptyCount = width - filledCount;
-      const bar = filled.repeat(filledCount) + empty.repeat(emptyCount);
+      let bar = filled.repeat(filledCount) + empty.repeat(emptyCount);
+
+      if (opts.color) {
+        try {
+          bar = (c as Record<string, (s: string) => string>)[opts.color](bar);
+        } catch {
+          // ignore unknown color
+        }
+      }
 
       const parts: string[] = [];
       if (label) parts.push(label);

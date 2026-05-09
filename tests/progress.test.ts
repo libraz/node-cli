@@ -217,6 +217,31 @@ describe("progress.multi", () => {
     multi.stop();
   });
 
+  it("honors custom format in multi bars", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    const format = vi.fn((state) => `custom:${state.current}/${state.total}`);
+    const bar = multi.add({ total: 10, stream, format });
+
+    bar.update(4);
+
+    expect(format).toHaveBeenCalled();
+    expect(stream.getOutput()).toContain("custom:4/10");
+    multi.stop();
+  });
+
+  it("applies color in multi bars", () => {
+    setColorEnabled(true);
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    const bar = multi.add({ total: 10, stream, color: "green" });
+
+    bar.update(4);
+
+    expect(stream.getOutput()).toContain("\x1b[32m");
+    multi.stop();
+  });
+
   it("non-TTY multi bars do not output", () => {
     const stream = createMockStdout();
     const multi = progress.multi();
