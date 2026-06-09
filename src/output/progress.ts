@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { color as c } from "./color.js";
+import { createColorizer } from "./color.js";
 
 // ── Progress Bar ──
 
@@ -142,14 +142,16 @@ function createBar(options: BarOptions): Bar {
   } = options;
 
   let current = 0;
+  let finished = false;
   const startTime = Date.now();
   const tty = isTTY(stream);
+  const col = createColorizer(stream);
 
   function getState(): BarState {
     const elapsed = Date.now() - startTime;
     const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
     const rate = elapsed > 0 ? (current / elapsed) * 1000 : 0;
-    const eta = rate > 0 ? ((total - current) / rate) * 1000 : 0;
+    const eta = rate > 0 ? Math.max(0, ((total - current) / rate) * 1000) : 0;
     return { current, total, percent, elapsed, eta, rate };
   }
 
@@ -170,7 +172,7 @@ function createBar(options: BarOptions): Bar {
 
     if (barColor) {
       try {
-        bar = (c as Record<string, (s: string) => string>)[barColor](bar);
+        bar = (col as Record<string, (s: string) => string>)[barColor](bar);
       } catch {
         // ignore unknown color
       }
@@ -187,19 +189,23 @@ function createBar(options: BarOptions): Bar {
 
   return {
     update(value: number) {
-      current = Math.min(value, total);
+      current = Math.max(0, Math.min(value, total));
       render();
     },
     tick(delta = 1) {
-      current = Math.min(current + delta, total);
+      current = Math.max(0, Math.min(current + delta, total));
       render();
     },
     finish() {
+      if (finished) return;
+      finished = true;
       current = total;
       render();
       if (tty) stream.write("\n");
     },
     stop() {
+      if (finished) return;
+      finished = true;
       if (tty) stream.write("\n");
     },
   };
@@ -222,14 +228,16 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   let label = initialLabel;
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let done = false;
   const tty = isTTY(stream);
+  const col = createColorizer(stream);
 
   function render(): void {
     if (!tty) return;
     let frame = frames[frameIndex % frames.length];
     if (spinnerColor) {
       try {
-        frame = (c as Record<string, (s: string) => string>)[spinnerColor](frame);
+        frame = (col as Record<string, (s: string) => string>)[spinnerColor](frame);
       } catch {
         // ignore
       }
@@ -251,7 +259,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
 
   return {
     start() {
-      if (timer) return;
+      if (timer || done) return;
       render();
       timer = setInterval(render, interval);
     },
@@ -261,27 +269,35 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     },
 
     succeed(message?: string) {
+      if (done) return;
+      done = true;
       cleanup();
       clearLine();
       const msg = message ?? label;
-      stream.write(`${c.green("✔")} ${msg}\n`);
+      stream.write(`${col.green("✔")} ${msg}\n`);
     },
 
     fail(message?: string) {
+      if (done) return;
+      done = true;
       cleanup();
       clearLine();
       const msg = message ?? label;
-      stream.write(`${c.red("✖")} ${msg}\n`);
+      stream.write(`${col.red("✖")} ${msg}\n`);
     },
 
     warn(message?: string) {
+      if (done) return;
+      done = true;
       cleanup();
       clearLine();
       const msg = message ?? label;
-      stream.write(`${c.yellow("⚠")} ${msg}\n`);
+      stream.write(`${col.yellow("⚠")} ${msg}\n`);
     },
 
     stop() {
+      if (done) return;
+      done = true;
       cleanup();
       clearLine();
     },
@@ -295,29 +311,35 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
  */
 function createMultiBar(): MultiBar {
   const bars: { options: BarOptions; current: number; startTime: number }[] = [];
-  let initialized = false;
+  // The whole group renders to a single stream, fixed by the first bar added.
+  let stream: Writable = process.stderr;
+  // Number of lines written by the previous renderAll, used to move the cursor up.
+  let renderedLines = 0;
+  let closed = false;
 
   return {
     add(options: BarOptions): Bar {
+      if (bars.length === 0 && options.stream) {
+        stream = options.stream;
+      }
       const entry = { options, current: 0, startTime: Date.now() };
       bars.push(entry);
 
-      // Create a wrapper that tracks and re-renders
-      const stream = options.stream ?? process.stderr;
       const tty = isTTY(stream);
+      const total = options.total;
 
       const wrapper: Bar = {
         update(value: number) {
-          entry.current = value;
-          if (tty) renderAll(stream);
+          entry.current = Math.max(0, Math.min(value, total));
+          if (tty) renderAll();
         },
         tick(delta = 1) {
-          entry.current = Math.min(entry.current + delta, options.total);
-          if (tty) renderAll(stream);
+          entry.current = Math.max(0, Math.min(entry.current + delta, total));
+          if (tty) renderAll();
         },
         finish() {
-          entry.current = options.total;
-          if (tty) renderAll(stream);
+          entry.current = total;
+          if (tty) renderAll();
         },
         stop() {
           // no-op for individual bars in multi
@@ -328,25 +350,28 @@ function createMultiBar(): MultiBar {
     },
 
     finish() {
-      const stream = bars[0]?.options.stream ?? process.stderr;
+      if (closed) return;
+      closed = true;
       if (isTTY(stream)) {
-        renderAll(stream);
+        renderAll();
         stream.write("\n");
       }
     },
 
     stop() {
-      const stream = bars[0]?.options.stream ?? process.stderr;
+      if (closed) return;
+      closed = true;
       if (isTTY(stream)) stream.write("\n");
     },
   };
 
-  function renderAll(stream: Writable): void {
-    // Move cursor up to overwrite previous render
-    if (initialized) {
-      stream.write(`\x1b[${bars.length}A`);
+  function renderAll(): void {
+    const col = createColorizer(stream);
+    // Move cursor up over exactly the lines we last wrote (handles bars added
+    // after the first render without corrupting scrollback).
+    if (renderedLines > 0) {
+      stream.write(`\x1b[${renderedLines}A`);
     }
-    initialized = true;
 
     for (const entry of bars) {
       const { options: opts, current, startTime } = entry;
@@ -359,7 +384,7 @@ function createMultiBar(): MultiBar {
       const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
       const elapsed = Date.now() - startTime;
       const rate = elapsed > 0 ? (current / elapsed) * 1000 : 0;
-      const eta = rate > 0 ? ((total - current) / rate) * 1000 : 0;
+      const eta = rate > 0 ? Math.max(0, ((total - current) / rate) * 1000) : 0;
 
       if (opts.format) {
         stream.write(`\r\x1b[K${opts.format({ current, total, percent, elapsed, eta, rate })}\n`);
@@ -372,7 +397,7 @@ function createMultiBar(): MultiBar {
 
       if (opts.color) {
         try {
-          bar = (c as Record<string, (s: string) => string>)[opts.color](bar);
+          bar = (col as Record<string, (s: string) => string>)[opts.color](bar);
         } catch {
           // ignore unknown color
         }
@@ -386,6 +411,8 @@ function createMultiBar(): MultiBar {
 
       stream.write(`\r\x1b[K${parts.join("  ")}\n`);
     }
+
+    renderedLines = bars.length;
   }
 }
 

@@ -111,8 +111,17 @@ export interface CLIEventMap {
   beforeExecute: (ctx: CommandContext) => void | Promise<void>;
   /** Fired after a command action completes successfully. */
   afterExecute: (ctx: CommandContext) => void | Promise<void>;
-  /** Fired when a command action throws an error. */
+  /**
+   * Fired when a resolved command fails during argument validation, option
+   * resolution, custom validation, or its action handler.
+   */
   commandError: (error: Error, ctx: CommandContext) => void | Promise<void>;
+  /**
+   * Fired for any error raised while handling input, including failures that
+   * occur before a command is resolved (e.g. command-not-found). Always fires
+   * for command failures in addition to {@link CLIEventMap.commandError}.
+   */
+  error: (error: Error) => void | Promise<void>;
   /** Fired when the interactive shell exits. */
   exit: () => void | Promise<void>;
 }
@@ -140,6 +149,17 @@ export interface CommandContext {
   shell: Shell | null;
   /** Readable stream for standard input (available in piped commands). */
   stdin: Readable | null;
+  /** Writable stream for standard output. */
+  stdout: Writable;
+  /** Writable stream for standard error. */
+  stderr: Writable;
+}
+
+/**
+ * Minimal context passed to a catch/fallback handler invoked when no command
+ * matches the input. Only output streams are available since no command was resolved.
+ */
+export interface CatchContext {
   /** Writable stream for standard output. */
   stdout: Writable;
   /** Writable stream for standard error. */

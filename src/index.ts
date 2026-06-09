@@ -1,5 +1,6 @@
 export type { PluginContext } from "./cli.js";
 export { CLI } from "./cli.js";
+export type { CLIErrorCode } from "./errors.js";
 export {
   CLIError,
   CommandNotFoundError,
@@ -11,7 +12,16 @@ export {
   UnknownOptionError,
   ValidationError,
 } from "./errors.js";
-export { c, color, setColorEnabled, stringWidth, stripAnsi } from "./output/color.js";
+export {
+  c,
+  color,
+  createColorizer,
+  isColorEnabled,
+  resetColorEnabled,
+  setColorEnabled,
+  stringWidth,
+  stripAnsi,
+} from "./output/color.js";
 export type { Logger, LoggerOptions, LogLevel } from "./output/logger.js";
 export { logger } from "./output/logger.js";
 export type {
@@ -29,18 +39,27 @@ export type {
   MultiselectOptions,
   PromptBaseOptions,
   SelectChoice,
+  SelectOptions,
   TextOptions,
 } from "./output/prompt.js";
-export { prompt } from "./output/prompt.js";
+export { maskInput, prompt } from "./output/prompt.js";
 export type { TableChars, TableOptions, TableStyle } from "./output/table.js";
 export { table } from "./output/table.js";
+export type { ModeConfig } from "./shell/repl.js";
 export type {
+  Action,
+  ArgDef,
+  CatchContext,
   CLIEventHandler,
   CLIEventMap,
   CLIOptions,
   CommandContext,
+  CommandDefinition,
+  Completer,
   CompletionContext,
+  OptionDef,
   OptionSchema,
+  ParseResult,
 } from "./types.js";
 
 import { CLI } from "./cli.js";

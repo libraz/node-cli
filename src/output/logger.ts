@@ -1,6 +1,6 @@
 import type { Writable } from "node:stream";
 import { format } from "node:util";
-import { color as c } from "./color.js";
+import { createColorizer, isColorEnabled } from "./color.js";
 
 // ── Types ──
 
@@ -63,28 +63,21 @@ interface LevelConfig {
   icon: string;
   /** Icon used in TTY output (with color support). */
   ttyIcon: string;
-  /** Color function applied to the icon in TTY mode. */
-  colorFn: (s: string) => string;
+  /** Color style name applied to the icon in TTY mode. */
+  colorName: string;
   /** Short label for the level. */
   label: string;
 }
 
 const levelConfig: Record<string, LevelConfig> = {
-  debug: { icon: "[DEBUG]", ttyIcon: "●", colorFn: (s) => c.dim(s), label: "DEBUG" },
-  info: { icon: "[INFO]", ttyIcon: "ℹ", colorFn: (s) => c.blue(s), label: "INFO" },
-  success: { icon: "[OK]", ttyIcon: "✔", colorFn: (s) => c.green(s), label: "OK" },
-  warn: { icon: "[WARN]", ttyIcon: "⚠", colorFn: (s) => c.yellow(s), label: "WARN" },
-  error: { icon: "[ERROR]", ttyIcon: "✖", colorFn: (s) => c.red(s), label: "ERROR" },
+  debug: { icon: "[DEBUG]", ttyIcon: "●", colorName: "dim", label: "DEBUG" },
+  info: { icon: "[INFO]", ttyIcon: "ℹ", colorName: "blue", label: "INFO" },
+  success: { icon: "[OK]", ttyIcon: "✔", colorName: "green", label: "OK" },
+  warn: { icon: "[WARN]", ttyIcon: "⚠", colorName: "yellow", label: "WARN" },
+  error: { icon: "[ERROR]", ttyIcon: "✖", colorName: "red", label: "ERROR" },
 };
 
 // ── Implementation ──
-
-/**
- * Checks whether the given stream is a TTY (terminal).
- */
-function isTTY(stream: Writable): boolean {
-  return "isTTY" in stream && (stream as NodeJS.WriteStream).isTTY === true;
-}
 
 /**
  * Returns the current time formatted as HH:MM:SS.
@@ -106,14 +99,24 @@ function formatTimestamp(): string {
  * @param options - Logger configuration options.
  * @returns A Logger instance.
  */
-export function logger(options: LoggerOptions = {}): Logger {
-  let currentLevel = options.level ?? "info";
+/** Internal mutable holder for the active log level, shared with child loggers. */
+interface LevelRef {
+  value: LogLevel;
+}
+
+export function logger(options: LoggerOptions & { levelRef?: LevelRef } = {}): Logger {
+  // Shared mutable level holder so child loggers stay in sync with setLevel().
+  const levelRef: LevelRef = options.levelRef ?? { value: options.level ?? "info" };
+  if (options.levelRef && options.level !== undefined) levelRef.value = options.level;
+
   const prefix = options.prefix;
   const timestamp = options.timestamp ?? false;
   const stream = options.stream ?? process.stderr;
+  const col = createColorizer(stream);
+  const colorOn = () => isColorEnabled(stream);
 
   function shouldLog(level: LogLevel): boolean {
-    return levelOrder[level] >= levelOrder[currentLevel];
+    return levelOrder[level] >= levelOrder[levelRef.value];
   }
 
   function writeLog(level: string, message: string, args: unknown[]): void {
@@ -127,12 +130,11 @@ export function logger(options: LoggerOptions = {}): Logger {
     const formatted = args.length > 0 ? format(message, ...args) : message;
 
     const parts: string[] = [];
-
-    const tty = isTTY(stream);
+    const colored = colorOn();
 
     // Icon
-    if (tty) {
-      parts.push(config.colorFn(config.ttyIcon));
+    if (colored) {
+      parts.push(col[config.colorName](config.ttyIcon));
     } else {
       parts.push(config.icon);
     }
@@ -140,12 +142,12 @@ export function logger(options: LoggerOptions = {}): Logger {
     // Timestamp
     if (timestamp) {
       const ts = formatTimestamp();
-      parts.push(tty ? c.dim(ts) : ts);
+      parts.push(colored ? col.dim(ts) : ts);
     }
 
     // Prefix
     if (prefix) {
-      parts.push(tty ? c.dim(`[${prefix}]`) : `[${prefix}]`);
+      parts.push(colored ? col.dim(`[${prefix}]`) : `[${prefix}]`);
     }
 
     // Message
@@ -171,12 +173,12 @@ export function logger(options: LoggerOptions = {}): Logger {
       writeLog("error", message, args);
     },
     setLevel(level) {
-      currentLevel = level;
+      levelRef.value = level;
     },
     child(childPrefix: string) {
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
       return logger({
-        level: currentLevel,
+        levelRef,
         prefix: fullPrefix,
         timestamp,
         stream,

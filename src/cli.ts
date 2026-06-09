@@ -4,9 +4,10 @@ import type { Writable } from "node:stream";
 import { CommandBuilder } from "./command/builder.js";
 import { CommandRegistry } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
+import { CLIError, CommandNotFoundError } from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
 import { Shell } from "./shell/repl.js";
-import type { CLIEventMap, CLIOptions } from "./types.js";
+import type { CatchContext, CLIEventMap, CLIOptions } from "./types.js";
 
 /**
  * Context object passed to plugins for extending the CLI.
@@ -16,6 +17,10 @@ export interface PluginContext {
   command: (definition: string) => CommandBuilder;
   /** Register an event listener. */
   on: <K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]) => void;
+  /** Remove a previously registered event listener. */
+  off: <K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]) => void;
+  /** Register a fallback handler invoked when no command matches the input. */
+  catch: (handler: (input: string, ctx: CatchContext) => void | Promise<void>) => void;
 }
 
 /**
@@ -33,6 +38,7 @@ export class CLI {
   private bannerStr?: string;
   private historyFile: string;
   private historySize: number;
+  private started = false;
   private readonly pendingPlugins: Promise<void>[] = [];
 
   /**
@@ -56,6 +62,7 @@ export class CLI {
       description: this.descriptionStr,
     });
     this.router.setHelpGenerator(this.helpGenerator);
+    this.router.setVersion(this.version);
 
     // Register built-in help command
     this.registerHelpCommand();
@@ -143,9 +150,7 @@ export class CLI {
    * @param handler - The fallback handler function.
    * @returns The CLI instance for method chaining.
    */
-  catch(
-    handler: (input: string, ctx: { stdout: Writable; stderr: Writable }) => void | Promise<void>,
-  ): this {
+  catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): this {
     this.router.setCatchHandler(handler);
     return this;
   }
@@ -161,14 +166,33 @@ export class CLI {
       on: <K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]) => {
         this.on(event, handler);
       },
+      off: <K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]) => {
+        this.off(event, handler);
+      },
+      catch: (handler) => {
+        this.catch(handler);
+      },
     };
-    // Run plugin synchronously or kick off async (fire-and-forget for sync registration)
+    // Run the plugin. Synchronous plugins register immediately; asynchronous
+    // ones are queued so command entry points can await them before running.
     const result = plugin(context);
     if (result instanceof Promise) {
-      // Store for potential await during start
-      this.pendingPlugins.push(result);
+      // Capture rejections so a failing plugin cannot become an unhandled
+      // rejection; it is surfaced when the queue is drained.
+      this.pendingPlugins.push(result.catch((err) => Promise.reject(err)));
     }
     return this;
+  }
+
+  /**
+   * Awaits any pending asynchronous plugins registered via {@link use}, so that
+   * async plugin registration completes before any command runs.
+   */
+  private async drainPendingPlugins(): Promise<void> {
+    if (this.pendingPlugins.length > 0) {
+      const pending = this.pendingPlugins.splice(0, this.pendingPlugins.length);
+      await Promise.all(pending);
+    }
   }
 
   /**
@@ -177,6 +201,7 @@ export class CLI {
    * @param options - Optional streams for stdout/stderr.
    */
   async exec(input: string, options: { stdout?: Writable; stderr?: Writable } = {}): Promise<void> {
+    await this.drainPendingPlugins();
     const { stdout = process.stdout, stderr = process.stderr } = options;
     await this.router.execute(input, { stdout, stderr });
   }
@@ -187,11 +212,13 @@ export class CLI {
    * @param argv - Optional array of command-line arguments. Defaults to process.argv.slice(2).
    */
   async start(argv?: string[]): Promise<void> {
-    // Await any async plugins
-    if (this.pendingPlugins.length > 0) {
-      await Promise.all(this.pendingPlugins);
-      this.pendingPlugins.length = 0;
+    if (this.started) {
+      throw new Error("CLI.start() has already been called on this instance");
     }
+    this.started = true;
+
+    // Await any async plugins before running.
+    await this.drainPendingPlugins();
 
     const args = argv ?? process.argv.slice(2);
 
@@ -205,7 +232,7 @@ export class CLI {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`Error: ${message}\n`);
-        process.exitCode = 1;
+        process.exitCode = err instanceof CLIError ? err.exitCode : 1;
       }
     } else {
       // Interactive shell mode
@@ -233,7 +260,7 @@ export class CLI {
 
   private registerHelpCommand(): void {
     const helpGenerator = this.helpGenerator;
-    const _registry = this.registry;
+    const registry = this.registry;
 
     new CommandBuilder(this.registry, "help [...command]")
       .description("Show help information")
@@ -242,9 +269,16 @@ export class CLI {
 
         if (!commandParts || commandParts.length === 0) {
           ctx.stdout.write(`${helpGenerator.generateIndex()}\n`);
-        } else {
-          ctx.stdout.write(`${helpGenerator.generateCommand(commandParts)}\n`);
+          return;
         }
+
+        // Unknown target: report on stderr with a non-zero exit, matching how a
+        // bare unrecognized command is surfaced (not a silent stdout + exit 0).
+        if (!registry.resolve(commandParts)) {
+          throw new CommandNotFoundError(commandParts.join(" "));
+        }
+
+        ctx.stdout.write(`${helpGenerator.generateCommand(commandParts)}\n`);
       });
   }
 }

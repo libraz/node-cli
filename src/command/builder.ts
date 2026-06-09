@@ -68,21 +68,36 @@ export class CommandBuilder {
   option(flags: string, schema: OptionSchema = {}): this {
     const { long, aliases, takesValue } = parseOptionFlags(flags);
 
+    // Clone the caller's schema so we never mutate their object.
+    const resolved: OptionSchema = { ...schema };
+
     // Infer type from flag format
-    if (!schema.type) {
-      schema.type = takesValue ? "string" : "boolean";
+    if (!resolved.type) {
+      resolved.type = takesValue ? "string" : "boolean";
     }
 
     // Default boolean to false
-    if (schema.type === "boolean" && schema.default === undefined) {
-      schema.default = false;
+    if (resolved.type === "boolean" && resolved.default === undefined) {
+      resolved.default = false;
+    }
+
+    // Merge schema-declared aliases (e.g. { alias: "p" }) into the alias list.
+    const mergedAliases = [...aliases];
+    if (resolved.alias) {
+      const extra = Array.isArray(resolved.alias) ? resolved.alias : [resolved.alias];
+      for (const a of extra) {
+        const name = a.replace(/^-+/, "");
+        if (name && !mergedAliases.includes(name)) {
+          mergedAliases.push(name);
+        }
+      }
     }
 
     this.definition.options.set(long, {
       long,
-      aliases,
+      aliases: mergedAliases,
       takesValue,
-      schema,
+      schema: resolved,
     });
 
     return this;
@@ -120,7 +135,12 @@ export class CommandBuilder {
     if (!this.definition.aliases) {
       this.definition.aliases = [];
     }
-    this.definition.aliases.push(...names);
+    // Deduplicate against existing aliases and the command's own name.
+    for (const name of names) {
+      if (name && name !== this.definition.name && !this.definition.aliases.includes(name)) {
+        this.definition.aliases.push(name);
+      }
+    }
     this.registry.registerAliases(this.definition, this.parentPath);
     return this;
   }

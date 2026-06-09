@@ -67,19 +67,30 @@ export class CommandRegistry {
   registerAliases(def: CommandDefinition, parentPath: string[]): void {
     if (!def.aliases) return;
     const prefix = parentPath.join("/");
+    // Sibling commands at this level, used to detect alias/name collisions.
+    const siblings = parentPath.length === 0 ? this.root : this.resolve(parentPath)?.subcommands;
+
     for (const alias of def.aliases) {
-      this.aliasMap.set(`${prefix}:${alias}`, def.name);
-      // Also register in parent's subcommands map or root for lookup
-      if (parentPath.length === 0) {
-        if (!this.root.has(alias)) {
-          this.root.set(alias, def);
-        }
-      } else {
-        const parent = this.resolve(parentPath);
-        if (parent && !parent.subcommands.has(alias)) {
-          parent.subcommands.set(alias, def);
-        }
+      const key = `${prefix}:${alias}`;
+
+      // Collision with another command's existing alias at the same level.
+      const existingAlias = this.aliasMap.get(key);
+      if (existingAlias !== undefined && existingAlias !== def.name) {
+        throw new Error(
+          `Alias "${alias}" already maps to command "${existingAlias}" and cannot also alias "${def.name}"`,
+        );
       }
+
+      // Collision with a real command of that name at the same level.
+      const sibling = siblings?.get(alias);
+      if (sibling && sibling !== def) {
+        throw new Error(`Alias "${alias}" conflicts with existing command "${alias}"`);
+      }
+
+      // Aliases are resolved through aliasMap only; they are intentionally not
+      // added to the command maps so they cannot shadow real commands or inflate
+      // subcommand counts / completion candidates.
+      this.aliasMap.set(key, def.name);
     }
   }
 
@@ -257,8 +268,10 @@ function mergeDefinition(target: CommandDefinition, source: CommandDefinition): 
   for (const [k, v] of source.options) {
     target.options.set(k, v);
   }
-  for (const [k, v] of source.argDefs.entries()) {
-    target.argDefs[k] = v;
+  // Replace the argument list wholesale when the source declares its own, so a
+  // redefinition with fewer args does not leave stale trailing arguments behind.
+  if (source.argDefs.length > 0) {
+    target.argDefs = [...source.argDefs];
   }
   for (const [k, v] of source.subcommands) {
     const existingSub: CommandDefinition | undefined = target.subcommands.get(k);

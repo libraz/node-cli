@@ -210,12 +210,12 @@ export function table(
   const truncChar = options.truncate ?? "\u2026";
 
   // Normalize to string[][]
-  const { rows, columns } = normalizeData(data, options);
+  const { rows, columns, keys } = normalizeData(data, options);
 
   if (rows.length === 0) return "";
 
-  // Calculate column widths
-  const colWidths = calculateWidths(rows, columns, header, options);
+  // Calculate column widths (header width from labels, maxWidth keyed by column key)
+  const colWidths = calculateWidths(rows, columns, keys, header, options);
 
   // Truncate cells
   const truncated = rows.map((row) =>
@@ -228,10 +228,11 @@ export function table(
   const borderColor = style.border;
   const compact = style.compact ?? true;
 
-  // Header row
+  // Header row — truncate to the same width as data cells before styling so a
+  // narrow maxWidth/colWidths does not leave an over-wide header that breaks the frame.
   const headerRow = header && columns.length > 0 ? columns : undefined;
-  const styledHeader = headerRow?.map((h) => {
-    let styled = applyHeaderStyle(h, headerStyle);
+  const styledHeader = headerRow?.map((h, i) => {
+    let styled = applyHeaderStyle(truncateCell(h, colWidths[i], truncChar), headerStyle);
     if (headColor) styled = applyColorChain(styled, headColor);
     return styled;
   });
@@ -241,8 +242,8 @@ export function table(
 
   const border = options.chars ? (options.border ?? "custom") : (options.border ?? "none");
 
-  // Resolve alignment
-  const getAlign = buildAlignFn(options, columns);
+  // Resolve alignment (keyed by column key)
+  const getAlign = buildAlignFn(options, keys);
 
   // Resolve cell padding
   const isBordered = border !== "none" && border !== "simple";
@@ -275,31 +276,59 @@ export function table(
 }
 
 /**
+ * Converts a cell value to a display string, mapping null/undefined to an empty
+ * string and collapsing embedded line breaks / tabs to spaces so they cannot
+ * break the rendered table frame.
+ */
+function cellToString(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/[\n\r\t\v\f]/g, " ");
+}
+
+/**
  * Normalizes heterogeneous input data into a uniform rows/columns structure.
+ *
+ * `columns` holds the display labels (header text); `keys` holds the underlying
+ * column identifiers used to resolve alignment, maxWidth, and per-column options.
  */
 function normalizeData(
   data: unknown[][] | Record<string, unknown>[],
   options: TableOptions,
-): { rows: string[][]; columns: string[] } {
-  if (data.length === 0) return { rows: [], columns: [] };
+): { rows: string[][]; columns: string[]; keys: string[] } {
+  if (data.length === 0) return { rows: [], columns: [], keys: [] };
 
   // Array of arrays
   if (Array.isArray(data[0])) {
     const arrayData = data as unknown[][];
-    const columns = options.columns ?? (arrayData.length > 0 ? arrayData[0].map(String) : []);
+    const headerProvided = options.header !== false;
+    const columns = options.columns ?? (arrayData.length > 0 ? arrayData[0].map(cellToString) : []);
     const rows = arrayData
-      .slice(options.header !== false ? 1 : 0)
-      .map((row) => (row as unknown[]).map(String));
-    return { rows, columns: options.header !== false ? columns : [] };
+      .slice(headerProvided ? 1 : 0)
+      .map((row) => (row as unknown[]).map(cellToString));
+    const cols = headerProvided ? columns : [];
+    return { rows, columns: cols, keys: cols };
   }
 
-  // Array of objects
+  // Array of objects — derive the column set from the union of all row keys so
+  // keys present only on later rows are not silently dropped.
   const objData = data as Record<string, unknown>[];
-  const columns = options.columns ?? Object.keys(objData[0]);
-  const labels = columns.map((col) => options.headerLabels?.[col] ?? col);
-  const rows = objData.map((obj) => columns.map((col) => String(obj[col] ?? "")));
+  let keys = options.columns;
+  if (!keys) {
+    const seen = new Set<string>();
+    keys = [];
+    for (const obj of objData) {
+      for (const k of Object.keys(obj)) {
+        if (!seen.has(k)) {
+          seen.add(k);
+          keys.push(k);
+        }
+      }
+    }
+  }
+  const labels = keys.map((col) => options.headerLabels?.[col] ?? col);
+  const rows = objData.map((obj) => (keys as string[]).map((col) => cellToString(obj[col])));
 
-  return { rows, columns: labels };
+  return { rows, columns: labels, keys };
 }
 
 /**
@@ -307,17 +336,18 @@ function normalizeData(
  */
 function calculateWidths(
   rows: string[][],
-  columns: string[],
+  labels: string[],
+  keys: string[],
   header: boolean,
   options: TableOptions,
 ): number[] {
-  const colCount = rows[0]?.length ?? columns.length;
+  const colCount = rows[0]?.length ?? Math.max(labels.length, keys.length);
   const widths = new Array<number>(colCount).fill(0);
 
-  // Header widths
+  // Header widths (from display labels)
   if (header) {
-    for (let i = 0; i < columns.length; i++) {
-      widths[i] = Math.max(widths[i], stringWidth(columns[i]));
+    for (let i = 0; i < labels.length; i++) {
+      widths[i] = Math.max(widths[i], stringWidth(labels[i]));
     }
   }
 
@@ -328,11 +358,11 @@ function calculateWidths(
     }
   }
 
-  // Apply maxWidth (by column name)
+  // Apply maxWidth (by column key)
   const maxWidth = options.maxWidth;
-  if (maxWidth && columns.length > 0) {
-    for (let i = 0; i < columns.length; i++) {
-      const col = columns[i];
+  if (maxWidth && keys.length > 0) {
+    for (let i = 0; i < keys.length; i++) {
+      const col = keys[i];
       if (maxWidth[col] !== undefined) {
         widths[i] = Math.min(widths[i], maxWidth[col]);
       }

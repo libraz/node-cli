@@ -43,14 +43,21 @@ export function resolveOptions(
     const { long, schema } = def;
     let value = normalized[long];
 
-    // Type coercion
     if (value !== undefined) {
-      value = coerce(value, schema.type, long);
-    }
-
-    // Custom parse
-    if (value !== undefined && schema.parse) {
-      value = schema.parse(String(value), ctx);
+      if (schema.parse) {
+        // A custom parser is the user's escape hatch: it receives the raw
+        // string(s) and fully owns coercion. Built-in coercion is skipped.
+        try {
+          value = Array.isArray(value)
+            ? value.map((v) => schema.parse?.(String(v), ctx))
+            : schema.parse(String(value), ctx);
+        } catch (err) {
+          if (err instanceof Error) throw new ValidationError(err.message, err);
+          throw err;
+        }
+      } else {
+        value = coerce(value, schema.type, long);
+      }
     }
 
     // Apply default
@@ -63,11 +70,16 @@ export function resolveOptions(
       throw new MissingOptionError(long);
     }
 
-    // Choices check
+    // Choices check (compare leniently so declared string choices match
+    // coerced numeric values and vice versa).
     if (value !== undefined && schema.choices) {
-      if (!schema.choices.includes(value)) {
+      const allowed = schema.choices;
+      const matches =
+        allowed.includes(value) || allowed.map(String).includes(String(value as unknown));
+      if (!matches) {
         throw new InvalidOptionError(
-          `Invalid value "${value}" for --${long}. Allowed: ${schema.choices.join(", ")}`,
+          `Invalid value "${value}" for --${long}. Allowed: ${allowed.join(", ")}`,
+          { optionName: long, value },
         );
       }
     }
@@ -78,7 +90,7 @@ export function resolveOptions(
         schema.validate(value, ctx);
       } catch (err) {
         if (err instanceof Error) {
-          throw new ValidationError(err.message);
+          throw new ValidationError(err.message, err);
         }
         throw err;
       }
@@ -111,6 +123,16 @@ export function resolveOptions(
  * @returns The coerced value.
  * @throws {InvalidOptionError} If numeric coercion results in `NaN`.
  */
+/**
+ * Converts a value to a finite number, returning null for empty/blank strings
+ * or non-numeric input so callers can reject them instead of silently producing 0.
+ */
+function toNumber(value: unknown): number | null {
+  if (typeof value === "string" && value.trim() === "") return null;
+  const num = Number(value);
+  return Number.isNaN(num) ? null : num;
+}
+
 function coerce(value: unknown, type: string | undefined, name: string): unknown {
   if (type === undefined || type === "string") return value;
 
@@ -122,9 +144,12 @@ function coerce(value: unknown, type: string | undefined, name: string): unknown
   }
 
   if (type === "number") {
-    const num = Number(value);
-    if (Number.isNaN(num)) {
-      throw new InvalidOptionError(`Option --${name} expects a number, got "${value}"`);
+    const num = toNumber(value);
+    if (num === null) {
+      throw new InvalidOptionError(`Option --${name} expects a number, got "${value}"`, {
+        optionName: name,
+        value,
+      });
     }
     return num;
   }
@@ -137,9 +162,12 @@ function coerce(value: unknown, type: string | undefined, name: string): unknown
   if (type === "number[]") {
     const arr = Array.isArray(value) ? value : [value];
     return arr.map((v) => {
-      const num = Number(v);
-      if (Number.isNaN(num)) {
-        throw new InvalidOptionError(`Option --${name} expects numbers, got "${v}"`);
+      const num = toNumber(v);
+      if (num === null) {
+        throw new InvalidOptionError(`Option --${name} expects numbers, got "${v}"`, {
+          optionName: name,
+          value: v,
+        });
       }
       return num;
     });

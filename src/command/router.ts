@@ -3,8 +3,8 @@ import { CommandNotFoundError, ExtraArgumentError, MissingArgumentError } from "
 import type { HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
 import type { Shell } from "../shell/repl.js";
-import type { CLIEventMap, CommandContext } from "../types.js";
-import { parse, splitPipes } from "./parser.js";
+import type { CatchContext, CLIEventMap, CommandContext, CommandDefinition } from "../types.js";
+import { parse, splitPipes, tokenize } from "./parser.js";
 import type { CommandRegistry } from "./registry.js";
 
 /** Typed event listener store. */
@@ -21,12 +21,17 @@ type EventListeners = {
 export class CommandRouter {
   private readonly registry: CommandRegistry;
   private helpGenerator?: HelpGenerator;
+  private version?: string;
   private readonly listeners: EventListeners = {
     beforeExecute: [],
     afterExecute: [],
     commandError: [],
+    error: [],
     exit: [],
   };
+
+  /** The command currently executing and its context, for cancellation. */
+  private active: { command: CommandDefinition; ctx: CommandContext } | null = null;
 
   /**
    * Creates a new CommandRouter.
@@ -62,6 +67,10 @@ export class CommandRouter {
   /**
    * Emits an event, calling all registered handlers in order.
    *
+   * A handler that throws does not prevent the remaining handlers from running;
+   * its error is reported through the `error` event (best-effort) and otherwise
+   * swallowed so that listener bugs cannot abort command flow.
+   *
    * @param event - The event name.
    * @param args - Arguments to pass to the handlers.
    */
@@ -70,15 +79,24 @@ export class CommandRouter {
     ...args: Parameters<CLIEventMap[K]>
   ): Promise<void> {
     for (const handler of this.listeners[event]) {
-      await (handler as (...a: Parameters<CLIEventMap[K]>) => void | Promise<void>)(...args);
+      try {
+        await (handler as (...a: Parameters<CLIEventMap[K]>) => void | Promise<void>)(...args);
+      } catch (err) {
+        // A listener should never break command flow. Surface error-event
+        // failures to stderr; route others to the error event when possible.
+        if (event === "error") {
+          process.stderr.write(
+            `Error in error handler: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        } else {
+          await this.emit("error", err instanceof Error ? err : new Error(String(err)));
+        }
+      }
     }
   }
 
   /** Fallback action for unrecognized commands. */
-  private catchHandler?: (
-    input: string,
-    ctx: { stdout: Writable; stderr: Writable },
-  ) => void | Promise<void>;
+  private catchHandler?: (input: string, ctx: CatchContext) => void | Promise<void>;
 
   /**
    * Assigns a help generator used to produce help text when needed.
@@ -90,14 +108,35 @@ export class CommandRouter {
   }
 
   /**
+   * Sets the version string surfaced by the built-in `--version` flag.
+   *
+   * @param version - The version string, or undefined to disable.
+   */
+  setVersion(version: string | undefined): void {
+    this.version = version;
+  }
+
+  /**
    * Sets a catch/fallback handler invoked when no command matches.
    *
    * @param handler - The fallback handler.
    */
-  setCatchHandler(
-    handler: (input: string, ctx: { stdout: Writable; stderr: Writable }) => void | Promise<void>,
-  ): void {
+  setCatchHandler(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void {
     this.catchHandler = handler;
+  }
+
+  /**
+   * Invokes the cancel handler of the currently executing command, if any.
+   * Used by the interactive shell to honour SIGINT during a long-running command.
+   *
+   * @returns True if a cancel handler was invoked, false otherwise.
+   */
+  triggerCancel(): boolean {
+    if (this.active?.command.cancelHandler) {
+      this.active.command.cancelHandler(this.active.ctx);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -137,6 +176,24 @@ export class CommandRouter {
       }
     }
 
+    // Built-in --version / -V interception (before command resolution).
+    const tokens = Array.isArray(input) ? input : tokenize(input);
+    if (this.version !== undefined && tokens.length === 1) {
+      if (tokens[0] === "--version" || tokens[0] === "-V") {
+        stdout.write(`${this.version}\n`);
+        return;
+      }
+    }
+    // Bare top-level --help / -h shows the index.
+    if (
+      this.helpGenerator &&
+      tokens.length === 1 &&
+      (tokens[0] === "--help" || tokens[0] === "-h")
+    ) {
+      stdout.write(`${this.helpGenerator.generateIndex()}\n`);
+      return;
+    }
+
     const result = parse(input, this.registry);
 
     // Empty input
@@ -147,7 +204,9 @@ export class CommandRouter {
           await this.catchHandler(rawInput, { stdout, stderr });
           return;
         }
-        throw new CommandNotFoundError(rawInput.trim().split(/\s+/)[0]);
+        const err = new CommandNotFoundError(rawInput.trim().split(/\s+/)[0]);
+        await this.emit("error", err);
+        throw err;
       }
       return;
     }
@@ -159,7 +218,9 @@ export class CommandRouter {
         await this.catchHandler(rawInput, { stdout, stderr });
         return;
       }
-      throw new CommandNotFoundError(result.commandPath.join(" "));
+      const err = new CommandNotFoundError(result.commandPath.join(" "));
+      await this.emit("error", err);
+      throw err;
     }
 
     // Check --help flag
@@ -180,19 +241,7 @@ export class CommandRouter {
       return;
     }
 
-    // Validate required arguments
-    for (const argDef of command.argDefs) {
-      if (argDef.required && result.args[argDef.name] === undefined) {
-        const usage = formatUsage(result.commandPath, command);
-        throw new MissingArgumentError(argDef.name, usage);
-      }
-    }
-
-    if (result.extraArgs && result.extraArgs.length > 0) {
-      throw new ExtraArgumentError(result.extraArgs[0]);
-    }
-
-    // Build context (needed for option resolver)
+    // Build context early so every failure phase can report it via commandError.
     const ctx: CommandContext = {
       args: result.args,
       options: {},
@@ -204,29 +253,54 @@ export class CommandRouter {
       stderr,
     };
 
-    // Resolve options
-    ctx.options = resolveOptions(result.options, command.options, ctx);
-
-    // Run command-level validation
-    if (command.validate) {
-      await command.validate(ctx);
-    }
-
-    // Emit beforeExecute
-    await this.emit("beforeExecute", ctx);
-
     try {
-      await command.action(ctx);
+      // Validate required arguments
+      for (const argDef of command.argDefs) {
+        const provided = result.args[argDef.name];
+        const missing = argDef.variadic
+          ? !Array.isArray(provided) || provided.length === 0
+          : provided === undefined;
+        if (argDef.required && missing) {
+          const usage = formatUsage(result.commandPath, command);
+          throw new MissingArgumentError(argDef.name, usage);
+        }
+      }
+
+      if (result.extraArgs && result.extraArgs.length > 0) {
+        throw new ExtraArgumentError(result.extraArgs[0]);
+      }
+
+      // Resolve options
+      ctx.options = resolveOptions(result.options, command.options, ctx);
+
+      // Run command-level validation
+      if (command.validate) {
+        await command.validate(ctx);
+      }
+
+      // Emit beforeExecute
+      await this.emit("beforeExecute", ctx);
+
+      // Run the action, tracking it as active so SIGINT can cancel it.
+      this.active = { command, ctx };
+      try {
+        await command.action(ctx);
+      } finally {
+        this.active = null;
+      }
       await this.emit("afterExecute", ctx);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       await this.emit("commandError", error, ctx);
+      await this.emit("error", error);
       throw err;
     }
   }
 
   /**
-   * Executes a chain of piped commands, passing stdout of each to stdin of the next.
+   * Executes a chain of piped commands, streaming each command's stdout into the
+   * next command's stdin. All stages run concurrently so producers and consumers
+   * make progress together rather than buffering a stage fully before the next starts.
    *
    * @param segments - Array of command strings to pipe together.
    * @param options - Execution context.
@@ -236,25 +310,31 @@ export class CommandRouter {
     options: { shell?: Shell | null; stdout: Writable; stderr: Writable },
   ): Promise<void> {
     const { shell = null, stderr } = options;
-    let currentStdin: Readable | null = null;
 
-    for (let i = 0; i < segments.length; i++) {
-      const isLast = i === segments.length - 1;
-      const currentStdout = isLast ? options.stdout : new PassThrough();
-
-      await this.execute(segments[i], {
-        shell,
-        stdin: currentStdin,
-        stdout: currentStdout as Writable,
-        stderr,
-      });
-
-      if (!isLast) {
-        // End the PassThrough so the next command's stdin read will finish
-        (currentStdout as PassThrough).end();
-        currentStdin = currentStdout as unknown as Readable;
-      }
+    // Wire stage[i].stdout → stage[i+1].stdin via PassThrough pipes.
+    const pipes: PassThrough[] = [];
+    for (let i = 0; i < segments.length - 1; i++) {
+      pipes.push(new PassThrough());
     }
+
+    const runs = segments.map((segment, i) => {
+      const isLast = i === segments.length - 1;
+      const stdin: Readable | null = i === 0 ? null : pipes[i - 1];
+      const stdout: Writable = isLast ? options.stdout : pipes[i];
+
+      return this.execute(segment, { shell, stdin, stdout, stderr })
+        .then(() => {
+          // Signal end-of-input to the downstream stage.
+          if (!isLast) pipes[i].end();
+        })
+        .catch((err) => {
+          // Tear down the rest of the chain on failure.
+          if (!isLast) pipes[i].destroy(err instanceof Error ? err : new Error(String(err)));
+          throw err;
+        });
+    });
+
+    await Promise.all(runs);
   }
 }
 

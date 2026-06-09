@@ -3,20 +3,33 @@ import type { ArgDef, CommandDefinition, ParseResult } from "../types.js";
 import type { CommandRegistry } from "./registry.js";
 
 /**
- * Tokenizes a raw input string into an array of tokens.
+ * Splits an input string into segments at top-level delimiter characters,
+ * respecting single quotes, double quotes, and backslash escaping. This is the
+ * shared scanner behind both {@link tokenize} and {@link splitPipes}.
  *
- * Handles single quotes, double quotes, and backslash escaping.
- * Whitespace outside of quotes is used as the delimiter.
- *
- * @param input - The raw input string to tokenize.
- * @returns An array of parsed tokens.
+ * @param input - The raw input string.
+ * @param isDelimiter - Returns true for characters that separate segments at top level.
+ * @param preserveSyntax - When false, quote and escape characters are consumed
+ *   (used for tokenizing). When true, they are kept verbatim so the segment can
+ *   be re-tokenized later (used for pipe splitting).
+ * @returns The list of segments (empty segments are dropped).
  */
-export function tokenize(input: string): string[] {
-  const tokens: string[] = [];
+function splitRespectingQuotes(
+  input: string,
+  isDelimiter: (ch: string) => boolean,
+  preserveSyntax: boolean,
+): string[] {
+  const segments: string[] = [];
   let current = "";
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+
+  const flush = () => {
+    const seg = preserveSyntax ? current.trim() : current;
+    if (seg.length > 0) segments.push(seg);
+    current = "";
+  };
 
   for (let i = 0; i < input.length; i++) {
     const ch = input[i];
@@ -28,36 +41,46 @@ export function tokenize(input: string): string[] {
     }
 
     if (ch === "\\") {
+      if (preserveSyntax) current += ch;
       escaped = true;
       continue;
     }
 
     if (ch === "'" && !inDouble) {
       inSingle = !inSingle;
+      if (preserveSyntax) current += ch;
       continue;
     }
 
     if (ch === '"' && !inSingle) {
       inDouble = !inDouble;
+      if (preserveSyntax) current += ch;
       continue;
     }
 
-    if (ch === " " && !inSingle && !inDouble) {
-      if (current.length > 0) {
-        tokens.push(current);
-        current = "";
-      }
+    if (!inSingle && !inDouble && isDelimiter(ch)) {
+      flush();
       continue;
     }
 
     current += ch;
   }
 
-  if (current.length > 0) {
-    tokens.push(current);
-  }
+  flush();
+  return segments;
+}
 
-  return tokens;
+/**
+ * Tokenizes a raw input string into an array of tokens.
+ *
+ * Handles single quotes, double quotes, and backslash escaping.
+ * Whitespace outside of quotes is used as the delimiter.
+ *
+ * @param input - The raw input string to tokenize.
+ * @returns An array of parsed tokens.
+ */
+export function tokenize(input: string): string[] {
+  return splitRespectingQuotes(input, (ch) => ch === " ", false);
 }
 
 /**
@@ -74,7 +97,7 @@ export function parseDefinitionString(definition: string): {
   name: string;
   argDefs: ArgDef[];
 } {
-  const tokens = definition.trim().split(/\s+/);
+  const tokens = definition.trim().split(/\s+/).filter(Boolean);
   const names: string[] = [];
   const argDefs: ArgDef[] = [];
 
@@ -86,10 +109,21 @@ export function parseDefinitionString(definition: string): {
     }
   }
 
-  const name = names.pop() as string;
-  const parentPath = names;
+  const name = names.pop();
+  if (!name) {
+    throw new Error(`Invalid command definition: missing command name in "${definition}"`);
+  }
 
-  return { parentPath, name, argDefs };
+  // A variadic argument must be the last argument; nothing after it is reachable.
+  for (let i = 0; i < argDefs.length - 1; i++) {
+    if (argDefs[i].variadic) {
+      throw new Error(
+        `Invalid command definition: variadic argument "...${argDefs[i].name}" must be last in "${definition}"`,
+      );
+    }
+  }
+
+  return { parentPath: names, name, argDefs };
 }
 
 /**
@@ -223,14 +257,17 @@ function extractOptionsAndArgs(
       continue;
     }
 
-    if (token.startsWith("--no-")) {
+    // Negated boolean (--no-x), unless an option is literally named "no-x".
+    if (token.startsWith("--no-") && token.indexOf("=") === -1 && !optionDefs.has(token.slice(2))) {
       const name = token.slice(5);
       const def = optionDefs.get(name);
       if (!def) {
         throw new UnknownOptionError(`--no-${name}`);
       }
       if (def.schema.type !== "boolean") {
-        throw new InvalidOptionError(`Option --no-${name} can only be used with boolean options`);
+        throw new InvalidOptionError(`Option --no-${name} can only be used with boolean options`, {
+          optionName: name,
+        });
       }
       options[name] = false;
       i++;
@@ -271,7 +308,7 @@ function extractOptionsAndArgs(
           appendOption(options, name, nextToken, def);
           i += 2;
         } else {
-          throw new InvalidOptionError(`Option --${name} expects a value`);
+          throw new InvalidOptionError(`Option --${name} expects a value`, { optionName: name });
         }
       }
       continue;
@@ -308,7 +345,7 @@ function extractOptionsAndArgs(
             appendOption(options, name, nextToken, def);
             i += 2;
           } else {
-            throw new InvalidOptionError(`Option -${chars} expects a value`);
+            throw new InvalidOptionError(`Option -${chars} expects a value`, { optionName: name });
           }
         }
       } else {
@@ -322,6 +359,7 @@ function extractOptionsAndArgs(
           if (def.schema.type !== "boolean") {
             throw new InvalidOptionError(
               `Option -${ch} expects a value and cannot be combined with other short flags`,
+              { optionName: name },
             );
           }
           options[name] = true;
@@ -420,52 +458,6 @@ function mapPositionalArgs(
  * @returns An array of trimmed command strings.
  */
 export function splitPipes(input: string): string[] {
-  const segments: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-
-    if (escaped) {
-      current += ch;
-      escaped = false;
-      continue;
-    }
-
-    if (ch === "\\") {
-      escaped = true;
-      current += ch;
-      continue;
-    }
-
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      continue;
-    }
-
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      continue;
-    }
-
-    if (ch === "|" && !inSingle && !inDouble) {
-      segments.push(current.trim());
-      current = "";
-      continue;
-    }
-
-    current += ch;
-  }
-
-  const last = current.trim();
-  if (last.length > 0) {
-    segments.push(last);
-  }
-
-  return segments;
+  // Preserve quotes/escapes so each segment can be tokenized again downstream.
+  return splitRespectingQuotes(input, (ch) => ch === "|", true);
 }

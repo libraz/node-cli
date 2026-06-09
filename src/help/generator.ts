@@ -98,8 +98,8 @@ export class HelpGenerator {
 
     const lines: string[] = [];
 
-    // Usage line
-    const usageParts = [...commandPath];
+    // Usage line — use the canonical command path so aliases resolve to the real name.
+    const usageParts = [...this.registry.getCommandPath(command)];
     if (command.subcommands.size > 0 && !command.action) {
       usageParts.push("<command>");
     }
@@ -137,17 +137,15 @@ export class HelpGenerator {
       }
     }
 
-    // Options
+    // Options — always advertise the built-in --help flag.
     const visibleOptions = [...command.options.values()].filter((o) => !o.schema.hidden);
-    if (visibleOptions.length > 0) {
-      lines.push("", "Options:");
-      const optionEntries = formatOptionEntries(visibleOptions);
-      const maxWidth = Math.max(...optionEntries.map(([flags]) => stringWidth(flags)));
-
-      for (const [flags, desc] of optionEntries) {
-        const padding = " ".repeat(maxWidth - stringWidth(flags) + 4);
-        lines.push(`  ${flags}${desc ? padding + desc : ""}`);
-      }
+    const optionEntries = formatOptionEntries(visibleOptions);
+    optionEntries.push(["-h, --help", "Show help for this command"]);
+    lines.push("", "Options:");
+    const maxWidth = Math.max(...optionEntries.map(([flags]) => stringWidth(flags)));
+    for (const [flags, desc] of optionEntries) {
+      const padding = " ".repeat(maxWidth - stringWidth(flags) + 4);
+      lines.push(`  ${flags}${desc ? padding + desc : ""}`);
     }
 
     // Subcommands
@@ -157,7 +155,9 @@ export class HelpGenerator {
       const subEntries: [string, string][] = [...new Set(command.subcommands.values())].map(
         (sub) => {
           const usage = formatCommandUsage(sub);
-          return [usage, sub.description ?? ""];
+          const aliasNote =
+            sub.aliases && sub.aliases.length > 0 ? ` (alias: ${sub.aliases.join(", ")})` : "";
+          return [usage, `${sub.description ?? ""}${aliasNote}`];
         },
       );
       const maxWidth = Math.max(...subEntries.map(([u]) => stringWidth(u)));
@@ -226,7 +226,12 @@ function formatOptionEntries(options: OptionDef[]): [string, string][] {
     const descParts: string[] = [];
     if (opt.schema.description) descParts.push(opt.schema.description);
     if (opt.schema.required) descParts.push("(required)");
-    if (opt.schema.default !== undefined && opt.schema.type !== "boolean") {
+    // Show defaults, including boolean `true` (a meaningful, non-obvious default).
+    // A boolean defaulting to `false` is the implicit default and is omitted.
+    if (
+      opt.schema.default !== undefined &&
+      !(opt.schema.type === "boolean" && opt.schema.default === false)
+    ) {
       descParts.push(`(default: ${JSON.stringify(opt.schema.default)})`);
     }
     if (opt.schema.choices) {

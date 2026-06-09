@@ -1,6 +1,16 @@
-import { tokenize } from "../command/parser.js";
+import { parse, tokenize } from "../command/parser.js";
 import type { CommandRegistry } from "../command/registry.js";
 import type { OptionDef } from "../types.js";
+
+/**
+ * Finds an option definition by one of its short/long aliases.
+ */
+function findOptionByAlias(name: string, options: Map<string, OptionDef>): OptionDef | undefined {
+  for (const [, def] of options) {
+    if (def.aliases.includes(name)) return def;
+  }
+  return undefined;
+}
 
 /**
  * Result of a completion operation.
@@ -64,22 +74,38 @@ export class ShellCompleter {
 
     const { command, consumed } = match;
     const remaining = tokens.slice(consumed);
+    const lastToken = remaining[remaining.length - 1] ?? "";
+    const typingOption = !endsWithSpace && lastToken.startsWith("-");
 
-    // If we're at a command boundary and expecting subcommand
-    if (command.subcommands.size > 0) {
+    // If we're at a command boundary and expecting subcommand (but not when the
+    // user is clearly typing an option flag, which should list options instead).
+    if (command.subcommands.size > 0 && !typingOption) {
       if (remaining.length === 0 && endsWithSpace) {
-        // Show subcommands
-        const candidates = [...command.subcommands.values()].map((s) => s.name);
+        // Show subcommands (deduplicated; aliases resolve via the registry).
+        const candidates = [...new Set(command.subcommands.values())].map((s) => s.name);
         return [candidates, ""];
       }
 
       if (remaining.length === 1 && !endsWithSpace) {
         // Partial subcommand
         const current = remaining[0];
-        const candidates = [...command.subcommands.values()]
+        const candidates = [...new Set(command.subcommands.values())]
           .map((s) => s.name)
           .filter((name) => name.startsWith(current));
         return [candidates, current];
+      }
+    }
+
+    // Complete an inline option value: --opt=partial
+    if (typingOption) {
+      const eq = lastToken.indexOf("=");
+      if (eq !== -1) {
+        const optName = lastToken.slice(2, eq).replace(/^-+/, "");
+        const optDef = command.options.get(optName) ?? findOptionByAlias(optName, command.options);
+        if (optDef?.takesValue) {
+          const valuePrefix = lastToken.slice(eq + 1);
+          return this.completeOptionValue(optDef, valuePrefix);
+        }
       }
     }
 
@@ -123,18 +149,33 @@ export class ShellCompleter {
     // Custom command completer
     if (command.completer) {
       const commandPath = tokens.slice(0, consumed);
+      // Best-effort parse of what has been typed so far, so the completer can
+      // make context-aware suggestions. Parsing never throws here.
+      let parsedArgs: Record<string, unknown> = {};
+      let parsedOptions: Record<string, unknown> = {};
+      try {
+        const parsed = parse(tokens, this.registry);
+        parsedArgs = parsed.args;
+        parsedOptions = parsed.options;
+      } catch {
+        // Ignore parse failures during completion (partial/invalid input).
+      }
+      const filterByPrefix = (candidates: string[]) =>
+        current ? candidates.filter((v) => v.startsWith(current)) : candidates;
       const result = command.completer({
         line,
         current,
         commandPath,
-        args: {},
-        options: {},
+        args: parsedArgs,
+        options: parsedOptions,
         iteration: this.tabCount,
       });
       if (result instanceof Promise) {
-        return result.then((candidates) => [candidates, current] as CompletionResult);
+        return result.then(
+          (candidates) => [filterByPrefix(candidates), current] as CompletionResult,
+        );
       }
-      return [result, current];
+      return [filterByPrefix(result), current];
     }
 
     return [[], current];

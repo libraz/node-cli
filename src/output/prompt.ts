@@ -54,6 +54,14 @@ export interface SelectChoice<T> {
 }
 
 /**
+ * Options for a single-select prompt.
+ */
+export interface SelectOptions<T> extends PromptBaseOptions {
+  /** Default selected value, returned when the user presses Enter with no input. */
+  default?: T;
+}
+
+/**
  * Options for a multiselect prompt.
  */
 export interface MultiselectOptions<T> extends PromptBaseOptions {
@@ -88,18 +96,48 @@ function normalizeChoices<T>(choices: Choice<T>[]): SelectChoice<T>[] {
 }
 
 /**
- * Creates a readline interface for interactive prompts.
+ * Creates a readline interface plus a cancellation signal that is aborted when
+ * the user presses Ctrl+C (SIGINT). Callers pass `signal` to `rl.question` so a
+ * cancellation rejects the pending question rather than hanging.
  *
  * @param stdin - Input stream. Defaults to process.stdin.
  * @param stdout - Output stream. Defaults to process.stdout.
- * @returns A readline Interface instance.
+ * @returns The readline interface, an abort signal, and a teardown function.
  */
-function createRl(stdin?: Readable, stdout?: Writable): Interface {
-  return createInterface({
+function createCancelableRl(
+  stdin?: Readable,
+  stdout?: Writable,
+): { rl: Interface; signal: AbortSignal; dispose: () => void } {
+  const rl = createInterface({
     input: stdin ?? process.stdin,
     output: stdout ?? process.stdout,
     terminal: true,
   });
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  rl.on("SIGINT", onSigint);
+
+  const dispose = () => {
+    rl.off("SIGINT", onSigint);
+    rl.close();
+  };
+
+  return { rl, signal: controller.signal, dispose };
+}
+
+/**
+ * Asks a single readline question, translating a Ctrl+C abort into a
+ * {@link PromptCancelError}.
+ */
+async function ask(rl: Interface, query: string, signal: AbortSignal): Promise<string> {
+  try {
+    return await rl.question(query, { signal });
+  } catch (err) {
+    if (signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+      throw new PromptCancelError();
+    }
+    throw err;
+  }
 }
 
 // ── Text ──
@@ -113,16 +151,10 @@ function createRl(stdin?: Readable, stdout?: Writable): Interface {
  * @throws PromptCancelError if the user cancels (e.g., Ctrl+C).
  */
 async function text(message: string, options: TextOptions = {}): Promise<string> {
-  const {
-    default: defaultValue,
-    validate,
-    required = true,
-    prefix = "?",
-    stdout = process.stdout,
-    stdin = process.stdin,
-  } = options;
+  const { default: defaultValue, validate, required = true, prefix = "?" } = options;
+  const stdout = options.stdout ?? process.stdout;
 
-  const rl = createRl(stdin, stdout);
+  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
   const hint =
     defaultValue !== undefined
       ? c.dim(` (${defaultValue})`)
@@ -132,7 +164,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
 
   try {
     while (true) {
-      const answer = await rl.question(`${c.green(prefix)} ${c.bold(message)}${hint} `);
+      const answer = await ask(rl, `${c.green(prefix)} ${c.bold(message)}${hint} `, signal);
 
       let value = answer.trim();
       if (value === "" && defaultValue !== undefined) {
@@ -154,12 +186,10 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
         }
       }
 
-      rl.close();
       return value;
     }
-  } catch {
-    rl.close();
-    throw new PromptCancelError();
+  } finally {
+    dispose();
   }
 }
 
@@ -174,26 +204,19 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
  * @throws PromptCancelError if the user cancels.
  */
 async function confirm(message: string, options: ConfirmOptions = {}): Promise<boolean> {
-  const {
-    default: defaultValue = false,
-    prefix = "?",
-    stdout = process.stdout,
-    stdin = process.stdin,
-  } = options;
+  const { default: defaultValue = false, prefix = "?" } = options;
+  const stdout = options.stdout ?? process.stdout;
 
-  const rl = createRl(stdin, stdout);
+  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
   const hint = defaultValue ? c.dim(" (Y/n)") : c.dim(" (y/N)");
 
   try {
-    const answer = await rl.question(`${c.green(prefix)} ${c.bold(message)}${hint} `);
-    rl.close();
-
+    const answer = await ask(rl, `${c.green(prefix)} ${c.bold(message)}${hint} `, signal);
     const trimmed = answer.trim().toLowerCase();
     if (trimmed === "") return defaultValue;
     return trimmed === "y" || trimmed === "yes";
-  } catch {
-    rl.close();
-    throw new PromptCancelError();
+  } finally {
+    dispose();
   }
 }
 
@@ -203,6 +226,7 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
  * Prompts the user to select a single item from a list of choices.
  *
  * Users may enter a number or a matching label to make their selection.
+ * Pressing Enter with no input selects the configured default, if any.
  *
  * @param message - The question to display.
  * @param choices - Available choices.
@@ -213,46 +237,68 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
 async function select<T = string>(
   message: string,
   choices: Choice<T>[],
-  options: PromptBaseOptions = {},
+  options: SelectOptions<T> = {},
 ): Promise<T> {
-  const { prefix = "?", stdout = process.stdout, stdin = process.stdin } = options;
+  const { prefix = "?", default: defaultValue, validate } = options;
+  const stdout = options.stdout ?? process.stdout;
 
   const normalized = normalizeChoices(choices);
+  if (normalized.length === 0) {
+    throw new Error("select() requires at least one choice");
+  }
+  const defaultIndex =
+    defaultValue !== undefined ? normalized.findIndex((ch) => ch.value === defaultValue) : -1;
 
-  // Simple fallback: number-based selection
-  const rl = createRl(stdin, stdout);
+  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
 
   try {
     stdout.write(`${c.green(prefix)} ${c.bold(message)}\n`);
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
+      const isDefault = i === defaultIndex;
       const hint = ch.hint ? c.dim(` (${ch.hint})`) : "";
-      stdout.write(`  ${c.cyan(`${i + 1})`)} ${ch.label}${hint}\n`);
+      const marker = isDefault ? c.dim(" [default]") : "";
+      stdout.write(`  ${c.cyan(`${i + 1})`)} ${ch.label}${hint}${marker}\n`);
     }
+
+    const promptLabel =
+      defaultIndex >= 0 ? `Enter number (default ${defaultIndex + 1}):` : "Enter number:";
 
     while (true) {
-      const answer = await rl.question(`${c.dim("Enter number:")} `);
-      const num = Number.parseInt(answer.trim(), 10);
+      const answer = await ask(rl, `${c.dim(promptLabel)} `, signal);
+      const trimmed = answer.trim();
 
-      if (num >= 1 && num <= normalized.length) {
-        rl.close();
-        return normalized[num - 1].value;
+      let chosen: SelectChoice<T> | undefined;
+      if (trimmed === "" && defaultIndex >= 0) {
+        chosen = normalized[defaultIndex];
+      } else {
+        const num = Number.parseInt(trimmed, 10);
+        if (num >= 1 && num <= normalized.length) {
+          chosen = normalized[num - 1];
+        } else {
+          chosen = normalized.find((ch) => ch.label.toLowerCase() === trimmed.toLowerCase());
+        }
       }
 
-      // Also accept by label
-      const byLabel = normalized.find(
-        (ch) => ch.label.toLowerCase() === answer.trim().toLowerCase(),
-      );
-      if (byLabel) {
-        rl.close();
-        return byLabel.value;
+      if (!chosen) {
+        stdout.write(`${c.red("✖")} Please enter a number between 1 and ${normalized.length}\n`);
+        continue;
       }
 
-      stdout.write(`${c.red("✖")} Please enter a number between 1 and ${normalized.length}\n`);
+      if (validate) {
+        try {
+          validate(chosen.value);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          stdout.write(`${c.red("✖")} ${msg}\n`);
+          continue;
+        }
+      }
+
+      return chosen.value;
     }
-  } catch {
-    rl.close();
-    throw new PromptCancelError();
+  } finally {
+    dispose();
   }
 }
 
@@ -261,11 +307,12 @@ async function select<T = string>(
 /**
  * Prompts the user to select one or more items from a list of choices.
  *
- * Users enter comma-separated numbers to select items.
+ * Users enter comma-separated numbers to select items. Pressing Enter with no
+ * input accepts the configured defaults, if any.
  *
  * @param message - The question to display.
  * @param choices - Available choices.
- * @param options - Multiselect prompt options (min/max constraints).
+ * @param options - Multiselect prompt options (default/min/max constraints).
  * @returns An array of selected values.
  * @throws PromptCancelError if the user cancels.
  */
@@ -274,53 +321,115 @@ async function multiselect<T = string>(
   choices: Choice<T>[],
   options: MultiselectOptions<T> = {},
 ): Promise<T[]> {
-  const { prefix = "?", stdout = process.stdout, stdin = process.stdin, min, max } = options;
+  const { prefix = "?", min, max, default: defaults, validate } = options;
+  const stdout = options.stdout ?? process.stdout;
 
   const normalized = normalizeChoices(choices);
-  const rl = createRl(stdin, stdout);
+  if (normalized.length === 0) {
+    throw new Error("multiselect() requires at least one choice");
+  }
+  const defaultIndexes = new Set(
+    (defaults ?? []).map((d) => normalized.findIndex((ch) => ch.value === d)).filter((i) => i >= 0),
+  );
+
+  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
 
   try {
     stdout.write(`${c.green(prefix)} ${c.bold(message)} ${c.dim("(comma-separated numbers)")}\n`);
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
-      stdout.write(`  ${c.cyan(`${i + 1})`)} ${ch.label}\n`);
+      const marker = defaultIndexes.has(i) ? c.dim(" [default]") : "";
+      stdout.write(`  ${c.cyan(`${i + 1})`)} ${ch.label}${marker}\n`);
     }
 
     while (true) {
-      const answer = await rl.question(`${c.dim("Enter numbers:")} `);
-      const nums: number[] = answer
-        .split(",")
-        .map((s: string) => Number.parseInt(s.trim(), 10))
-        .filter((n: number) => !Number.isNaN(n));
+      const answer = await ask(rl, `${c.dim("Enter numbers:")} `, signal);
+      const trimmed = answer.trim();
 
-      const valid = nums.every((n: number) => n >= 1 && n <= normalized.length);
-      if (!valid || nums.length === 0) {
+      // Deduplicate selected indices so min/max count distinct items.
+      let indices: number[];
+      if (trimmed === "" && defaultIndexes.size > 0) {
+        indices = [...defaultIndexes];
+      } else {
+        const nums = trimmed
+          .split(",")
+          .map((s) => Number.parseInt(s.trim(), 10))
+          .filter((n) => !Number.isNaN(n));
+        indices = [...new Set(nums.map((n) => n - 1))];
+      }
+
+      const valid = indices.length > 0 && indices.every((i) => i >= 0 && i < normalized.length);
+      if (!valid) {
         stdout.write(
           `${c.red("✖")} Please enter valid numbers between 1 and ${normalized.length}\n`,
         );
         continue;
       }
 
-      if (min !== undefined && nums.length < min) {
+      if (min !== undefined && indices.length < min) {
         stdout.write(`${c.red("✖")} Select at least ${min} items\n`);
         continue;
       }
 
-      if (max !== undefined && nums.length > max) {
+      if (max !== undefined && indices.length > max) {
         stdout.write(`${c.red("✖")} Select at most ${max} items\n`);
         continue;
       }
 
-      rl.close();
-      return nums.map((n: number) => normalized[n - 1].value);
+      const values = indices.map((i) => normalized[i].value);
+
+      if (validate) {
+        try {
+          validate(values);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          stdout.write(`${c.red("✖")} ${msg}\n`);
+          continue;
+        }
+      }
+
+      return values;
     }
-  } catch {
-    rl.close();
-    throw new PromptCancelError();
+  } finally {
+    dispose();
   }
 }
 
 // ── Password ──
+
+/**
+ * Masks a chunk of readline echo output: ANSI escape sequences and line breaks
+ * pass through unchanged, while every other visible character (including digits,
+ * `;` and `[`) is replaced with an asterisk.
+ *
+ * @param chunk - The raw output chunk readline is about to echo.
+ * @returns The masked chunk.
+ */
+export function maskInput(chunk: string): string {
+  let result = "";
+  let i = 0;
+  while (i < chunk.length) {
+    const ch = chunk[i];
+    if (ch === "\x1b") {
+      // Pass through an ANSI escape sequence (ESC [ ... final-byte).
+      let j = i + 1;
+      if (chunk[j] === "[") {
+        j++;
+        while (j < chunk.length && !/[A-Za-z]/.test(chunk[j])) j++;
+        if (j < chunk.length) j++; // include final byte
+      }
+      result += chunk.slice(i, j);
+      i = j;
+    } else if (ch === "\r" || ch === "\n") {
+      result += ch;
+      i++;
+    } else {
+      result += "*";
+      i++;
+    }
+  }
+  return result;
+}
 
 /**
  * Prompts the user for a password with masked input.
@@ -333,47 +442,40 @@ async function multiselect<T = string>(
  * @throws PromptCancelError if the user cancels.
  */
 async function password(message: string, options: PromptBaseOptions = {}): Promise<string> {
-  const {
-    validate,
-    required = true,
-    prefix = "?",
-    stdout = process.stdout,
-    stdin = process.stdin,
-  } = options;
+  const { validate, required = true, prefix = "?" } = options;
+  const stdout = options.stdout ?? process.stdout;
 
-  const rl = createRl(stdin, stdout);
+  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
 
-  // Mask input by intercepting keypress
   const writeOriginal = (stdout as NodeJS.WriteStream).write;
   let masking = false;
 
+  const restoreWrite = () => {
+    (stdout as NodeJS.WriteStream).write = writeOriginal;
+  };
+
   try {
+    // Mask every echoed character while a password question is active.
+    (stdout as NodeJS.WriteStream).write = function (
+      this: NodeJS.WriteStream,
+      chunk: string | Uint8Array,
+      ...args: [BufferEncoding?, ((err?: Error | null) => void)?]
+    ): boolean {
+      if (masking && typeof chunk === "string") {
+        return writeOriginal.call(stdout, maskInput(chunk), ...args);
+      }
+      return writeOriginal.call(stdout, chunk, ...args);
+    } as typeof writeOriginal;
+
     while (true) {
+      // Write the (unmasked) prompt before enabling masking.
+      masking = false;
       stdout.write(`${c.green(prefix)} ${c.bold(message)} `);
       masking = true;
 
-      // Override write to mask characters
-      let _inputLength = 0;
-      (stdout as NodeJS.WriteStream).write = function (
-        this: NodeJS.WriteStream,
-        chunk: string | Uint8Array,
-        ...args: [BufferEncoding?, ((err?: Error | null) => void)?]
-      ): boolean {
-        if (masking && typeof chunk === "string") {
-          // Replace visible characters with *
-          // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence matching requires control characters
-          const masked = chunk.replace(/[^\r\n\x1b[\d;]*[^\r\n\x1b[\d;]/g, (match: string) => {
-            _inputLength += match.length;
-            return "*".repeat(match.length);
-          });
-          return writeOriginal.call(stdout, masked, ...args);
-        }
-        return writeOriginal.call(stdout, chunk, ...args);
-      } as typeof writeOriginal;
-
-      const answer = await rl.question("");
+      const answer = await ask(rl, "", signal);
       masking = false;
-      (stdout as NodeJS.WriteStream).write = writeOriginal;
+      stdout.write("\n");
 
       const value = answer.trim();
 
@@ -392,14 +494,12 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
         }
       }
 
-      rl.close();
       return value;
     }
-  } catch {
+  } finally {
     masking = false;
-    (stdout as NodeJS.WriteStream).write = writeOriginal;
-    rl.close();
-    throw new PromptCancelError();
+    restoreWrite();
+    dispose();
   }
 }
 

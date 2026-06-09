@@ -1,6 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
+import { PromptCancelError } from "../errors.js";
 import { ShellCompleter } from "./completion.js";
 import { History } from "./history.js";
 
@@ -71,7 +72,8 @@ export class Shell {
       input: process.stdin,
       output: process.stdout,
       prompt: this.mode ? this.mode.prompt : this.promptStr,
-      history,
+      // readline expects most-recent-first; our history is stored oldest-first.
+      history: [...history].reverse(),
       completer: (line: string) => this.completer.complete(line),
       terminal: true,
     });
@@ -79,6 +81,11 @@ export class Shell {
       if (!this.reopeningReadline) {
         this.running = false;
       }
+    });
+    // Ctrl+C at the prompt cancels the current line instead of exiting the shell.
+    this.rl.on("SIGINT", () => {
+      process.stdout.write("\n");
+      this.rl?.prompt();
     });
   }
 
@@ -143,7 +150,11 @@ export class Shell {
         break;
       }
 
-      this.history.add(trimmed);
+      // Only persist top-level commands; mode sub-REPL input (which may be
+      // sensitive) must not leak into the shared, on-disk history.
+      if (!this.mode) {
+        this.history.add(trimmed);
+      }
 
       // Close readline to fully release stdin before command execution.
       // This prevents input contention when commands use prompt.* or
@@ -160,10 +171,16 @@ export class Shell {
             stderr: process.stderr,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          process.stderr.write(`Error: ${message}\n`);
+          this.reportError(err);
         }
       } else {
+        // Route SIGINT during command execution to the command's cancel handler.
+        // A second Ctrl+C (or one with no handler installed) falls through to
+        // the default terminate behavior.
+        const onSigint = () => {
+          this.router.triggerCancel();
+        };
+        process.once("SIGINT", onSigint);
         try {
           await this.router.execute(trimmed, {
             shell: this,
@@ -171,8 +188,9 @@ export class Shell {
             stderr: process.stderr,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          process.stderr.write(`Error: ${message}\n`);
+          this.reportError(err);
+        } finally {
+          process.removeListener("SIGINT", onSigint);
         }
       }
 
@@ -187,6 +205,19 @@ export class Shell {
     if (this.rl) {
       this.rl.close();
     }
+  }
+
+  /**
+   * Writes an error to stderr, presenting a cancelled prompt as a clean message
+   * rather than a raw `Error: Prompt cancelled` line.
+   */
+  private reportError(err: unknown): void {
+    if (err instanceof PromptCancelError) {
+      process.stderr.write("Cancelled\n");
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`Error: ${message}\n`);
   }
 
   /**
