@@ -99,21 +99,7 @@ export class HelpGenerator {
     const lines: string[] = [];
 
     // Usage line — use the canonical command path so aliases resolve to the real name.
-    const usageParts = [...this.registry.getCommandPath(command)];
-    if (command.subcommands.size > 0 && !command.action) {
-      usageParts.push("<command>");
-    }
-    for (const arg of command.argDefs) {
-      if (arg.variadic) {
-        usageParts.push(arg.required ? `<...${arg.name}>` : `[...${arg.name}]`);
-      } else {
-        usageParts.push(arg.required ? `<${arg.name}>` : `[${arg.name}]`);
-      }
-    }
-    if (command.options.size > 0) {
-      usageParts.push("[options]");
-    }
-    lines.push(`Usage: ${usageParts.join(" ")}`);
+    lines.push(`Usage: ${formatUsage(this.registry.getCommandPath(command), command)}`);
 
     // Description
     if (command.description) {
@@ -125,12 +111,10 @@ export class HelpGenerator {
       lines.push("", `Aliases: ${command.aliases.join(", ")}`);
     }
 
-    // Arguments
-    const requiredArgs = command.argDefs.filter((a) => a.required);
-    const optionalArgs = command.argDefs.filter((a) => !a.required);
+    // Arguments — listed in declaration order so the help matches the usage line.
     if (command.argDefs.length > 0) {
       lines.push("", "Arguments:");
-      for (const arg of [...requiredArgs, ...optionalArgs]) {
+      for (const arg of command.argDefs) {
         const label = arg.variadic ? `...${arg.name}` : arg.name;
         const suffix = arg.required ? " (required)" : "";
         lines.push(`  ${label}${suffix}`);
@@ -172,6 +156,37 @@ export class HelpGenerator {
 
     return lines.join("\n");
   }
+}
+
+/**
+ * Builds a full usage string for a command: its path, an optional `<command>`
+ * placeholder for actionless groups, its positional arguments, and an `[options]`
+ * marker when it declares any. Shared by the help generator and the router so a
+ * single definition drives every usage string.
+ *
+ * @param commandPath - The command path to prefix (canonical or as typed).
+ * @param command - The command definition supplying args/options/subcommands.
+ * @returns The formatted usage string.
+ */
+export function formatUsage(
+  commandPath: string[],
+  command: Pick<CommandDefinition, "argDefs" | "options" | "subcommands" | "action">,
+): string {
+  const parts = [...commandPath];
+  if (command.subcommands.size > 0 && !command.action) {
+    parts.push("<command>");
+  }
+  for (const arg of command.argDefs) {
+    if (arg.variadic) {
+      parts.push(arg.required ? `<...${arg.name}>` : `[...${arg.name}]`);
+    } else {
+      parts.push(arg.required ? `<${arg.name}>` : `[${arg.name}]`);
+    }
+  }
+  if (command.options.size > 0) {
+    parts.push("[options]");
+  }
+  return parts.join(" ");
 }
 
 /**

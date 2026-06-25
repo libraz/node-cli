@@ -420,6 +420,16 @@ cli.command("longrun")
   });
 ```
 
+各アクションは同じキャンセルで中断される `AbortSignal` を `ctx.signal` として受け取ります。abort 対応 API に渡すか `"abort"` を監視してください。両者は同時に発火するため、どちらか一方でも併用でも構いません:
+
+```typescript
+cli.command("fetch <url>")
+  .action(async (ctx) => {
+    const res = await fetch(ctx.args.url as string, { signal: ctx.signal });
+    ctx.stdout.write(await res.text());
+  });
+```
+
 ## エラークラス
 
 | エラー | コード | 発生タイミング |

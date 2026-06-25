@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { createColorizer } from "./color.js";
+import { createColorizer, stringWidth } from "./color.js";
 
 // ── Progress Bar ──
 
@@ -229,6 +229,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let done = false;
+  let sigintHandler: (() => void) | null = null;
   const tty = isTTY(stream);
   const col = createColorizer(stream);
 
@@ -250,18 +251,38 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     if (tty) stream.write("\r\x1b[K");
   }
 
+  function showCursor(): void {
+    if (tty) stream.write("\x1b[?25h");
+  }
+
   function cleanup(): void {
     if (timer) {
       clearInterval(timer);
       timer = null;
+    }
+    if (sigintHandler) {
+      process.removeListener("SIGINT", sigintHandler);
+      sigintHandler = null;
     }
   }
 
   return {
     start() {
       if (timer || done) return;
+      // Restore the terminal and re-raise SIGINT so the default exit behavior
+      // (and any other handlers) still apply after we tidy up the animation.
+      sigintHandler = () => {
+        cleanup();
+        clearLine();
+        showCursor();
+        process.kill(process.pid, "SIGINT");
+      };
+      process.once("SIGINT", sigintHandler);
+      if (tty) stream.write("\x1b[?25l");
       render();
+      // Keep the interval from holding the event loop open on its own.
       timer = setInterval(render, interval);
+      timer.unref();
     },
 
     update(newLabel: string) {
@@ -273,6 +294,8 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
+      showCursor();
+      if (!tty) return;
       const msg = message ?? label;
       stream.write(`${col.green("✔")} ${msg}\n`);
     },
@@ -282,6 +305,8 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
+      showCursor();
+      if (!tty) return;
       const msg = message ?? label;
       stream.write(`${col.red("✖")} ${msg}\n`);
     },
@@ -291,6 +316,8 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
+      showCursor();
+      if (!tty) return;
       const msg = message ?? label;
       stream.write(`${col.yellow("⚠")} ${msg}\n`);
     },
@@ -300,6 +327,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
+      showCursor();
     },
   };
 }
@@ -311,35 +339,38 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
  */
 function createMultiBar(): MultiBar {
   const bars: { options: BarOptions; current: number; startTime: number }[] = [];
-  // The whole group renders to a single stream, fixed by the first bar added.
+  // The whole group renders to a single stream, fixed by the first bar that
+  // actually provides one (a later add() can supply it if the first omits it).
   let stream: Writable = process.stderr;
-  // Number of lines written by the previous renderAll, used to move the cursor up.
-  let renderedLines = 0;
+  let streamSet = false;
+  // Number of physical rows written by the previous renderAll, used to move the
+  // cursor up. Wrapped lines occupy multiple rows, so this is not bars.length.
+  let renderedRows = 0;
   let closed = false;
 
   return {
     add(options: BarOptions): Bar {
-      if (bars.length === 0 && options.stream) {
+      if (!streamSet && options.stream) {
         stream = options.stream;
+        streamSet = true;
       }
       const entry = { options, current: 0, startTime: Date.now() };
       bars.push(entry);
 
-      const tty = isTTY(stream);
       const total = options.total;
 
       const wrapper: Bar = {
         update(value: number) {
           entry.current = Math.max(0, Math.min(value, total));
-          if (tty) renderAll();
+          if (isTTY(stream)) renderAll();
         },
         tick(delta = 1) {
           entry.current = Math.max(0, Math.min(entry.current + delta, total));
-          if (tty) renderAll();
+          if (isTTY(stream)) renderAll();
         },
         finish() {
           entry.current = total;
-          if (tty) renderAll();
+          if (isTTY(stream)) renderAll();
         },
         stop() {
           // no-op for individual bars in multi
@@ -367,12 +398,17 @@ function createMultiBar(): MultiBar {
 
   function renderAll(): void {
     const col = createColorizer(stream);
-    // Move cursor up over exactly the lines we last wrote (handles bars added
-    // after the first render without corrupting scrollback).
-    if (renderedLines > 0) {
-      stream.write(`\x1b[${renderedLines}A`);
+    // Terminal width used to estimate how many physical rows each logical line
+    // occupies once it wraps.
+    const columns = (stream as NodeJS.WriteStream).columns || 80;
+
+    // Move the cursor up over exactly the physical rows we last wrote so wrapped
+    // lines do not leave orphaned fragments in the scrollback.
+    if (renderedRows > 0) {
+      stream.write(`\x1b[${renderedRows}A`);
     }
 
+    let rows = 0;
     for (const entry of bars) {
       const { options: opts, current, startTime } = entry;
       const total = opts.total;
@@ -386,33 +422,35 @@ function createMultiBar(): MultiBar {
       const rate = elapsed > 0 ? (current / elapsed) * 1000 : 0;
       const eta = rate > 0 ? Math.max(0, ((total - current) / rate) * 1000) : 0;
 
+      let line: string;
       if (opts.format) {
-        stream.write(`\r\x1b[K${opts.format({ current, total, percent, elapsed, eta, rate })}\n`);
-        continue;
-      }
+        line = opts.format({ current, total, percent, elapsed, eta, rate });
+      } else {
+        const filledCount = Math.round((percent / 100) * width);
+        const emptyCount = width - filledCount;
+        let bar = filled.repeat(filledCount) + empty.repeat(emptyCount);
 
-      const filledCount = Math.round((percent / 100) * width);
-      const emptyCount = width - filledCount;
-      let bar = filled.repeat(filledCount) + empty.repeat(emptyCount);
-
-      if (opts.color) {
-        try {
-          bar = (col as Record<string, (s: string) => string>)[opts.color](bar);
-        } catch {
-          // ignore unknown color
+        if (opts.color) {
+          try {
+            bar = (col as Record<string, (s: string) => string>)[opts.color](bar);
+          } catch {
+            // ignore unknown color
+          }
         }
+
+        const parts: string[] = [];
+        if (label) parts.push(label);
+        parts.push(`[${bar}]`);
+        parts.push(`${percent}%`);
+        parts.push(`${current}/${total}`);
+        line = parts.join("  ");
       }
 
-      const parts: string[] = [];
-      if (label) parts.push(label);
-      parts.push(`[${bar}]`);
-      parts.push(`${percent}%`);
-      parts.push(`${current}/${total}`);
-
-      stream.write(`\r\x1b[K${parts.join("  ")}\n`);
+      stream.write(`\r\x1b[K${line}\n`);
+      rows += Math.max(1, Math.ceil(stringWidth(line) / columns));
     }
 
-    renderedLines = bars.length;
+    renderedRows = rows;
   }
 }
 

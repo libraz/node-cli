@@ -76,8 +76,19 @@ export class CommandBuilder {
       resolved.type = takesValue ? "string" : "boolean";
     }
 
-    // Default boolean to false
-    if (resolved.type === "boolean" && resolved.default === undefined) {
+    // Single source of truth for "does this option take a value": derive it from
+    // the resolved type. This keeps the parser, help output, and completion in
+    // agreement even when the schema type and the flag placeholder disagree
+    // (e.g. `.option("--name", { type: "string" })` with no `<value>` placeholder).
+    const finalTakesValue = resolved.type !== "boolean";
+
+    // A boolean flag defaults to `false` only when it is not required; injecting a
+    // default for a required boolean would make the required check unsatisfiable.
+    if (
+      resolved.type === "boolean" &&
+      resolved.default === undefined &&
+      resolved.required !== true
+    ) {
       resolved.default = false;
     }
 
@@ -96,7 +107,7 @@ export class CommandBuilder {
     this.definition.options.set(long, {
       long,
       aliases: mergedAliases,
-      takesValue,
+      takesValue: finalTakesValue,
       schema: resolved,
     });
 

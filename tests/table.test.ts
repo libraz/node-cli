@@ -242,6 +242,44 @@ describe("table", () => {
     expect(result).not.toContain("…");
   });
 
+  it("does not throw for documented grey border style", () => {
+    let result = "";
+    expect(() => {
+      result = table([{ a: 1 }], { border: "single", style: { border: "grey" } });
+    }).not.toThrow();
+    expect(result).toContain("1");
+  });
+
+  it("does not throw for an unknown border style", () => {
+    let result = "";
+    expect(() => {
+      result = table([{ a: 1 }], { border: "single", style: { border: "notacolor" } });
+    }).not.toThrow();
+    expect(result).toContain("1");
+  });
+
+  it("keeps columns aligned when a cell contains a control character", () => {
+    const withCtrl = table([{ v: "a\x07b" }, { v: "xy" }], { columns: ["v"], border: "single" });
+    const withoutCtrl = table([{ v: "ab" }, { v: "xy" }], { columns: ["v"], border: "single" });
+    const stripCtrl = (s: string) => s.replaceAll(String.fromCharCode(7), "");
+    expect(stripCtrl(withCtrl)).toBe(withoutCtrl);
+  });
+
+  it("handles maxWidth of 0 without throwing or overflowing", () => {
+    let result = "";
+    expect(() => {
+      result = table([{ name: "alexander" }], {
+        columns: ["name"],
+        border: "single",
+        maxWidth: { name: 0 },
+      });
+    }).not.toThrow();
+    const lines = result.split("\n");
+    // All bordered lines must share the same display width (no overflow).
+    const widths = new Set(lines.map((l) => l.length));
+    expect(widths.size).toBe(1);
+  });
+
   it("colAligns takes precedence over align", () => {
     const result = table([{ val: "1" }, { val: "100" }], {
       columns: ["val"],

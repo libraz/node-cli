@@ -155,4 +155,167 @@ describe("prompt", () => {
     await expect(promise).resolves.toBe("secret");
     expect(streams.getOutput()).not.toContain("secret");
   });
+
+  it("password does not replace the output stream's write reference", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const originalWrite = streams.stdout.write;
+
+    const promise = prompt.password("Password", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    streams.stdin.end("secret\n");
+
+    await expect(promise).resolves.toBe("secret");
+    expect(streams.stdout.write).toBe(originalWrite);
+  });
+
+  it("two sequential password prompts work and leave the stream write intact", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+
+    const first = createPromptStreams();
+    const originalWrite = first.stdout.write;
+    const p1 = prompt.password("First", { stdin: first.stdin, stdout: first.stdout });
+    first.stdin.end("alpha\n");
+    await expect(p1).resolves.toBe("alpha");
+    expect(first.stdout.write).toBe(originalWrite);
+
+    const second = createPromptStreams();
+    const secondOriginalWrite = second.stdout.write;
+    const p2 = prompt.password("Second", { stdin: second.stdin, stdout: second.stdout });
+    second.stdin.end("beta\n");
+    await expect(p2).resolves.toBe("beta");
+    expect(second.stdout.write).toBe(secondOriginalWrite);
+    expect(first.getOutput()).not.toContain("alpha");
+    expect(second.getOutput()).not.toContain("beta");
+  });
+
+  it("text rejects with PromptCancelError on EOF", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.text("Name", { stdin: streams.stdin, stdout: streams.stdout });
+    streams.stdin.push(null);
+
+    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it("confirm rejects with PromptCancelError on EOF", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.confirm("Continue?", { stdin: streams.stdin, stdout: streams.stdout });
+    streams.stdin.push(null);
+
+    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it("select rejects with PromptCancelError on EOF", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.select("Env", ["a", "b"], {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    streams.stdin.push(null);
+
+    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it("multiselect rejects with PromptCancelError on EOF", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.multiselect("Pick", ["a", "b"], {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    streams.stdin.push(null);
+
+    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it("password rejects with PromptCancelError on EOF", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.password("Password", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    streams.stdin.push(null);
+
+    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it("text with an empty-string default resolves immediately on Enter", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.text("Name", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      default: "",
+    });
+    streams.stdin.end("\n");
+
+    await expect(promise).resolves.toBe("");
+  });
+
+  it("select is selectable by index when a choice has a numeric label", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.select("Pick", ["10", "20"], {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    feedLines(streams.stdin, ["2"]);
+
+    await expect(promise).resolves.toBe("20");
+  });
+
+  it("select honors an object-valued default", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const optA = { id: "a" };
+    const optB = { id: "b" };
+    const promise = prompt.select(
+      "Pick",
+      [
+        { label: "A", value: optA },
+        { label: "B", value: optB },
+      ],
+      { stdin: streams.stdin, stdout: streams.stdout, default: optB },
+    );
+    streams.stdin.end("\n");
+
+    await expect(promise).resolves.toBe(optB);
+    expect(streams.getOutput()).toContain("[default]");
+  });
+
+  it("maskInput masks emoji to the correct visible width", async () => {
+    const { maskInput } = await import("../src/output/prompt.js");
+    const { stringWidth } = await import("../src/output/color.js");
+
+    const input = "a😀b";
+    const masked = maskInput(input);
+    expect(stringWidth(masked)).toBe(stringWidth(input));
+    expect(masked).not.toContain("a");
+    expect(masked).not.toContain("b");
+    expect(masked).not.toContain("😀");
+  });
+
+  it("maskInput passes OSC sequences through untouched", async () => {
+    const { maskInput } = await import("../src/output/prompt.js");
+
+    // An OSC sequence (ESC ] ... BEL) carries no echoed user input, so it must
+    // pass through verbatim — masking its bytes would corrupt the terminal and
+    // misreport width. Only the trailing visible text is masked.
+    const osc = `${String.fromCharCode(27)}]0;window-title${String.fromCharCode(7)}`;
+    expect(maskInput(`${osc}secret`)).toBe(`${osc}******`);
+  });
 });

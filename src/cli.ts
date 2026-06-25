@@ -177,9 +177,12 @@ export class CLI {
     // ones are queued so command entry points can await them before running.
     const result = plugin(context);
     if (result instanceof Promise) {
-      // Capture rejections so a failing plugin cannot become an unhandled
-      // rejection; it is surfaced when the queue is drained.
-      this.pendingPlugins.push(result.catch((err) => Promise.reject(err)));
+      this.pendingPlugins.push(result);
+      // Attach a no-op catch to the original promise so a rejection that is never
+      // drained (the consumer never starts the CLI) does not surface as an
+      // unhandledRejection. The error is still reported on drain, which inspects
+      // settlement results rather than relying on this promise's resolution.
+      result.catch(() => {});
     }
     return this;
   }
@@ -191,7 +194,13 @@ export class CLI {
   private async drainPendingPlugins(): Promise<void> {
     if (this.pendingPlugins.length > 0) {
       const pending = this.pendingPlugins.splice(0, this.pendingPlugins.length);
-      await Promise.all(pending);
+      // Use allSettled so every plugin is awaited even if one rejects; then
+      // re-throw the first failure so the caller (start/exec) sees it.
+      const results = await Promise.allSettled(pending);
+      const failure = results.find((r) => r.status === "rejected");
+      if (failure) {
+        throw (failure as PromiseRejectedResult).reason;
+      }
     }
   }
 
@@ -223,7 +232,12 @@ export class CLI {
     const args = argv ?? process.argv.slice(2);
 
     if (args.length > 0) {
-      // Direct CLI mode
+      // Direct CLI mode. Route SIGINT to the running command's cancel handler so
+      // Ctrl-C cleanup (e.g. removing a lock file) works the same as in the REPL.
+      const onSigint = () => {
+        this.router.triggerCancel();
+      };
+      process.once("SIGINT", onSigint);
       try {
         await this.router.execute(args, {
           stdout: process.stdout,
@@ -233,8 +247,10 @@ export class CLI {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`Error: ${message}\n`);
         process.exitCode = err instanceof CLIError ? err.exitCode : 1;
+      } finally {
+        process.removeListener("SIGINT", onSigint);
       }
-    } else {
+    } else if (process.stdin.isTTY) {
       // Interactive shell mode
       let banner: string;
       if (this.bannerStr !== undefined) {
@@ -255,6 +271,11 @@ export class CLI {
       });
 
       await shell.start();
+    } else {
+      // No arguments and stdin is not a terminal (e.g. piped or redirected):
+      // starting an interactive REPL would hang waiting for keystrokes that will
+      // never come, so print the help index instead.
+      process.stdout.write(`${this.helpGenerator.generateIndex()}\n`);
     }
   }
 

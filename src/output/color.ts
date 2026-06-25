@@ -24,6 +24,7 @@ const styles: Record<string, [number, number]> = {
   cyan: [36, 39],
   white: [37, 39],
   gray: [90, 39],
+  grey: [90, 39], // British spelling alias of gray
   // background
   bgRed: [41, 49],
   bgGreen: [42, 49],
@@ -49,9 +50,10 @@ function streamIsTTY(stream: Writable): boolean {
  * Determines whether color output is enabled.
  *
  * Resolution order: an explicit {@link setColorEnabled} override always wins.
- * Otherwise `NO_COLOR` and `TERM=dumb` force color off, `FORCE_COLOR` forces it
- * on, and finally the target stream's TTY status is consulted. When no stream is
- * given, `process.stdout` is used.
+ * Then `NO_COLOR` and `FORCE_COLOR=0` force color off. `FORCE_COLOR` (truthy)
+ * forces it on, taking precedence over the `TERM=dumb` / non-TTY disable checks
+ * per the de-facto standard. Finally the target stream's TTY status is consulted.
+ * When no stream is given, `process.stdout` is used.
  *
  * @param stream - Optional output stream to evaluate. Defaults to `process.stdout`.
  * @returns Whether color escape codes should be emitted.
@@ -59,8 +61,13 @@ function streamIsTTY(stream: Writable): boolean {
 export function isColorEnabled(stream?: Writable): boolean {
   if (_enabled !== null) return _enabled;
   if (process.env.NO_COLOR != null && process.env.NO_COLOR !== "") return false;
+  // FORCE_COLOR is evaluated before TERM/TTY checks: "0"/"false" disable, any
+  // other non-empty value enables regardless of TERM=dumb or non-TTY output.
+  const forceColor = process.env.FORCE_COLOR;
+  if (forceColor != null && forceColor !== "") {
+    return forceColor !== "0" && forceColor !== "false";
+  }
   if (process.env.TERM === "dumb") return false;
-  if (process.env.FORCE_COLOR != null && process.env.FORCE_COLOR !== "0") return true;
   const target = stream ?? process.stdout;
   return streamIsTTY(target);
 }
@@ -242,6 +249,38 @@ export function stripAnsi(text: string): string {
   return text.replace(ansiRegex, "");
 }
 
+/** A run of input tagged as an ANSI escape sequence or as plain visible text. */
+export interface AnsiSegment {
+  /** True for an ANSI escape sequence (pass through untouched); false for text. */
+  ansi: boolean;
+  /** The raw substring for this segment. */
+  text: string;
+}
+
+/**
+ * Splits a string into ordered runs of ANSI escape sequences and plain text,
+ * using the same recognizer as {@link stripAnsi}. Width- and content-sensitive
+ * consumers (e.g. masking, wrapping) can iterate the segments to leave escape
+ * sequences — including OSC sequences such as window-title updates — intact
+ * while transforming only the visible text.
+ *
+ * @param text - The string to split.
+ * @returns The segments in input order; concatenating their `text` reproduces the input.
+ */
+export function splitAnsi(text: string): AnsiSegment[] {
+  const segments: AnsiSegment[] = [];
+  let last = 0;
+  // matchAll copies the regex, so the shared lastIndex is left untouched.
+  for (const match of text.matchAll(ansiRegex)) {
+    const start = match.index;
+    if (start > last) segments.push({ ansi: false, text: text.slice(last, start) });
+    segments.push({ ansi: true, text: match[0] });
+    last = start + match[0].length;
+  }
+  if (last < text.length) segments.push({ ansi: false, text: text.slice(last) });
+  return segments;
+}
+
 // ── String width (East Asian Width aware) ──
 
 /**
@@ -250,14 +289,28 @@ export function stripAnsi(text: string): string {
  * characters (which occupy no columns), and East Asian wide / emoji
  * characters (which occupy two columns).
  *
+ * Runs of scalars joined by U+200D (zero-width joiner) — e.g. ZWJ emoji
+ * sequences like a family emoji — collapse into a single grapheme and count as
+ * one wide (2-column) cell rather than summing each scalar's width.
+ *
  * @param text - The string to measure.
  * @returns The visual column width of the string.
  */
 export function stringWidth(text: string): number {
   const stripped = stripAnsi(text);
+  const chars = [...stripped];
   let width = 0;
-  for (const char of stripped) {
-    const code = char.codePointAt(0) as number;
+  for (let i = 0; i < chars.length; i++) {
+    const code = chars[i].codePointAt(0) as number;
+    // Collapse a ZWJ sequence (scalar, ZWJ, scalar, ...) into one wide grapheme.
+    if (i + 1 < chars.length && chars[i + 1].codePointAt(0) === 0x200d) {
+      width += 2;
+      // Skip the remaining joined scalars and their joiners.
+      while (i + 1 < chars.length && chars[i + 1].codePointAt(0) === 0x200d) {
+        i += 2;
+      }
+      continue;
+    }
     width += getCharWidth(code);
   }
   return width;
@@ -315,7 +368,10 @@ function isWide(code: number): boolean {
 }
 
 function getCharWidth(code: number): number {
-  if (code === 0) return 0;
+  // C0 control characters (incl. NUL), DEL, and C1 control characters occupy no
+  // columns. ANSI escape sequences are stripped before measuring; this only
+  // covers stray raw control bytes (e.g. BEL) left in the input.
+  if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return 0;
   if (isZeroWidth(code)) return 0;
   if (isWide(code)) return 2;
   return 1;

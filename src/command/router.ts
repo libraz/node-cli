@@ -1,6 +1,6 @@
 import { PassThrough, type Readable, type Writable } from "node:stream";
 import { CommandNotFoundError, ExtraArgumentError, MissingArgumentError } from "../errors.js";
-import type { HelpGenerator } from "../help/generator.js";
+import { formatUsage, type HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
 import type { Shell } from "../shell/repl.js";
 import type { CatchContext, CLIEventMap, CommandContext, CommandDefinition } from "../types.js";
@@ -30,8 +30,16 @@ export class CommandRouter {
     exit: [],
   };
 
-  /** The command currently executing and its context, for cancellation. */
-  private active: { command: CommandDefinition; ctx: CommandContext } | null = null;
+  /**
+   * Commands currently executing and their contexts, for cancellation. A set
+   * (not a single slot) so concurrent pipeline stages are each tracked and can
+   * all receive a cancel signal.
+   */
+  private readonly active = new Set<{
+    command: CommandDefinition;
+    ctx: CommandContext;
+    controller: AbortController;
+  }>();
 
   /**
    * Creates a new CommandRouter.
@@ -132,11 +140,15 @@ export class CommandRouter {
    * @returns True if a cancel handler was invoked, false otherwise.
    */
   triggerCancel(): boolean {
-    if (this.active?.command.cancelHandler) {
-      this.active.command.cancelHandler(this.active.ctx);
-      return true;
+    let cancelled = false;
+    for (const entry of this.active) {
+      // Abort the context signal first so signal-based actions stop even when no
+      // cancel handler is registered, then invoke the optional handler.
+      entry.controller.abort();
+      entry.command.cancelHandler?.(entry.ctx);
+      cancelled = true;
     }
-    return false;
+    return cancelled;
   }
 
   /**
@@ -194,7 +206,18 @@ export class CommandRouter {
       return;
     }
 
-    const result = parse(input, this.registry);
+    // Parsing happens before a command context exists, so a parse failure
+    // (unknown/invalid option) cannot carry a `commandError` context — but it
+    // must still surface through the catch-all `error` event so failure
+    // monitoring is consistent across every input.
+    let result: ReturnType<typeof parse>;
+    try {
+      result = parse(input, this.registry);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      await this.emit("error", error);
+      throw err;
+    }
 
     // Empty input
     if (result.commandPath.length === 0) {
@@ -242,6 +265,9 @@ export class CommandRouter {
     }
 
     // Build context early so every failure phase can report it via commandError.
+    // The controller's signal lets actions observe cancellation; triggerCancel
+    // aborts it (see the active-entry tracking below).
+    const controller = new AbortController();
     const ctx: CommandContext = {
       args: result.args,
       options: {},
@@ -251,6 +277,7 @@ export class CommandRouter {
       stdin,
       stdout,
       stderr,
+      signal: controller.signal,
     };
 
     try {
@@ -261,7 +288,8 @@ export class CommandRouter {
           ? !Array.isArray(provided) || provided.length === 0
           : provided === undefined;
         if (argDef.required && missing) {
-          const usage = formatUsage(result.commandPath, command);
+          // Use the canonical command path so the usage matches the help output.
+          const usage = formatUsage(this.registry.getCommandPath(command), command);
           throw new MissingArgumentError(argDef.name, usage);
         }
       }
@@ -282,11 +310,12 @@ export class CommandRouter {
       await this.emit("beforeExecute", ctx);
 
       // Run the action, tracking it as active so SIGINT can cancel it.
-      this.active = { command, ctx };
+      const activeEntry = { command, ctx, controller };
+      this.active.add(activeEntry);
       try {
         await command.action(ctx);
       } finally {
-        this.active = null;
+        this.active.delete(activeEntry);
       }
       await this.emit("afterExecute", ctx);
     } catch (err) {
@@ -314,7 +343,13 @@ export class CommandRouter {
     // Wire stage[i].stdout → stage[i+1].stdin via PassThrough pipes.
     const pipes: PassThrough[] = [];
     for (let i = 0; i < segments.length - 1; i++) {
-      pipes.push(new PassThrough());
+      const pipe = new PassThrough();
+      // Swallow the pipe's own error event: a stage failure tears the chain down
+      // with `destroy(error)`, and that error is already surfaced through the
+      // stage promises. Without this listener the emitted 'error' would crash the
+      // process as an uncaught exception.
+      pipe.on("error", () => {});
+      pipes.push(pipe);
     }
 
     const runs = segments.map((segment, i) => {
@@ -328,37 +363,25 @@ export class CommandRouter {
           if (!isLast) pipes[i].end();
         })
         .catch((err) => {
-          // Tear down the rest of the chain on failure.
-          if (!isLast) pipes[i].destroy(err instanceof Error ? err : new Error(String(err)));
-          throw err;
+          // Tear down the ENTIRE chain on failure — both the downstream pipe and
+          // any upstream pipes — so a backpressured upstream stage cannot hang
+          // forever waiting on a consumer that has already failed.
+          const error = err instanceof Error ? err : new Error(String(err));
+          for (const pipe of pipes) {
+            if (!pipe.destroyed) pipe.destroy(error);
+          }
+          throw error;
         });
     });
 
-    await Promise.all(runs);
-  }
-}
-
-/**
- * Builds a human-readable usage string for a command, including its positional arguments.
- *
- * Required arguments are wrapped in angle brackets (`<name>`), optional in square brackets (`[name]`),
- * and variadic arguments are prefixed with `...`.
- *
- * @param commandPath - The full command path (e.g., `["git", "remote", "add"]`).
- * @param command - An object containing the argument definitions for the command.
- * @returns The formatted usage string.
- */
-function formatUsage(
-  commandPath: string[],
-  command: { argDefs: { name: string; required: boolean; variadic: boolean }[] },
-): string {
-  const parts = [...commandPath];
-  for (const arg of command.argDefs) {
-    if (arg.variadic) {
-      parts.push(arg.required ? `<...${arg.name}>` : `[...${arg.name}]`);
-    } else {
-      parts.push(arg.required ? `<${arg.name}>` : `[${arg.name}]`);
+    // Await every stage (allSettled, not all) so that when one stage fails and
+    // tears the chain down, the resulting rejections of the other stages are
+    // observed rather than surfacing as unhandled promise rejections. The first
+    // failure is then re-thrown to the caller.
+    const settled = await Promise.allSettled(runs);
+    const failure = settled.find((r) => r.status === "rejected");
+    if (failure) {
+      throw (failure as PromiseRejectedResult).reason;
     }
   }
-  return parts.join(" ");
 }

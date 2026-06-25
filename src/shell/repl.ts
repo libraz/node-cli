@@ -134,7 +134,16 @@ export class Shell {
       this.rl?.prompt();
 
       const line = await this.readNextLine();
-      if (line === null) break;
+      if (line === null) {
+        // EOF (Ctrl-D). Inside a mode sub-REPL, leave the mode and return to the
+        // parent prompt rather than terminating the whole shell.
+        if (this.mode) {
+          this.exitMode();
+          this.openReadline(this.history.entries());
+          continue;
+        }
+        break;
+      }
 
       const trimmed = line.trim();
 

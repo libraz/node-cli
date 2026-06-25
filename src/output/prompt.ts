@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
-import type { Readable, Writable } from "node:stream";
+import { type Readable, Writable } from "node:stream";
 import { PromptCancelError } from "../errors.js";
-import { color as c } from "./color.js";
+import { color as c, splitAnsi, stringWidth } from "./color.js";
 
 // ── Types ──
 
@@ -96,18 +96,69 @@ function normalizeChoices<T>(choices: Choice<T>[]): SelectChoice<T>[] {
 }
 
 /**
+ * Finds the index of the choice matching a default value.
+ *
+ * The default may be a raw value, the underlying choice value, or the
+ * SelectChoice object itself. Matching prefers reference/primitive equality on
+ * the value and also accepts a default that is the choice object, so object
+ * values are honored even though structural equality is not attempted.
+ *
+ * @param normalized - Normalized choices to search.
+ * @param defaultValue - The configured default, or undefined when none is set.
+ * @returns The matching index, or -1 when there is no default or no match.
+ */
+function findDefaultIndex<T>(normalized: SelectChoice<T>[], defaultValue: unknown): number {
+  if (defaultValue === undefined) return -1;
+  return normalized.findIndex(
+    (ch) => Object.is(ch.value, defaultValue) || Object.is(ch, defaultValue),
+  );
+}
+
+/**
+ * Logs a warning for any label that appears more than once. Duplicate labels
+ * are only reachable by their (unique) index, so callers are advised to use the
+ * displayed numbers to disambiguate.
+ *
+ * @param normalized - Normalized choices to inspect.
+ * @param stdout - Stream the warning is written to.
+ */
+function warnDuplicateLabels<T>(normalized: SelectChoice<T>[], stdout: Writable): void {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const ch of normalized) {
+    if (seen.has(ch.label)) duplicates.add(ch.label);
+    seen.add(ch.label);
+  }
+  for (const label of duplicates) {
+    stdout.write(`${c.yellow("!")} Duplicate label "${label}"; select it by its number\n`);
+  }
+}
+
+/**
+ * A cancelable readline session: the interface, a cancellation signal that is
+ * aborted on Ctrl+C (SIGINT), and a flag/promise tracking end-of-input (EOF,
+ * Ctrl+D) so a pending or future question can reject rather than hang.
+ */
+interface CancelableRl {
+  rl: Interface;
+  signal: AbortSignal;
+  /** Whether the input stream has ended (EOF / Ctrl+D). */
+  isClosed: () => boolean;
+  dispose: () => void;
+}
+
+/**
  * Creates a readline interface plus a cancellation signal that is aborted when
  * the user presses Ctrl+C (SIGINT). Callers pass `signal` to `rl.question` so a
- * cancellation rejects the pending question rather than hanging.
+ * cancellation rejects the pending question rather than hanging. The interface's
+ * `close` event (EOF / Ctrl+D) is tracked so questions reject instead of hanging
+ * when input ends without a submitted line.
  *
  * @param stdin - Input stream. Defaults to process.stdin.
  * @param stdout - Output stream. Defaults to process.stdout.
- * @returns The readline interface, an abort signal, and a teardown function.
+ * @returns The readline interface, an abort signal, a closed flag, and teardown.
  */
-function createCancelableRl(
-  stdin?: Readable,
-  stdout?: Writable,
-): { rl: Interface; signal: AbortSignal; dispose: () => void } {
+function createCancelableRl(stdin?: Readable, stdout?: Writable): CancelableRl {
   const rl = createInterface({
     input: stdin ?? process.stdin,
     output: stdout ?? process.stdout,
@@ -117,26 +168,58 @@ function createCancelableRl(
   const onSigint = () => controller.abort();
   rl.on("SIGINT", onSigint);
 
+  let closed = false;
+  const onClose = () => {
+    closed = true;
+  };
+  rl.on("close", onClose);
+
   const dispose = () => {
     rl.off("SIGINT", onSigint);
+    rl.off("close", onClose);
     rl.close();
   };
 
-  return { rl, signal: controller.signal, dispose };
+  return { rl, signal: controller.signal, isClosed: () => closed, dispose };
 }
 
 /**
- * Asks a single readline question, translating a Ctrl+C abort into a
- * {@link PromptCancelError}.
+ * Asks a single readline question, translating a Ctrl+C abort or an EOF
+ * (Ctrl+D, end of input) into a {@link PromptCancelError}. The question is raced
+ * against the interface's `close` event so an EOF that arrives while the
+ * question is pending settles the promise instead of hanging forever.
  */
-async function ask(rl: Interface, query: string, signal: AbortSignal): Promise<string> {
+async function ask(
+  rl: Interface,
+  query: string,
+  signal: AbortSignal,
+  isClosed: () => boolean,
+): Promise<string> {
+  if (isClosed()) {
+    throw new PromptCancelError();
+  }
+  const closeMarker = Symbol("rl-closed");
+  const onClose = (resolve: (value: typeof closeMarker) => void) => () => resolve(closeMarker);
+  let resolveClose: (() => void) | undefined;
+  const closed = new Promise<typeof closeMarker>((resolve) => {
+    const handler = onClose(resolve);
+    rl.once("close", handler);
+    resolveClose = () => rl.off("close", handler);
+  });
+
   try {
-    return await rl.question(query, { signal });
+    const result = await Promise.race([rl.question(query, { signal }), closed]);
+    if (result === closeMarker) {
+      throw new PromptCancelError();
+    }
+    return result;
   } catch (err) {
     if (signal.aborted || (err instanceof Error && err.name === "AbortError")) {
       throw new PromptCancelError();
     }
     throw err;
+  } finally {
+    resolveClose?.();
   }
 }
 
@@ -154,7 +237,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
   const { default: defaultValue, validate, required = true, prefix = "?" } = options;
   const stdout = options.stdout ?? process.stdout;
 
-  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
   const hint =
     defaultValue !== undefined
       ? c.dim(` (${defaultValue})`)
@@ -164,14 +247,22 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
 
   try {
     while (true) {
-      const answer = await ask(rl, `${c.green(prefix)} ${c.bold(message)}${hint} `, signal);
+      const answer = await ask(
+        rl,
+        `${c.green(prefix)} ${c.bold(message)}${hint} `,
+        signal,
+        isClosed,
+      );
 
       let value = answer.trim();
-      if (value === "" && defaultValue !== undefined) {
-        value = defaultValue;
+      // An explicit default (including an empty string) fills an empty
+      // submission and bypasses the required-empty check below.
+      const usedDefault = value === "" && defaultValue !== undefined;
+      if (usedDefault) {
+        value = String(defaultValue);
       }
 
-      if (required && value === "") {
+      if (!usedDefault && required && value === "") {
         stdout.write(`${c.red("✖")} Value is required\n`);
         continue;
       }
@@ -207,11 +298,11 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
   const { default: defaultValue = false, prefix = "?" } = options;
   const stdout = options.stdout ?? process.stdout;
 
-  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
   const hint = defaultValue ? c.dim(" (Y/n)") : c.dim(" (y/N)");
 
   try {
-    const answer = await ask(rl, `${c.green(prefix)} ${c.bold(message)}${hint} `, signal);
+    const answer = await ask(rl, `${c.green(prefix)} ${c.bold(message)}${hint} `, signal, isClosed);
     const trimmed = answer.trim().toLowerCase();
     if (trimmed === "") return defaultValue;
     return trimmed === "y" || trimmed === "yes";
@@ -246,10 +337,9 @@ async function select<T = string>(
   if (normalized.length === 0) {
     throw new Error("select() requires at least one choice");
   }
-  const defaultIndex =
-    defaultValue !== undefined ? normalized.findIndex((ch) => ch.value === defaultValue) : -1;
+  const defaultIndex = findDefaultIndex(normalized, defaultValue);
 
-  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
 
   try {
     stdout.write(`${c.green(prefix)} ${c.bold(message)}\n`);
@@ -260,22 +350,28 @@ async function select<T = string>(
       const marker = isDefault ? c.dim(" [default]") : "";
       stdout.write(`  ${c.cyan(`${i + 1})`)} ${ch.label}${hint}${marker}\n`);
     }
+    warnDuplicateLabels(normalized, stdout);
 
     const promptLabel =
       defaultIndex >= 0 ? `Enter number (default ${defaultIndex + 1}):` : "Enter number:";
 
     while (true) {
-      const answer = await ask(rl, `${c.dim(promptLabel)} `, signal);
+      const answer = await ask(rl, `${c.dim(promptLabel)} `, signal, isClosed);
       const trimmed = answer.trim();
 
       let chosen: SelectChoice<T> | undefined;
       if (trimmed === "" && defaultIndex >= 0) {
         chosen = normalized[defaultIndex];
       } else {
+        // Number entry is the canonical selector; a numeric input always picks
+        // by index, so numeric-looking labels remain reachable by their number.
         const num = Number.parseInt(trimmed, 10);
-        if (num >= 1 && num <= normalized.length) {
+        if (/^\d+$/.test(trimmed) && num >= 1 && num <= normalized.length) {
           chosen = normalized[num - 1];
         } else {
+          // Match the first choice whose label equals the input. Duplicate
+          // labels resolve to the first occurrence; use the number to reach a
+          // later one (a warning is shown above when duplicates exist).
           chosen = normalized.find((ch) => ch.label.toLowerCase() === trimmed.toLowerCase());
         }
       }
@@ -329,10 +425,10 @@ async function multiselect<T = string>(
     throw new Error("multiselect() requires at least one choice");
   }
   const defaultIndexes = new Set(
-    (defaults ?? []).map((d) => normalized.findIndex((ch) => ch.value === d)).filter((i) => i >= 0),
+    (defaults ?? []).map((d) => findDefaultIndex(normalized, d)).filter((i) => i >= 0),
   );
 
-  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
 
   try {
     stdout.write(`${c.green(prefix)} ${c.bold(message)} ${c.dim("(comma-separated numbers)")}\n`);
@@ -341,9 +437,10 @@ async function multiselect<T = string>(
       const marker = defaultIndexes.has(i) ? c.dim(" [default]") : "";
       stdout.write(`  ${c.cyan(`${i + 1})`)} ${ch.label}${marker}\n`);
     }
+    warnDuplicateLabels(normalized, stdout);
 
     while (true) {
-      const answer = await ask(rl, `${c.dim("Enter numbers:")} `, signal);
+      const answer = await ask(rl, `${c.dim("Enter numbers:")} `, signal, isClosed);
       const trimmed = answer.trim();
 
       // Deduplicate selected indices so min/max count distinct items.
@@ -399,35 +496,47 @@ async function multiselect<T = string>(
 
 /**
  * Masks a chunk of readline echo output: ANSI escape sequences and line breaks
- * pass through unchanged, while every other visible character (including digits,
- * `;` and `[`) is replaced with an asterisk.
+ * pass through unchanged, while every other run of visible characters is
+ * replaced with as many asterisks as its visual column width. A wide character
+ * (e.g. an emoji) is masked with two asterisks, and zero-width or combining
+ * characters add none, so the masked output keeps the same visible width as the
+ * input without leaking the original characters.
  *
  * @param chunk - The raw output chunk readline is about to echo.
  * @returns The masked chunk.
  */
 export function maskInput(chunk: string): string {
   let result = "";
-  let i = 0;
-  while (i < chunk.length) {
-    const ch = chunk[i];
-    if (ch === "\x1b") {
-      // Pass through an ANSI escape sequence (ESC [ ... final-byte).
-      let j = i + 1;
-      if (chunk[j] === "[") {
-        j++;
-        while (j < chunk.length && !/[A-Za-z]/.test(chunk[j])) j++;
-        if (j < chunk.length) j++; // include final byte
-      }
-      result += chunk.slice(i, j);
-      i = j;
-    } else if (ch === "\r" || ch === "\n") {
-      result += ch;
-      i++;
-    } else {
-      result += "*";
-      i++;
+
+  // Reuse the shared ANSI recognizer so every escape sequence — CSI cursor/erase
+  // codes as well as OSC sequences (ESC ] ... BEL) — passes through verbatim and
+  // only visible text is masked.
+  for (const segment of splitAnsi(chunk)) {
+    if (segment.ansi) {
+      result += segment.text;
+      continue;
     }
+
+    // Within a plain-text run, mask each run of visible characters with as many
+    // asterisks as its visual width, while passing line breaks through unchanged.
+    let visible = "";
+    const flushVisible = () => {
+      if (visible !== "") {
+        result += "*".repeat(stringWidth(visible));
+        visible = "";
+      }
+    };
+    for (const ch of segment.text) {
+      if (ch === "\r" || ch === "\n") {
+        flushVisible();
+        result += ch;
+      } else {
+        visible += ch;
+      }
+    }
+    flushVisible();
   }
+
   return result;
 }
 
@@ -445,36 +554,38 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
   const { validate, required = true, prefix = "?" } = options;
   const stdout = options.stdout ?? process.stdout;
 
-  const { rl, signal, dispose } = createCancelableRl(options.stdin, stdout);
-
-  const writeOriginal = (stdout as NodeJS.WriteStream).write;
+  // Masking is scoped to this prompt: readline echoes to a private wrapper
+  // stream that masks visible characters and forwards everything to the real
+  // stdout. The shared stdout's own `write` is never replaced, so concurrent
+  // spinner/logger output is untouched and re-entrant prompts cannot corrupt it.
   let masking = false;
+  const maskingOutput = new Writable({
+    write(chunk: string | Buffer, _encoding, callback) {
+      const text = typeof chunk === "string" ? chunk : chunk.toString();
+      stdout.write(masking ? maskInput(text) : text);
+      callback();
+    },
+  });
+  // Mirror TTY status/size so readline keeps terminal echo behavior.
+  const ttyStdout = stdout as Partial<NodeJS.WriteStream>;
+  (maskingOutput as unknown as Record<string, unknown>).isTTY = ttyStdout.isTTY ?? true;
+  (maskingOutput as unknown as Record<string, unknown>).columns = ttyStdout.columns ?? 80;
+  (maskingOutput as unknown as Record<string, unknown>).rows = ttyStdout.rows ?? 24;
 
-  const restoreWrite = () => {
-    (stdout as NodeJS.WriteStream).write = writeOriginal;
-  };
+  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, maskingOutput);
 
   try {
-    // Mask every echoed character while a password question is active.
-    (stdout as NodeJS.WriteStream).write = function (
-      this: NodeJS.WriteStream,
-      chunk: string | Uint8Array,
-      ...args: [BufferEncoding?, ((err?: Error | null) => void)?]
-    ): boolean {
-      if (masking && typeof chunk === "string") {
-        return writeOriginal.call(stdout, maskInput(chunk), ...args);
-      }
-      return writeOriginal.call(stdout, chunk, ...args);
-    } as typeof writeOriginal;
-
     while (true) {
-      // Write the (unmasked) prompt before enabling masking.
-      masking = false;
+      // Write the (unmasked) prompt straight to stdout before masking begins.
       stdout.write(`${c.green(prefix)} ${c.bold(message)} `);
       masking = true;
 
-      const answer = await ask(rl, "", signal);
-      masking = false;
+      let answer: string;
+      try {
+        answer = await ask(rl, "", signal, isClosed);
+      } finally {
+        masking = false;
+      }
       stdout.write("\n");
 
       const value = answer.trim();
@@ -498,7 +609,6 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
     }
   } finally {
     masking = false;
-    restoreWrite();
     dispose();
   }
 }

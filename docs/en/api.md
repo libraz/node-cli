@@ -56,12 +56,13 @@ Set the history file path.
 
 Register an event listener.
 
-| Event | Handler Signature |
-|-------|------------------|
-| `"beforeExecute"` | `(ctx: CommandContext) => void \| Promise<void>` |
-| `"afterExecute"` | `(ctx: CommandContext) => void \| Promise<void>` |
-| `"commandError"` | `(error: Error, ctx: CommandContext) => void \| Promise<void>` |
-| `"exit"` | `() => void \| Promise<void>` |
+| Event | Handler Signature | Description |
+|-------|------------------|-------------|
+| `"beforeExecute"` | `(ctx: CommandContext) => void \| Promise<void>` | Fired before a command action runs |
+| `"afterExecute"` | `(ctx: CommandContext) => void \| Promise<void>` | Fired after a command action completes successfully |
+| `"commandError"` | `(error: Error, ctx: CommandContext) => void \| Promise<void>` | Fired when a resolved command fails during validation, option resolution, or its action |
+| `"error"` | `(error: Error) => void \| Promise<void>` | Catch-all for any error while handling input, including failures before a command resolves (e.g. command-not-found). Also fires for command failures, in addition to `"commandError"` |
+| `"exit"` | `() => void \| Promise<void>` | Fired when the interactive shell exits |
 
 #### `off<K>(event: K, handler: CLIEventMap[K]): this`
 
@@ -219,6 +220,7 @@ interface CommandContext {
   stdin: Readable | null;
   stdout: Writable;
   stderr: Writable;
+  signal: AbortSignal;
 }
 ```
 
@@ -232,6 +234,7 @@ interface CommandContext {
 | `stdin` | Readable stream (available in piped commands) |
 | `stdout` | Writable stream for output |
 | `stderr` | Writable stream for errors |
+| `signal` | `AbortSignal` aborted when the command is cancelled (SIGINT); pair with abort-aware APIs or `cancel()` |
 
 ---
 
@@ -272,8 +275,17 @@ Passed to plugin functions registered via `cli.use()`.
 interface PluginContext {
   command(definition: string): CommandBuilder;
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
+  catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void;
 }
 ```
+
+| Member | Description |
+|--------|-------------|
+| `command` | Register a new command |
+| `on` | Register an event listener |
+| `off` | Remove a previously registered event listener |
+| `catch` | Register a fallback handler invoked when no command matches the input |
 
 ---
 
@@ -284,9 +296,15 @@ interface CLIEventMap {
   beforeExecute: (ctx: CommandContext) => void | Promise<void>;
   afterExecute: (ctx: CommandContext) => void | Promise<void>;
   commandError: (error: Error, ctx: CommandContext) => void | Promise<void>;
+  error: (error: Error) => void | Promise<void>;
   exit: () => void | Promise<void>;
 }
 ```
+
+The `error` event is a catch-all: it fires for any error raised while handling
+input, including failures that occur before a command is resolved (e.g.
+command-not-found). It also fires for command failures, in addition to
+`commandError`.
 
 ---
 
@@ -340,6 +358,15 @@ function stripAnsi(text: string): string
 ```
 
 Remove ANSI escape codes from a string.
+
+## splitAnsi
+
+```typescript
+function splitAnsi(text: string): AnsiSegment[]
+// interface AnsiSegment { ansi: boolean; text: string }
+```
+
+Split a string into ordered runs of ANSI escape sequences (`ansi: true`) and plain visible text (`ansi: false`), using the same recognizer as `stripAnsi`. Concatenating the segments' `text` reproduces the input.
 
 ## stringWidth
 
@@ -417,7 +444,7 @@ function progress.bar(options: BarOptions): Bar
 | `filled` | `string` | `"█"` | Fill character |
 | `empty` | `string` | `"░"` | Empty character |
 | `color` | `string` | — | Color name |
-| `stream` | `Writable` | `process.stdout` | Output stream |
+| `stream` | `Writable` | `process.stderr` | Output stream |
 | `format` | `(state: BarState) => string` | — | Custom formatter |
 
 #### Bar
@@ -456,7 +483,7 @@ function progress.spinner(options?: SpinnerOptions): Spinner
 | `frames` | `string[]` | dots pattern | Animation frames |
 | `interval` | `number` | `80` | Ms between frames |
 | `color` | `string` | — | Frame color |
-| `stream` | `Writable` | `process.stdout` | Output stream |
+| `stream` | `Writable` | `process.stderr` | Output stream |
 
 #### Spinner
 
@@ -516,9 +543,13 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 function prompt.select<T>(
   message: string,
   choices: (T | { label: string; value: T; hint?: string })[],
-  options?: PromptBaseOptions
+  options?: SelectOptions<T>
 ): Promise<T>
 ```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `default` | `T` | — | Default selected value, returned when the user presses Enter with no input |
 
 ### prompt.multiselect
 

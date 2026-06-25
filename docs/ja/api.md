@@ -56,12 +56,13 @@ cli.command("deploy <env> [region]")
 
 イベントリスナーを登録。
 
-| イベント | ハンドラシグネチャ |
-|---------|-------------------|
-| `"beforeExecute"` | `(ctx: CommandContext) => void \| Promise<void>` |
-| `"afterExecute"` | `(ctx: CommandContext) => void \| Promise<void>` |
-| `"commandError"` | `(error: Error, ctx: CommandContext) => void \| Promise<void>` |
-| `"exit"` | `() => void \| Promise<void>` |
+| イベント | ハンドラシグネチャ | 説明 |
+|---------|-------------------|------|
+| `"beforeExecute"` | `(ctx: CommandContext) => void \| Promise<void>` | コマンドアクション実行前に発火 |
+| `"afterExecute"` | `(ctx: CommandContext) => void \| Promise<void>` | コマンドアクション正常完了後に発火 |
+| `"commandError"` | `(error: Error, ctx: CommandContext) => void \| Promise<void>` | 解決済みコマンドがバリデーション・オプション解決・アクションで失敗した際に発火 |
+| `"error"` | `(error: Error) => void \| Promise<void>` | 入力処理中のあらゆるエラーを捕捉する全般ハンドラ。コマンド解決前の失敗（command-not-found など）も含む。コマンド失敗時は `"commandError"` に加えて発火 |
+| `"exit"` | `() => void \| Promise<void>` | インタラクティブシェル終了時に発火 |
 
 #### `off<K>(event: K, handler: CLIEventMap[K]): this`
 
@@ -219,6 +220,7 @@ interface CommandContext {
   stdin: Readable | null;
   stdout: Writable;
   stderr: Writable;
+  signal: AbortSignal;
 }
 ```
 
@@ -232,6 +234,7 @@ interface CommandContext {
 | `stdin` | Readable ストリーム (パイプコマンドで利用可能) |
 | `stdout` | 出力用 Writable ストリーム |
 | `stderr` | エラー用 Writable ストリーム |
+| `signal` | コマンドのキャンセル (SIGINT) で abort される `AbortSignal`。abort 対応 API や `cancel()` と併用 |
 
 ---
 
@@ -272,8 +275,17 @@ interface OptionSchema {
 interface PluginContext {
   command(definition: string): CommandBuilder;
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
+  catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void;
 }
 ```
+
+| メンバー | 説明 |
+|---------|------|
+| `command` | 新しいコマンドを登録 |
+| `on` | イベントリスナーを登録 |
+| `off` | 登録済みのイベントリスナーを削除 |
+| `catch` | どのコマンドにもマッチしない入力時に呼ばれるフォールバックハンドラを登録 |
 
 ---
 
@@ -284,9 +296,14 @@ interface CLIEventMap {
   beforeExecute: (ctx: CommandContext) => void | Promise<void>;
   afterExecute: (ctx: CommandContext) => void | Promise<void>;
   commandError: (error: Error, ctx: CommandContext) => void | Promise<void>;
+  error: (error: Error) => void | Promise<void>;
   exit: () => void | Promise<void>;
 }
 ```
+
+`error` イベントは全般的な捕捉ハンドラです。コマンド解決前の失敗（command-not-found
+など）を含む、入力処理中のあらゆるエラーで発火します。コマンド失敗時は
+`commandError` に加えて発火します。
 
 ---
 
@@ -340,6 +357,15 @@ function stripAnsi(text: string): string
 ```
 
 文字列から ANSI エスケープコードを除去。
+
+## splitAnsi
+
+```typescript
+function splitAnsi(text: string): AnsiSegment[]
+// interface AnsiSegment { ansi: boolean; text: string }
+```
+
+文字列を ANSI エスケープシーケンス (`ansi: true`) と可視テキスト (`ansi: false`) の区間へ順番に分割。`stripAnsi` と同じ認識器を使用し、各区間の `text` を連結すると元の文字列に戻る。
 
 ## stringWidth
 
@@ -417,7 +443,7 @@ function progress.bar(options: BarOptions): Bar
 | `filled` | `string` | `"█"` | 塗りつぶし文字 |
 | `empty` | `string` | `"░"` | 空文字 |
 | `color` | `string` | — | カラー名 |
-| `stream` | `Writable` | `process.stdout` | 出力ストリーム |
+| `stream` | `Writable` | `process.stderr` | 出力ストリーム |
 | `format` | `(state: BarState) => string` | — | カスタムフォーマッター |
 
 #### Bar
@@ -456,7 +482,7 @@ function progress.spinner(options?: SpinnerOptions): Spinner
 | `frames` | `string[]` | dots パターン | アニメーションフレーム |
 | `interval` | `number` | `80` | フレーム間のミリ秒 |
 | `color` | `string` | — | フレームカラー |
-| `stream` | `Writable` | `process.stdout` | 出力ストリーム |
+| `stream` | `Writable` | `process.stderr` | 出力ストリーム |
 
 #### Spinner
 
@@ -516,9 +542,13 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 function prompt.select<T>(
   message: string,
   choices: (T | { label: string; value: T; hint?: string })[],
-  options?: PromptBaseOptions
+  options?: SelectOptions<T>
 ): Promise<T>
 ```
+
+| オプション | 型 | デフォルト | 説明 |
+|-----------|------|---------|------|
+| `default` | `T` | — | デフォルトの選択値。ユーザーが何も入力せず Enter を押した際に返される |
 
 ### prompt.multiselect
 

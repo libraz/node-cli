@@ -102,7 +102,14 @@ export class CommandRegistry {
    * @param parentPath - The parent path context.
    * @returns The canonical command name, or the token itself if no alias matches.
    */
-  private resolveAlias(token: string, parentPath: string[]): string {
+  private resolveAlias(
+    token: string,
+    parentPath: string[],
+    siblings: Map<string, CommandDefinition>,
+  ): string {
+    // A real command at this level always wins over an alias of the same name,
+    // regardless of registration order, so an alias can never shadow a command.
+    if (siblings.has(token)) return token;
     const prefix = parentPath.join("/");
     return this.aliasMap.get(`${prefix}:${token}`) ?? token;
   }
@@ -117,13 +124,13 @@ export class CommandRegistry {
   resolve(commandPath: string[]): CommandDefinition | undefined {
     if (commandPath.length === 0) return undefined;
 
-    const resolvedFirst = this.resolveAlias(commandPath[0], []);
+    const resolvedFirst = this.resolveAlias(commandPath[0], [], this.root);
     let current: CommandDefinition | undefined = this.root.get(resolvedFirst);
     if (!current) return undefined;
 
     const parentNames = [current.name];
     for (let i = 1; i < commandPath.length; i++) {
-      const resolvedName = this.resolveAlias(commandPath[i], parentNames);
+      const resolvedName = this.resolveAlias(commandPath[i], parentNames, current.subcommands);
       const next: CommandDefinition | undefined = current.subcommands.get(resolvedName);
       if (!next) return undefined;
       parentNames.push(next.name);
@@ -143,7 +150,7 @@ export class CommandRegistry {
   matchCommandPath(tokens: string[]): { command: CommandDefinition; consumed: number } | undefined {
     if (tokens.length === 0) return undefined;
 
-    const resolvedFirst = this.resolveAlias(tokens[0], []);
+    const resolvedFirst = this.resolveAlias(tokens[0], [], this.root);
     let current: CommandDefinition | undefined = this.root.get(resolvedFirst);
     if (!current) return undefined;
 
@@ -151,7 +158,12 @@ export class CommandRegistry {
     const parentNames = [current.name];
 
     for (let i = 1; i < tokens.length; i++) {
-      const resolvedName = this.resolveAlias(tokens[i], parentNames);
+      // Stop descending once we reach a runnable command that takes positional
+      // arguments: further tokens are its arguments, not subcommand names. This
+      // prevents an argument value that happens to match a subcommand name (e.g.
+      // `task run list` where `list` is the task name) from being mis-dispatched.
+      if (current.action && current.argDefs.length > 0) break;
+      const resolvedName = this.resolveAlias(tokens[i], parentNames, current.subcommands);
       const next: CommandDefinition | undefined = current.subcommands.get(resolvedName);
       if (!next) break;
       parentNames.push(next.name);

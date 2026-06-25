@@ -134,9 +134,18 @@ export function parseDefinitionString(definition: string): {
  */
 function parseArgToken(token: string): ArgDef {
   const required = token.startsWith("<");
+  const closer = required ? ">" : "]";
+  if (!token.endsWith(closer)) {
+    throw new Error(
+      `Invalid command definition: argument token "${token}" is missing its closing "${closer}"`,
+    );
+  }
   const inner = token.slice(1, -1); // remove < > or [ ]
   const variadic = inner.startsWith("...");
   const name = variadic ? inner.slice(3) : inner;
+  if (name.length === 0) {
+    throw new Error(`Invalid command definition: empty argument name in "${token}"`);
+  }
 
   return { name, required, variadic };
 }
@@ -332,6 +341,13 @@ function extractOptionsAndArgs(
         const name = aliasMap.get(chars) ?? chars;
         const def = optionDefs.get(name);
         if (!def) {
+          // Mirror the long `--help` fallback so `-h` works on every command
+          // unless the user has explicitly bound `-h` to another option.
+          if (chars === "h") {
+            options.help = true;
+            i++;
+            continue;
+          }
           throw new UnknownOptionError(`-${chars}`);
         }
         const isBool = def.schema.type === "boolean";
@@ -460,4 +476,47 @@ function mapPositionalArgs(
 export function splitPipes(input: string): string[] {
   // Preserve quotes/escapes so each segment can be tokenized again downstream.
   return splitRespectingQuotes(input, (ch) => ch === "|", true);
+}
+
+/**
+ * Returns the active pipeline segment of an input line: the substring after the
+ * last top-level (unquoted) `|`, with leading whitespace removed but trailing
+ * whitespace preserved. Used by tab-completion so it operates on the command the
+ * cursor is in rather than the whole pipeline (mirroring {@link splitPipes} for
+ * execution). Unlike {@link splitPipes}, a trailing empty segment is preserved
+ * (e.g. `"a | "` yields `""`) so completion can offer commands after a pipe.
+ *
+ * @param input - The raw input line.
+ * @returns The trailing pipeline segment.
+ */
+export function activePipeSegment(input: string): string {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let lastPipeEnd = 0;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (ch === "|" && !inSingle && !inDouble) {
+      lastPipeEnd = i + 1;
+    }
+  }
+
+  return input.slice(lastPipeEnd).replace(/^\s+/, "");
 }

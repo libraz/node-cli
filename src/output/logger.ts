@@ -99,15 +99,13 @@ function formatTimestamp(): string {
  * @param options - Logger configuration options.
  * @returns A Logger instance.
  */
-/** Internal mutable holder for the active log level, shared with child loggers. */
-interface LevelRef {
-  value: LogLevel;
-}
-
-export function logger(options: LoggerOptions & { levelRef?: LevelRef } = {}): Logger {
-  // Shared mutable level holder so child loggers stay in sync with setLevel().
-  const levelRef: LevelRef = options.levelRef ?? { value: options.level ?? "info" };
-  if (options.levelRef && options.level !== undefined) levelRef.value = options.level;
+export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel): Logger {
+  // A logger uses its own level when one is set, otherwise it inherits its
+  // parent's current level dynamically. This means `parent.setLevel(...)`
+  // propagates to children that have no explicit level of their own, while
+  // `child.setLevel(...)` only overrides that child (never the parent).
+  // `inheritLevel` is an internal hook wired up by `child()`.
+  let ownLevel: LogLevel | undefined = options.level;
 
   const prefix = options.prefix;
   const timestamp = options.timestamp ?? false;
@@ -115,8 +113,12 @@ export function logger(options: LoggerOptions & { levelRef?: LevelRef } = {}): L
   const col = createColorizer(stream);
   const colorOn = () => isColorEnabled(stream);
 
+  function effectiveLevel(): LogLevel {
+    return ownLevel ?? inheritLevel?.() ?? "info";
+  }
+
   function shouldLog(level: LogLevel): boolean {
-    return levelOrder[level] >= levelOrder[levelRef.value];
+    return levelOrder[level] >= levelOrder[effectiveLevel()];
   }
 
   function writeLog(level: string, message: string, args: unknown[]): void {
@@ -173,16 +175,13 @@ export function logger(options: LoggerOptions & { levelRef?: LevelRef } = {}): L
       writeLog("error", message, args);
     },
     setLevel(level) {
-      levelRef.value = level;
+      ownLevel = level;
     },
     child(childPrefix: string) {
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
-      return logger({
-        levelRef,
-        prefix: fullPrefix,
-        timestamp,
-        stream,
-      });
+      // No explicit level → the child inherits this logger's effective level
+      // dynamically (so later parent.setLevel calls still reach it).
+      return logger({ prefix: fullPrefix, timestamp, stream }, effectiveLevel);
     },
   };
 

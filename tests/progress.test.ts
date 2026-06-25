@@ -179,6 +179,78 @@ describe("progress.spinner", () => {
     spinner.succeed();
     expect(stream.getOutput()).toContain("Processing");
   });
+
+  it("hides the cursor on start and shows it again on stop", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ label: "Loading...", stream });
+    spinner.start();
+    expect(stream.getOutput()).toContain("\x1b[?25l");
+    spinner.stop();
+    expect(stream.getOutput()).toContain("\x1b[?25h");
+  });
+
+  it("does not output anything on a non-TTY stream", () => {
+    const stream = createMockStdout();
+    const spinner = progress.spinner({ label: "Loading...", stream });
+    spinner.start();
+    spinner.succeed("Done");
+    expect(stream.getOutput()).toBe("");
+  });
+});
+
+describe("progress.spinner SIGINT cleanup", () => {
+  let baseline: number;
+
+  beforeEach(() => {
+    setColorEnabled(true);
+    baseline = process.listenerCount("SIGINT");
+  });
+
+  afterEach(() => {
+    resetColorEnabled();
+  });
+
+  it("registers a SIGINT handler while running and removes it on stop", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ stream });
+    spinner.start();
+    expect(process.listenerCount("SIGINT")).toBe(baseline + 1);
+    spinner.stop();
+    expect(process.listenerCount("SIGINT")).toBe(baseline);
+  });
+
+  it("removes the SIGINT handler on succeed", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ stream });
+    spinner.start();
+    spinner.succeed("Done");
+    expect(process.listenerCount("SIGINT")).toBe(baseline);
+  });
+
+  it("removes the SIGINT handler on fail", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ stream });
+    spinner.start();
+    spinner.fail("Error");
+    expect(process.listenerCount("SIGINT")).toBe(baseline);
+  });
+
+  it("removes the SIGINT handler on warn", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ stream });
+    spinner.start();
+    spinner.warn("Caution");
+    expect(process.listenerCount("SIGINT")).toBe(baseline);
+  });
+
+  it("cleanup is idempotent across stop then succeed", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ stream });
+    spinner.start();
+    spinner.stop();
+    expect(() => spinner.succeed("Done")).not.toThrow();
+    expect(process.listenerCount("SIGINT")).toBe(baseline);
+  });
 });
 
 describe("progress.multi", () => {
@@ -249,5 +321,37 @@ describe("progress.multi", () => {
     bar.update(5);
     expect(stream.getOutput()).toBe("");
     multi.finish();
+  });
+
+  it("moves the cursor up by physical rows for wrapped lines", () => {
+    const stream = createMockTTY();
+    (stream as unknown as { columns: number }).columns = 10;
+    const multi = progress.multi();
+    // A label long enough to wrap several times at 10 columns, plus the bar.
+    const bar = multi.add({ total: 10, label: "A".repeat(40), width: 30, stream });
+
+    bar.update(1);
+    // Reset the captured output buffer is not possible, so capture the second
+    // render's cursor-up directly from the full output.
+    const before = stream.getOutput().length;
+    bar.update(2);
+    const second = stream.getOutput().slice(before);
+
+    const match = second.match(new RegExp(`${String.fromCharCode(27)}\\[(\\d+)A`));
+    expect(match).not.toBeNull();
+    const rows = Number((match as RegExpMatchArray)[1]);
+    expect(rows).toBeGreaterThan(1);
+    multi.stop();
+  });
+
+  it("captures the stream from a later add when the first omits it", () => {
+    const ttyStream = createMockTTY();
+    const multi = progress.multi();
+    const bar1 = multi.add({ total: 10 });
+    const bar2 = multi.add({ total: 10, stream: ttyStream });
+
+    bar1.update(5);
+    bar2.update(5);
+    expect(ttyStream.getOutput()).not.toBe("");
   });
 });

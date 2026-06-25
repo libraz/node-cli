@@ -2,7 +2,8 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
-.yarn/
+.yarn/*
+!.yarn/releases
 
 # Claude
 .claude/

@@ -1,6 +1,6 @@
-import { parse, tokenize } from "../command/parser.js";
+import { activePipeSegment, parse, tokenize } from "../command/parser.js";
 import type { CommandRegistry } from "../command/registry.js";
-import type { OptionDef } from "../types.js";
+import type { CommandDefinition, OptionDef } from "../types.js";
 
 /**
  * Finds an option definition by one of its short/long aliases.
@@ -53,8 +53,12 @@ export class ShellCompleter {
       this.lastLine = line;
     }
 
-    const tokens = tokenize(line);
-    const endsWithSpace = line.endsWith(" ");
+    // Complete within the active pipeline segment (the command the cursor is in),
+    // mirroring how execution splits pipes — so `ls | gr<TAB>` completes `grep`,
+    // not a candidate derived from the first stage.
+    const segment = activePipeSegment(line);
+    const tokens = tokenize(segment);
+    const endsWithSpace = segment.endsWith(" ");
 
     // Empty or just starting — show top-level commands (including aliases)
     if (tokens.length === 0 || (tokens.length === 1 && !endsWithSpace)) {
@@ -81,9 +85,10 @@ export class ShellCompleter {
     // user is clearly typing an option flag, which should list options instead).
     if (command.subcommands.size > 0 && !typingOption) {
       if (remaining.length === 0 && endsWithSpace) {
-        // Show subcommands (deduplicated; aliases resolve via the registry).
-        const candidates = [...new Set(command.subcommands.values())].map((s) => s.name);
-        return [candidates, ""];
+        // Show subcommands plus the command's own option flags, so a group that
+        // also declares options offers both at the boundary.
+        const subs = [...new Set(command.subcommands.values())].map((s) => s.name);
+        return [[...subs, ...this.optionFlags(command, "")], ""];
       }
 
       if (remaining.length === 1 && !endsWithSpace) {
@@ -96,11 +101,13 @@ export class ShellCompleter {
       }
     }
 
-    // Complete an inline option value: --opt=partial
+    // Complete an inline option value: --opt=partial or -o=partial. Strip the
+    // leading dashes generically so both long and short forms work (the previous
+    // hard-coded slice(2) broke single-dash short options).
     if (typingOption) {
       const eq = lastToken.indexOf("=");
       if (eq !== -1) {
-        const optName = lastToken.slice(2, eq).replace(/^-+/, "");
+        const optName = lastToken.slice(0, eq).replace(/^-+/, "");
         const optDef = command.options.get(optName) ?? findOptionByAlias(optName, command.options);
         if (optDef?.takesValue) {
           const valuePrefix = lastToken.slice(eq + 1);
@@ -109,36 +116,12 @@ export class ShellCompleter {
       }
     }
 
-    // Complete options
     const current = endsWithSpace ? "" : (remaining[remaining.length - 1] ?? "");
     const isTypingOption = current.startsWith("-");
 
-    if (
-      isTypingOption ||
-      (endsWithSpace && remaining.length === 0 && command.subcommands.size === 0)
-    ) {
-      // Show option flags
-      const candidates: string[] = [];
-      for (const [, opt] of command.options) {
-        if (opt.schema.hidden) continue;
-        const flag = `--${opt.long}`;
-        if (flag.startsWith(current)) {
-          candidates.push(flag);
-        }
-        for (const alias of opt.aliases) {
-          const shortFlag = `-${alias}`;
-          if (shortFlag.startsWith(current)) {
-            candidates.push(shortFlag);
-          }
-        }
-      }
-      if (candidates.length > 0) {
-        return [candidates, current];
-      }
-    }
-
-    // Check if previous token is an option that accepts a value — complete its value
-    if (remaining.length > 0) {
+    // When the previous token is a value-taking option, complete its value (checked
+    // before listing flags so `--region <TAB>` offers values, not more flags).
+    if (!isTypingOption && remaining.length > 0) {
       const optDef = this.findPrecedingOption(remaining, endsWithSpace, command.options);
       if (optDef) {
         const valueCurrent = endsWithSpace ? "" : current;
@@ -146,9 +129,20 @@ export class ShellCompleter {
       }
     }
 
+    // Show option flags when the user is typing one, or at a fresh token position
+    // on a leaf command — including after positional arguments have been entered.
+    if (isTypingOption || (endsWithSpace && command.subcommands.size === 0)) {
+      const candidates = this.optionFlags(command, current);
+      if (candidates.length > 0) {
+        return [candidates, current];
+      }
+    }
+
     // Custom command completer
     if (command.completer) {
-      const commandPath = tokens.slice(0, consumed);
+      // Use the canonical command path (aliases resolved to real names) so the
+      // completer always sees the same path regardless of which alias was typed.
+      const commandPath = this.registry.getCommandPath(command);
       // Best-effort parse of what has been typed so far, so the completer can
       // make context-aware suggestions. Parsing never throws here.
       let parsedArgs: Record<string, unknown> = {};
@@ -202,6 +196,24 @@ export class ShellCompleter {
       }
     }
     return names;
+  }
+
+  /**
+   * Returns a command's visible option flags (long form and short aliases) that
+   * start with the given prefix.
+   */
+  private optionFlags(command: CommandDefinition, prefix: string): string[] {
+    const candidates: string[] = [];
+    for (const [, opt] of command.options) {
+      if (opt.schema.hidden) continue;
+      const flag = `--${opt.long}`;
+      if (flag.startsWith(prefix)) candidates.push(flag);
+      for (const alias of opt.aliases) {
+        const shortFlag = `-${alias}`;
+        if (shortFlag.startsWith(prefix)) candidates.push(shortFlag);
+      }
+    }
+    return candidates;
   }
 
   /**

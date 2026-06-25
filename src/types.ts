@@ -29,7 +29,11 @@ export interface OptionSchema {
   alias?: string | string[];
   /** Whether the option must be provided. */
   required?: boolean;
-  /** Default value used when the option is not specified. */
+  /**
+   * Default value used when the option is not specified. It is used as-is and is
+   * not run through type coercion or a custom `parse`, so provide it already in
+   * the option's final value type (e.g. a `number` for `type: "number"`).
+   */
   default?: unknown;
   /** Restricts the option value to one of the given choices. */
   choices?: unknown[];
@@ -147,6 +151,14 @@ export interface CommandContext {
   commandPath: string[];
   /** The interactive shell instance, or null if running non-interactively. */
   shell: Shell | null;
+  /**
+   * Signal that is aborted when the command is cancelled (e.g. SIGINT in the
+   * interactive shell or direct mode). Async actions can pass it to
+   * abort-aware APIs (`fetch`, timers, streams) or listen for `"abort"` to stop
+   * cooperatively. It is the signal-based counterpart to `cli.command().cancel()`:
+   * both fire on the same cancellation, so a command may use either or both.
+   */
+  signal: AbortSignal;
   /** Readable stream for standard input (available in piped commands). */
   stdin: Readable | null;
   /** Writable stream for standard output. */

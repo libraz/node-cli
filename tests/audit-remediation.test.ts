@@ -42,6 +42,7 @@ function ctxStub(): CommandContext {
     stdin: null,
     stdout: out,
     stderr: out,
+    signal: new AbortController().signal,
   };
 }
 

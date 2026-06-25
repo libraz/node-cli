@@ -420,6 +420,18 @@ cli.command("longrun")
   });
 ```
 
+Every action also receives `ctx.signal`, an `AbortSignal` that is aborted on the
+same cancellation. Use it with abort-aware APIs or listen for `"abort"` — the two
+mechanisms fire together, so a command may use either or both:
+
+```typescript
+cli.command("fetch <url>")
+  .action(async (ctx) => {
+    const res = await fetch(ctx.args.url as string, { signal: ctx.signal });
+    ctx.stdout.write(await res.text());
+  });
+```
+
 ## Error Classes
 
 | Error | Code | When |

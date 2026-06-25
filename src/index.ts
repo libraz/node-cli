@@ -12,6 +12,7 @@ export {
   UnknownOptionError,
   ValidationError,
 } from "./errors.js";
+export type { AnsiSegment } from "./output/color.js";
 export {
   c,
   color,
@@ -19,6 +20,7 @@ export {
   isColorEnabled,
   resetColorEnabled,
   setColorEnabled,
+  splitAnsi,
   stringWidth,
   stripAnsi,
 } from "./output/color.js";

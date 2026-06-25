@@ -358,13 +358,16 @@ function calculateWidths(
     }
   }
 
-  // Apply maxWidth (by column key)
+  // Apply maxWidth (by column key). A non-positive maxWidth is treated as "no
+  // limit" rather than clamping to 0, which would collapse the column and cause
+  // truncation/overflow against the truncation-character width.
   const maxWidth = options.maxWidth;
   if (maxWidth && keys.length > 0) {
     for (let i = 0; i < keys.length; i++) {
       const col = keys[i];
-      if (maxWidth[col] !== undefined) {
-        widths[i] = Math.min(widths[i], maxWidth[col]);
+      const limit = maxWidth[col];
+      if (limit !== undefined && limit > 0) {
+        widths[i] = Math.min(widths[i], limit);
       }
     }
   }
@@ -432,16 +435,24 @@ function applyHeaderStyle(text: string, style: string): string {
 
 /**
  * Applies a dot-chained color/style string to text (e.g. "red", "cyan.bold", "dim").
+ *
+ * Accessing an unknown style on the color proxy throws; any such failure is
+ * caught and the original (uncolored) text is returned so an unrecognized style
+ * name in user options degrades gracefully instead of crashing the render.
  */
 function applyColorChain(text: string, chain: string): string {
-  const parts = chain.split(".");
-  let result: unknown = c;
-  for (const part of parts) {
-    result = (result as Record<string, unknown>)[part];
-    if (typeof result !== "function" && typeof result !== "object") return text;
+  try {
+    const parts = chain.split(".");
+    let result: unknown = c;
+    for (const part of parts) {
+      result = (result as Record<string, unknown>)[part];
+      if (typeof result !== "function" && typeof result !== "object") return text;
+    }
+    if (typeof result === "function") return (result as (s: string) => string)(text);
+    return text;
+  } catch {
+    return text;
   }
-  if (typeof result === "function") return (result as (s: string) => string)(text);
-  return text;
 }
 
 /**

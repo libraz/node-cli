@@ -85,8 +85,8 @@ cli
           latency: "p95",
         },
         colWidths: [12, 12, 28, 10],
-        maxWidth: { Description: 28 },
-        align: { p95: "right" },
+        maxWidth: { description: 28 },
+        align: { latency: "right" },
         truncate: "..",
         style: {
           head: "cyan.bold",

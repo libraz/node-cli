@@ -75,7 +75,8 @@ export class History {
       await mkdir(dirname(this.filePath), { recursive: true });
       await writeFile(this.filePath, `${this.lines.join("\n")}\n`, "utf-8");
     } catch (err) {
-      process.stderr.write(`Warning: Could not save history to ${this.filePath}: ${err}\n`);
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Warning: Could not save history to ${this.filePath}: ${message}\n`);
     }
   }
 

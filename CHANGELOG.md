@@ -5,6 +5,77 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-26
+
+A follow-up correctness release that adds signal-based command cancellation,
+hardens pipeline and plugin failure handling, and sharpens completion, help, and
+option coercion. All changes are additive or fix incorrect behavior; see
+"Notable behavior changes" for the few observable differences.
+
+### Added
+
+- **`CommandContext.signal`**: every action receives an `AbortSignal` that is
+  aborted on the same cancellation as `.cancel()` (SIGINT in the interactive
+  shell and in direct mode), so async actions can pass it to abort-aware APIs
+  (`fetch`, timers, streams) or listen for `"abort"`.
+- **`-h`** now works as a help shorthand on every command unless explicitly
+  bound to another option.
+- **Direct CLI mode** routes SIGINT to the running command's cancel handler, so
+  Ctrl+C cleanup behaves the same as in the REPL.
+- Running with no arguments when stdin is not a TTY (piped/redirected) now prints
+  the help index instead of hanging on an interactive prompt.
+- New exports: `splitAnsi` and the `AnsiSegment` type (split a string into ANSI
+  escape and plain-text runs), and `activePipeSegment` (the trailing pipeline
+  segment, used by completion).
+
+### Fixed
+
+- **Pipes**: concurrent pipeline stages are each tracked for cancellation; a
+  stage failure tears down the entire chain (upstream and downstream) so a
+  back-pressured stage cannot hang, and stage rejections are awaited rather than
+  surfacing as unhandled rejections or uncaught pipe `error` events.
+- **Errors**: parse failures (unknown/invalid option) now emit the catch-all
+  `error` event so failure monitoring is consistent across every input.
+- **Aliases**: a real command always wins over an alias of the same name
+  regardless of registration order, so an alias can never shadow a command.
+- **Dispatch**: descent stops at a runnable command that takes positional
+  arguments, so an argument value matching a subcommand name (e.g.
+  `task run list`) is no longer mis-dispatched as a subcommand.
+- **Options**: boolean coercion recognizes `1/0`, `yes/no`, `on/off` (so
+  `--cache=0` is `false`) and rejects unrecognized values; `choices` are
+  validated per element for array-typed options; a boolean flag's "takes value"
+  is derived from its resolved type; a required boolean no longer receives a
+  `false` default that would make its required check unsatisfiable.
+- **Completion**: completes within the active pipeline segment; offers option
+  flags after positionals and on actionless groups alongside subcommands;
+  completes inline values for short options (`-o=`); and passes the canonical
+  command path to custom completers.
+- **Help/usage**: a single shared `formatUsage` drives both help and router
+  usage strings; arguments are listed in declaration order to match the usage
+  line; missing-argument usage uses the canonical command path.
+- **Plugins**: pending plugin rejections are drained with `allSettled` and can
+  no longer surface as unhandled rejections; the first failure is still re-thrown
+  on drain.
+- **Parser**: an argument token missing its closing bracket or with an empty name
+  now throws a clear definition-time error.
+
+### Changed
+
+- Toolchain/dependencies: TypeScript 6, Vitest 4, Biome 2.5, `@types/node` 26;
+  development/CI Node pinned to 24.18.0 (supported range remains `>=20`);
+  Yarn 4.17.0. CI/publish actions bumped (`checkout`/`setup-node`/`cache` v5,
+  `codecov-action` v6, `action-gh-release` v3).
+
+### Notable behavior changes
+
+These correct previously buggy behavior and may be observable:
+
+- A boolean option given `0`/`off`/`no` now coerces to `false` (previously any
+  non-empty string was `true`), and an unrecognized boolean value (e.g.
+  `--verbose=hello`) now throws instead of being treated as `true`.
+- A command that takes positional arguments stops subcommand resolution: a
+  positional value matching a subcommand name is treated as the argument.
+
 ## [1.2.0] - 2026-06-09
 
 A correctness-focused release that wires up previously documented-but-dead
@@ -92,5 +163,6 @@ These correct previously buggy behavior and may be observable:
 Initial public feature set: interactive shell, subcommands, tab completion,
 color, tables, progress, prompts, logger, events, plugins, and pipes.
 
+[1.3.0]: https://github.com/libraz/node-cli/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/libraz/node-cli/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/libraz/node-cli/releases/tag/v1.1.0

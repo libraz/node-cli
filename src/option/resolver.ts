@@ -71,16 +71,20 @@ export function resolveOptions(
     }
 
     // Choices check (compare leniently so declared string choices match
-    // coerced numeric values and vice versa).
+    // coerced numeric values and vice versa). For array-typed options each
+    // element is validated individually rather than the joined array.
     if (value !== undefined && schema.choices) {
       const allowed = schema.choices;
-      const matches =
-        allowed.includes(value) || allowed.map(String).includes(String(value as unknown));
-      if (!matches) {
-        throw new InvalidOptionError(
-          `Invalid value "${value}" for --${long}. Allowed: ${allowed.join(", ")}`,
-          { optionName: long, value },
-        );
+      const allowedStrings = allowed.map(String);
+      const isAllowed = (v: unknown) => allowed.includes(v) || allowedStrings.includes(String(v));
+      const candidates = Array.isArray(value) ? value : [value];
+      for (const candidate of candidates) {
+        if (!isAllowed(candidate)) {
+          throw new InvalidOptionError(
+            `Invalid value "${candidate}" for --${long}. Allowed: ${allowed.join(", ")}`,
+            { optionName: long, value: candidate },
+          );
+        }
       }
     }
 
@@ -138,9 +142,16 @@ function coerce(value: unknown, type: string | undefined, name: string): unknown
 
   if (type === "boolean") {
     if (typeof value === "boolean") return value;
-    if (value === "true") return true;
-    if (value === "false") return false;
-    return Boolean(value);
+    // Coerce common truthy/falsey spellings explicitly so `--cache=0` means false
+    // (JavaScript's `Boolean("0")` is `true`) and an unrecognized value such as
+    // `--verbose=hello` is rejected rather than silently treated as `true`.
+    const normalized = String(value).trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off", ""].includes(normalized)) return false;
+    throw new InvalidOptionError(`Option --${name} expects a boolean, got "${value}"`, {
+      optionName: name,
+      value,
+    });
   }
 
   if (type === "number") {

@@ -27,6 +27,24 @@ console.log(c`{bold.red ERROR}: ${message}`);
 console.log(c`{dim [${timestamp}]} {cyan ${url}}`);
 ```
 
+### Stream-Aware Coloring
+
+The global `color` and `c` decide whether to emit ANSI codes based on
+`process.stdout` and always write their result for that target. Inside a command
+action that writes to a different stream — for example a pipe stage where output
+goes to `ctx.stdout` — use `createColorizer(ctx.stdout)` to get a colorizer that
+honors that specific stream's color support, so coloring stays correct and a
+non-TTY pipe target is not corrupted with stray escape codes.
+
+```typescript
+import { createColorizer } from "@libraz/node-cli";
+
+cli.command("emit").action((ctx) => {
+  const col = createColorizer(ctx.stdout);
+  ctx.stdout.write(col.green("OK\n"));
+});
+```
+
 ### Available Styles
 
 | Category | Styles |
@@ -38,7 +56,7 @@ console.log(c`{dim [${timestamp}]} {cyan ${url}}`);
 ### Color Control
 
 ```typescript
-import { setColorEnabled, stripAnsi, stringWidth } from "@libraz/node-cli";
+import { setColorEnabled, splitAnsi, stripAnsi, stringWidth } from "@libraz/node-cli";
 
 // Disable color globally (also respects NO_COLOR env var)
 setColorEnabled(false);
@@ -49,6 +67,10 @@ stripAnsi("\x1b[31mred\x1b[0m"); // "red"
 // Calculate visual display width (East Asian width-aware)
 stringWidth("Hello");     // 5
 stringWidth("こんにちは"); // 10
+
+// Split into escape-sequence vs. visible-text runs (same recognizer as stripAnsi)
+splitAnsi("\x1b[31mred\x1b[0m");
+// [{ ansi: true, text: "\x1b[31m" }, { ansi: false, text: "red" }, { ansi: true, text: "\x1b[0m" }]
 ```
 
 ## Table
@@ -255,7 +277,7 @@ interface BarOptions {
   filled?: string;                         // Fill character (default: "█")
   empty?: string;                          // Empty character (default: "░")
   color?: string;                          // Color name
-  stream?: Writable;                       // Output stream
+  stream?: Writable;                       // Output stream (default: process.stderr)
   format?: (state: BarState) => string;    // Custom formatter
 }
 ```
@@ -307,7 +329,7 @@ interface SpinnerOptions {
   frames?: string[];       // Custom animation frames
   interval?: number;       // Ms between frames (default: 80)
   color?: string;          // Frame color
-  stream?: Writable;       // Output stream
+  stream?: Writable;       // Output stream (default: process.stderr)
 }
 ```
 
@@ -455,8 +477,8 @@ const log = logger({ prefix: "app" });
 const dbLog = log.child("db");
 const httpLog = log.child("http");
 
-dbLog.info("Connected");     // [app:db] ℹ Connected
-httpLog.info("GET /api");    // [app:http] ℹ GET /api
+dbLog.info("Connected");     // ℹ [app:db] Connected
+httpLog.info("GET /api");    // ℹ [app:http] GET /api
 ```
 
 ### Runtime Level Change

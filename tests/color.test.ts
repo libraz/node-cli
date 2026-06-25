@@ -80,6 +80,16 @@ describe("c (template tag)", () => {
     const result = c`{red hello}`;
     expect(result).toBe("hello");
   });
+
+  it("does not support nested style blocks (documented limitation)", () => {
+    // The inner "{bold inner}" is consumed by the non-greedy text match, so the
+    // outer style only wraps up to the first closing brace and the trailing
+    // " outer}" remains as plain text.
+    const result = c`{yellow a {bold inner} b}`;
+    const plain = stripAnsi(result);
+    expect(plain).toBe("a {bold inner b}");
+    expect(result).toContain("\x1b[33m");
+  });
 });
 
 describe("stripAnsi", () => {
@@ -113,5 +123,32 @@ describe("stringWidth", () => {
 
   it("handles empty string", () => {
     expect(stringWidth("")).toBe(0);
+  });
+
+  it("treats control characters as zero width", () => {
+    // BEL (0x07) should contribute 0, leaving just "ab" = 2 columns.
+    expect(stringWidth("a\x07b")).toBe(2);
+  });
+
+  it("counts a ZWJ emoji sequence as a single wide grapheme", () => {
+    // Family emoji "👨‍👩‍👧" is one displayed grapheme, width 2.
+    expect(stringWidth("👨‍👩‍👧")).toBe(2);
+  });
+});
+
+describe("color detection precedence", () => {
+  const original = { ...process.env };
+
+  afterEach(() => {
+    resetColorEnabled();
+    process.env = { ...original };
+  });
+
+  it("honors FORCE_COLOR over TERM=dumb", async () => {
+    resetColorEnabled();
+    process.env.FORCE_COLOR = "1";
+    process.env.TERM = "dumb";
+    const { isColorEnabled } = await import("../src/output/color.js");
+    expect(isColorEnabled()).toBe(true);
   });
 });

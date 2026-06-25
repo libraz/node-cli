@@ -96,4 +96,35 @@ describe("logger", () => {
     log.info("hello %s, count: %d", "world", 42);
     expect(stream.getOutput()).toContain("hello world, count: 42");
   });
+
+  it("renders icon, then prefix, then message in that order", () => {
+    const stream = createMockStdout();
+    const log = logger({ stream, prefix: "app" });
+    log.info("hi");
+    expect(stream.getOutput()).toBe("[INFO] [app] hi\n");
+  });
+
+  it("child setLevel does not affect the parent", () => {
+    const stream = createMockStdout();
+    const parent = logger({ stream, level: "info" });
+    const child = parent.child("db");
+    child.setLevel("debug");
+
+    parent.debug("parent-debug");
+    expect(stream.getOutput()).toBe("");
+
+    child.debug("child-debug");
+    expect(stream.getOutput()).toContain("child-debug");
+  });
+
+  it("child inherits the parent's level at creation time", () => {
+    const stream = createMockStdout();
+    const parent = logger({ stream, level: "warn" });
+    const child = parent.child("db");
+    child.info("hidden");
+    expect(stream.getOutput()).toBe("");
+
+    child.warn("shown");
+    expect(stream.getOutput()).toContain("shown");
+  });
 });

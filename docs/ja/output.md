@@ -27,6 +27,24 @@ console.log(c`{bold.red ERROR}: ${message}`);
 console.log(c`{dim [${timestamp}]} {cyan ${url}}`);
 ```
 
+### ストリーム対応のカラーリング
+
+グローバルの `color` と `c` は ANSI コードを出力するかどうかを `process.stdout`
+を基準に判定し、常にその対象へ結果を書き込みます。コマンドアクション内で別の
+ストリーム — 例えば出力が `ctx.stdout` に向かうパイプ段 — に書き込む場合は、
+`createColorizer(ctx.stdout)` を使ってそのストリーム固有のカラー対応を尊重する
+カラライザを取得してください。こうすることでカラーリングが正しく保たれ、非 TTY
+のパイプ先がエスケープコードで汚染されることを防げます。
+
+```typescript
+import { createColorizer } from "@libraz/node-cli";
+
+cli.command("emit").action((ctx) => {
+  const col = createColorizer(ctx.stdout);
+  ctx.stdout.write(col.green("OK\n"));
+});
+```
+
 ### 利用可能なスタイル
 
 | カテゴリ | スタイル |
@@ -38,7 +56,7 @@ console.log(c`{dim [${timestamp}]} {cyan ${url}}`);
 ### カラー制御
 
 ```typescript
-import { setColorEnabled, stripAnsi, stringWidth } from "@libraz/node-cli";
+import { setColorEnabled, splitAnsi, stripAnsi, stringWidth } from "@libraz/node-cli";
 
 // グローバルにカラーを無効化 (NO_COLOR 環境変数にも対応)
 setColorEnabled(false);
@@ -49,6 +67,10 @@ stripAnsi("\x1b[31mred\x1b[0m"); // "red"
 // 表示幅を計算 (東アジア文字幅対応)
 stringWidth("Hello");     // 5
 stringWidth("こんにちは"); // 10
+
+// エスケープシーケンスと可視テキストの区間に分割 (stripAnsi と同じ認識器)
+splitAnsi("\x1b[31mred\x1b[0m");
+// [{ ansi: true, text: "\x1b[31m" }, { ansi: false, text: "red" }, { ansi: true, text: "\x1b[0m" }]
 ```
 
 ## テーブル
@@ -255,7 +277,7 @@ interface BarOptions {
   filled?: string;                         // 塗りつぶし文字 (デフォルト: "█")
   empty?: string;                          // 空文字 (デフォルト: "░")
   color?: string;                          // カラー名
-  stream?: Writable;                       // 出力ストリーム
+  stream?: Writable;                       // 出力ストリーム (デフォルト: process.stderr)
   format?: (state: BarState) => string;    // カスタムフォーマッター
 }
 ```
@@ -307,7 +329,7 @@ interface SpinnerOptions {
   frames?: string[];       // カスタムアニメーションフレーム
   interval?: number;       // フレーム間のミリ秒 (デフォルト: 80)
   color?: string;          // フレームのカラー
-  stream?: Writable;       // 出力ストリーム
+  stream?: Writable;       // 出力ストリーム (デフォルト: process.stderr)
 }
 ```
 
@@ -455,8 +477,8 @@ const log = logger({ prefix: "app" });
 const dbLog = log.child("db");
 const httpLog = log.child("http");
 
-dbLog.info("接続完了");       // [app:db] ℹ 接続完了
-httpLog.info("GET /api");    // [app:http] ℹ GET /api
+dbLog.info("接続完了");       // ℹ [app:db] 接続完了
+httpLog.info("GET /api");    // ℹ [app:http] GET /api
 ```
 
 ### ランタイムレベル変更
