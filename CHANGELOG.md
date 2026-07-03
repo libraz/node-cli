@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-07-04
+
+A correctness release hardening the parser, registry, router, and output
+layers against edge cases; no new features or breaking API changes.
+
+### Fixed
+
+- **Parser**: reject unclosed quotes and invalid/trailing empty pipe segments;
+  an option long name falls back to its first alias when none is given.
+- **Registry**: `register()` returns the registered/merged definition, detects
+  name/alias collisions, and no longer deletes live subcommand/root entries
+  when removing aliases.
+- **Router**: SIGINT-to-cancel wiring is shared between the CLI and shell via
+  `runWithSigintCancel()`; `catch` handler errors propagate through the
+  `error` event; upstream pipe stages are destroyed once a downstream stage
+  finishes so producers observe teardown.
+- **Errors**: `formatErrorMessage()` renders `PromptCancelError` as
+  "Cancelled" consistently across the CLI and shell.
+- **Option resolver**: thrown `parse` errors are wrapped in `ValidationError`;
+  non-finite numbers (e.g. `Infinity`) are rejected, not just `NaN`.
+- **Color**: the `c` tagged-template formatter supports nested style tags and
+  rejects malformed ones instead of relying on a flat regex; string width
+  accounts for variation selectors between a base scalar and a ZWJ joiner.
+- **Progress**: the cursor is hidden while a bar/spinner is active and
+  restored on completion and on SIGINT before re-raising; multi-row custom
+  formatted output repositions correctly.
+- **Prompts**: multiselect number parsing rejects non-numeric tokens; password
+  input is masked without revealing character display width; the prompt
+  query script stays un-masked while echoing typed input.
+- **Table**: the simple renderer respects custom border characters;
+  multi-byte/ANSI-styled cells truncate by grapheme instead of raw character.
+- **Shell completion**: subcommand names (including aliases) complete when a
+  parent path has already been typed; option flags are no longer offered
+  after a literal `--`; `--help`/`-h` are always offered.
+- **Help generator**: no duplicate `-h, --help` entry when a command declares
+  its own `help` option; `[options]` is always shown in usage since
+  `-h/--help` is implicit.
+
 ## [1.3.0] - 2026-06-26
 
 A follow-up correctness release that adds signal-based command cancellation,
@@ -163,6 +201,7 @@ These correct previously buggy behavior and may be observable:
 Initial public feature set: interactive shell, subcommands, tab completion,
 color, tables, progress, prompts, logger, events, plugins, and pipes.
 
+[1.3.1]: https://github.com/libraz/node-cli/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/libraz/node-cli/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/libraz/node-cli/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/libraz/node-cli/releases/tag/v1.1.0
