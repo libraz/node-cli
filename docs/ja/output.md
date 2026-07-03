@@ -457,12 +457,14 @@ log.error("エラーが発生");      // ✖ エラーが発生
 const log = logger({
   level: "debug",         // "debug" | "info" | "warn" | "error" | "silent"
   prefix: "server",       // [server] プレフィックス
-  timestamp: true,        // [HH:MM:SS] プレフィックス
+  timestamp: true,        // HH:MM:SS プレフィックス
   stream: process.stderr, // 出力ストリーム (デフォルト: stderr)
 });
 ```
 
 ### printf スタイルのフォーマット
+
+子 logger は、その子に対して `child.setLevel(...)` が呼ばれるまで、親 logger の現在のログレベルを動的に継承します。
 
 ```typescript
 log.info("ポート: %d", 3000);

@@ -152,6 +152,21 @@ export class CommandRouter {
   }
 
   /**
+   * Runs an async operation while routing SIGINT to active command cancellation.
+   */
+  async runWithSigintCancel(action: () => Promise<void>): Promise<void> {
+    const onSigint = () => {
+      this.triggerCancel();
+    };
+    process.once("SIGINT", onSigint);
+    try {
+      await action();
+    } finally {
+      process.removeListener("SIGINT", onSigint);
+    }
+  }
+
+  /**
    * Parses the given input and executes the matched command.
    *
    * If the input is empty or unrecognized, a {@link CommandNotFoundError} is thrown.
@@ -224,27 +239,23 @@ export class CommandRouter {
       const rawInput = Array.isArray(input) ? input.join(" ") : input;
       if (rawInput.trim().length > 0) {
         if (this.catchHandler) {
-          await this.catchHandler(rawInput, { stdout, stderr });
+          try {
+            await this.catchHandler(rawInput, { stdout, stderr });
+          } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+            await this.emit("error", error);
+            throw err;
+          }
           return;
         }
-        const err = new CommandNotFoundError(rawInput.trim().split(/\s+/)[0]);
+        const err = new CommandNotFoundError(tokens[0] ?? rawInput.trim().split(/\s+/)[0]);
         await this.emit("error", err);
         throw err;
       }
       return;
     }
 
-    const command = result.command;
-    if (!command) {
-      if (this.catchHandler) {
-        const rawInput = Array.isArray(input) ? input.join(" ") : input;
-        await this.catchHandler(rawInput, { stdout, stderr });
-        return;
-      }
-      const err = new CommandNotFoundError(result.commandPath.join(" "));
-      await this.emit("error", err);
-      throw err;
-    }
+    const command = result.command as CommandDefinition;
 
     // Check --help flag
     if (result.options.help === true) {
@@ -290,7 +301,8 @@ export class CommandRouter {
         if (argDef.required && missing) {
           // Use the canonical command path so the usage matches the help output.
           const usage = formatUsage(this.registry.getCommandPath(command), command);
-          throw new MissingArgumentError(argDef.name, usage);
+          const displayName = argDef.variadic ? `...${argDef.name}` : argDef.name;
+          throw new MissingArgumentError(displayName, usage);
         }
       }
 
@@ -352,6 +364,14 @@ export class CommandRouter {
       pipes.push(pipe);
     }
 
+    const destroyPipe = (pipe: PassThrough, error?: Error) => {
+      if (!pipe.destroyed) {
+        pipe.destroy(error);
+      }
+      pipe.emit("drain");
+      queueMicrotask(() => pipe.emit("drain"));
+    };
+
     const runs = segments.map((segment, i) => {
       const isLast = i === segments.length - 1;
       const stdin: Readable | null = i === 0 ? null : pipes[i - 1];
@@ -359,6 +379,12 @@ export class CommandRouter {
 
       return this.execute(segment, { shell, stdin, stdout, stderr })
         .then(() => {
+          // Once this stage has completed successfully, close its upstream input
+          // as well. This lets producers observe teardown when a downstream
+          // stage intentionally stops early after consuming enough data.
+          if (i > 0 && !pipes[i - 1].destroyed) {
+            destroyPipe(pipes[i - 1]);
+          }
           // Signal end-of-input to the downstream stage.
           if (!isLast) pipes[i].end();
         })
@@ -368,7 +394,7 @@ export class CommandRouter {
           // forever waiting on a consumer that has already failed.
           const error = err instanceof Error ? err : new Error(String(err));
           for (const pipe of pipes) {
-            if (!pipe.destroyed) pipe.destroy(error);
+            destroyPipe(pipe, error);
           }
           throw error;
         });

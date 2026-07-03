@@ -19,16 +19,18 @@ export class CommandRegistry {
    * @param def - The command definition to register.
    * @param parentPath - Ancestor command names leading to the parent (empty for top-level).
    */
-  register(def: CommandDefinition, parentPath: string[] = []): void {
+  register(def: CommandDefinition, parentPath: string[] = []): CommandDefinition {
     if (parentPath.length === 0) {
+      this.assertNoAliasCollision(def.name, parentPath);
       const existing = this.root.get(def.name);
       if (existing) {
         // Merge into existing (add subcommands, update action/description)
         mergeDefinition(existing, def);
+        return existing;
       } else {
         this.root.set(def.name, def);
+        return def;
       }
-      return;
     }
 
     // Walk to parent, auto-creating group commands as needed
@@ -51,9 +53,20 @@ export class CommandRegistry {
     const existing = current.subcommands.get(def.name);
     if (existing) {
       mergeDefinition(existing, def);
+      return existing;
     } else {
+      this.assertNoAliasCollision(def.name, parentPath);
       def.parent = current;
       current.subcommands.set(def.name, def);
+      return def;
+    }
+  }
+
+  private assertNoAliasCollision(name: string, parentPath: string[]): void {
+    const prefix = parentPath.join("/");
+    const aliasTarget = this.aliasMap.get(`${prefix}:${name}`);
+    if (aliasTarget !== undefined && aliasTarget !== name) {
+      throw new Error(`Command "${name}" conflicts with alias for command "${aliasTarget}"`);
     }
   }
 
@@ -191,7 +204,6 @@ export class CommandRegistry {
       // Remove aliases from root map
       if (def.aliases) {
         for (const alias of def.aliases) {
-          this.root.delete(alias);
           this.aliasMap.delete(`:${alias}`);
         }
       }
@@ -212,7 +224,6 @@ export class CommandRegistry {
     if (def.aliases) {
       const aliasPrefix = parentPath.join("/");
       for (const alias of def.aliases) {
-        parent.subcommands.delete(alias);
         this.aliasMap.delete(`${aliasPrefix}:${alias}`);
       }
     }

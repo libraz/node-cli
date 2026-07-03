@@ -193,8 +193,6 @@ export function createColorizer(stream: Writable): Record<string, ColorFn> {
 
 // ── Template tag ──
 
-const stylePattern = /\{([a-zA-Z.]+)\s([^}]+)\}/g;
-
 /**
  * Tagged template literal for inline color formatting.
  * Use `{styleName text}` syntax inside the template to apply styles.
@@ -211,23 +209,54 @@ const stylePattern = /\{([a-zA-Z.]+)\s([^}]+)\}/g;
  * @returns The formatted string with ANSI escape codes applied.
  */
 export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
-  let raw = strings.reduce(
+  const raw = strings.reduce(
     (acc, str, i) => acc + str + (i < values.length ? String(values[i]) : ""),
     "",
   );
 
   const enabled = isColorEnabled();
-  raw = raw.replace(stylePattern, (_match, styleChain: string, text: string) => {
-    const names = styleChain.split(".");
-    const codes: [number, number][] = [];
-    for (const name of names) {
-      if (!Object.hasOwn(styles, name)) throw new Error(`Unknown style: ${name}`);
-      codes.push(styles[name]);
-    }
-    return applyStyle(text, codes, enabled);
-  });
+  const formatInline = (text: string): string => {
+    let result = "";
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] !== "{") {
+        result += text[i];
+        continue;
+      }
 
-  return raw;
+      const styleEnd = text.indexOf(" ", i + 1);
+      if (styleEnd === -1) {
+        result += text[i];
+        continue;
+      }
+
+      const styleChain = text.slice(i + 1, styleEnd);
+      const names = styleChain.split(".");
+      if (names.length === 0 || names.some((name) => !Object.hasOwn(styles, name))) {
+        result += text[i];
+        continue;
+      }
+
+      let depth = 1;
+      let end = styleEnd + 1;
+      for (; end < text.length; end++) {
+        if (text[end] === "{") depth++;
+        if (text[end] === "}") depth--;
+        if (depth === 0) break;
+      }
+      if (depth !== 0) {
+        result += text[i];
+        continue;
+      }
+
+      const codes = names.map((name) => styles[name]);
+      const inner = formatInline(text.slice(styleEnd + 1, end));
+      result += applyStyle(inner, codes, enabled);
+      i = end;
+    }
+    return result;
+  };
+
+  return formatInline(raw);
 }
 
 // ── Strip ANSI ──
@@ -302,12 +331,33 @@ export function stringWidth(text: string): number {
   let width = 0;
   for (let i = 0; i < chars.length; i++) {
     const code = chars[i].codePointAt(0) as number;
-    // Collapse a ZWJ sequence (scalar, ZWJ, scalar, ...) into one wide grapheme.
-    if (i + 1 < chars.length && chars[i + 1].codePointAt(0) === 0x200d) {
+    // Collapse a ZWJ sequence into one wide grapheme. Variation selectors and
+    // other zero-width marks may appear between a base scalar and the joiner.
+    let joinerIndex = i + 1;
+    while (
+      joinerIndex < chars.length &&
+      isZeroWidth(chars[joinerIndex].codePointAt(0) as number) &&
+      chars[joinerIndex].codePointAt(0) !== 0x200d
+    ) {
+      joinerIndex++;
+    }
+    if (joinerIndex < chars.length && chars[joinerIndex].codePointAt(0) === 0x200d) {
       width += 2;
       // Skip the remaining joined scalars and their joiners.
-      while (i + 1 < chars.length && chars[i + 1].codePointAt(0) === 0x200d) {
-        i += 2;
+      i = joinerIndex + 1;
+      while (i < chars.length) {
+        let nextJoiner = i + 1;
+        while (
+          nextJoiner < chars.length &&
+          isZeroWidth(chars[nextJoiner].codePointAt(0) as number) &&
+          chars[nextJoiner].codePointAt(0) !== 0x200d
+        ) {
+          nextJoiner++;
+        }
+        if (nextJoiner >= chars.length || chars[nextJoiner].codePointAt(0) !== 0x200d) {
+          break;
+        }
+        i = nextJoiner + 1;
       }
       continue;
     }

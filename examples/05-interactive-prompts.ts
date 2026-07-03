@@ -59,15 +59,15 @@ cli
 
       // Summary
       ctx.stdout.write(c`\n{bold.green Project Configuration}\n`);
-      ctx.stdout.write(c`  Name:        {cyan ${name}}\n`);
+      ctx.stdout.write(`  Name:        ${color.cyan(name)}\n`);
       ctx.stdout.write(c`  Description: ${description || color.dim("(none)")}\n`);
-      ctx.stdout.write(c`  Template:    {yellow ${template}}\n`);
+      ctx.stdout.write(`  Template:    ${color.yellow(template)}\n`);
       ctx.stdout.write(c`  Features:    ${(features as string[]).join(", ") || color.dim("(none)")}\n`);
-      ctx.stdout.write(c`  Git:         ${git ? "{green Yes}" : "{red No}"}\n`);
+      ctx.stdout.write(`  Git:         ${git ? color.green("Yes") : color.red("No")}\n`);
 
       const proceed = await prompt.confirm("\nProceed with setup?");
       if (proceed) {
-        ctx.stdout.write(c`\n{green.bold Done!} Project "${name}" created successfully.\n`);
+        ctx.stdout.write(`\n${color.green.bold("Done!")} Project "${name}" created successfully.\n`);
       } else {
         ctx.stdout.write(c`\n{yellow Cancelled.}\n`);
       }

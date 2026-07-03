@@ -192,7 +192,8 @@ function executeQuery(sql: string, stdout: NodeJS.WritableStream) {
       stdout.write(c`{red Error}: Table "${tableName}" does not exist\n`);
     }
   } else {
-    stdout.write(c`{yellow Simulated}: ${sql}\n{dim (Only "SELECT * FROM <table>" is supported in this demo)}\n`);
+    stdout.write(`${color.yellow("Simulated")}: ${sql}\n`);
+    stdout.write(c`{dim (Only "SELECT * FROM <table>" is supported in this demo)}\n`);
   }
 }
 

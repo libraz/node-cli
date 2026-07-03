@@ -87,6 +87,15 @@ describe("progress.bar", () => {
     bar.stop();
     expect(stream.getOutput()).toContain("\n");
   });
+
+  it("hides and restores the cursor on TTY", () => {
+    const stream = createMockTTY();
+    const bar = progress.bar({ total: 100, stream });
+    bar.update(50);
+    expect(stream.getOutput()).toContain("\x1b[?25l");
+    bar.finish();
+    expect(stream.getOutput()).toContain("\x1b[?25h");
+  });
 });
 
 describe("progress.spinner", () => {
@@ -189,12 +198,12 @@ describe("progress.spinner", () => {
     expect(stream.getOutput()).toContain("\x1b[?25h");
   });
 
-  it("does not output anything on a non-TTY stream", () => {
+  it("writes final messages on a non-TTY stream", () => {
     const stream = createMockStdout();
     const spinner = progress.spinner({ label: "Loading...", stream });
     spinner.start();
     spinner.succeed("Done");
-    expect(stream.getOutput()).toBe("");
+    expect(stripAnsi(stream.getOutput())).toContain("✔ Done");
   });
 });
 
@@ -269,6 +278,16 @@ describe("progress.multi", () => {
     expect(output).toContain("File 1");
     expect(output).toContain("File 2");
     multi.finish();
+  });
+
+  it("hides and restores the cursor on TTY", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    const bar = multi.add({ total: 10, stream });
+    bar.update(1);
+    expect(stream.getOutput()).toContain("\x1b[?25l");
+    multi.finish();
+    expect(stream.getOutput()).toContain("\x1b[?25h");
   });
 
   it("ticks bars in multi", () => {

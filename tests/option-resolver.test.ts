@@ -32,6 +32,11 @@ describe("resolveOptions", () => {
     expect(() => resolveOptions({ port: "abc" }, defs, dummyCtx)).toThrow(InvalidOptionError);
   });
 
+  it("throws on non-finite numbers", () => {
+    const defs = new Map([["port", makeDef("port", { type: "number" })]]);
+    expect(() => resolveOptions({ port: "Infinity" }, defs, dummyCtx)).toThrow(InvalidOptionError);
+  });
+
   it("coerces to boolean", () => {
     const defs = new Map([["force", makeDef("force", { type: "boolean" })]]);
     expect(resolveOptions({ force: true }, defs, dummyCtx).force).toBe(true);
@@ -104,6 +109,21 @@ describe("resolveOptions", () => {
     ]);
     const result = resolveOptions({ port: "100" }, defs, dummyCtx);
     expect(result.port).toBe(200);
+  });
+
+  it("wraps non-Error custom parse failures in ValidationError", () => {
+    const defs = new Map([
+      [
+        "token",
+        makeDef("token", {
+          type: "string",
+          parse() {
+            throw "bad token";
+          },
+        }),
+      ],
+    ]);
+    expect(() => resolveOptions({ token: "x" }, defs, dummyCtx)).toThrow(ValidationError);
   });
 
   it("resolves aliases", () => {

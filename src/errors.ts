@@ -182,3 +182,13 @@ export class PromptCancelError extends CLIError {
     this.name = "PromptCancelError";
   }
 }
+
+/**
+ * Formats an unknown error value for user-facing CLI output.
+ */
+export function formatErrorMessage(err: unknown): string {
+  if (err instanceof PromptCancelError) {
+    return "Cancelled";
+  }
+  return err instanceof Error ? err.message : String(err);
+}

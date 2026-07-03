@@ -1,9 +1,10 @@
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { activePipeSegment, parse, parseDefinitionString } from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
-import { InvalidOptionError, MissingOptionError } from "../src/errors.js";
+import { InvalidOptionError, MissingOptionError, PromptCancelError } from "../src/errors.js";
 import { HelpGenerator } from "../src/help/generator.js";
 import { createCLI } from "../src/index.js";
 import { ShellCompleter } from "../src/shell/completion.js";
@@ -43,6 +44,20 @@ describe("parse-phase errors emit the error event", () => {
   });
 });
 
+describe("fallback catch handler errors", () => {
+  it("emits error when the catch handler throws", async () => {
+    const { router } = setup();
+    const onError = vi.fn();
+    router.on("error", onError);
+    router.setCatchHandler(() => {
+      throw new Error("catch failed");
+    });
+
+    await expect(router.execute("unknown")).rejects.toThrow("catch failed");
+    expect(onError).toHaveBeenCalledOnce();
+  });
+});
+
 describe("required boolean option", () => {
   it("throws MissingOptionError when a required boolean flag is omitted", async () => {
     const { registry, router } = setup();
@@ -62,6 +77,57 @@ describe("required boolean option", () => {
 
     await router.execute("confirm --accept");
     expect(action.mock.calls[0][0].options.accept).toBe(true);
+  });
+});
+
+describe("missing variadic arguments", () => {
+  it("formats the missing argument name the same way as usage", async () => {
+    const { registry, router } = setup();
+    new CommandBuilder(registry, "deploy <...envs>").action(() => {});
+
+    await expect(router.execute("deploy")).rejects.toThrow("Missing required argument: <...envs>");
+  });
+});
+
+describe("direct mode prompt cancellation display", () => {
+  it("prints Cancelled instead of a raw PromptCancelError message", async () => {
+    const cli = createCLI();
+    cli.command("ask").action(() => {
+      throw new PromptCancelError();
+    });
+    const stderr = createMockStdout();
+    const originalWrite = process.stderr.write;
+    process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
+
+    try {
+      await cli.start(["ask"]);
+    } finally {
+      process.stderr.write = originalWrite;
+      process.exitCode = 0;
+    }
+
+    expect(stderr.getOutput()).toBe("Error: Cancelled\n");
+  });
+});
+
+describe("direct mode stdin", () => {
+  it("passes process.stdin to command context", async () => {
+    const originalStdin = process.stdin;
+    const stdin = new PassThrough();
+    const cli = createCLI();
+    const action = vi.fn((ctx) => {
+      expect(ctx.stdin).toBe(stdin);
+    });
+    cli.command("read").action(action);
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
+
+    try {
+      await cli.start(["read"]);
+    } finally {
+      Object.defineProperty(process, "stdin", { configurable: true, value: originalStdin });
+    }
+
+    expect(action).toHaveBeenCalledOnce();
   });
 });
 
@@ -247,16 +313,12 @@ describe("positional value matching a subcommand name", () => {
 });
 
 describe("alias never shadows a real command", () => {
-  it("dispatches to the real command even when an alias was registered first", async () => {
-    const { registry, router } = setup();
+  it("rejects a real command that would shadow an existing alias", () => {
+    const { registry } = setup();
     const startAction = vi.fn();
-    const stopAction = vi.fn();
     new CommandBuilder(registry, "start").alias("stop").action(startAction);
-    new CommandBuilder(registry, "stop").action(stopAction);
 
-    await router.execute("stop");
-    expect(stopAction).toHaveBeenCalledOnce();
-    expect(startAction).not.toHaveBeenCalled();
+    expect(() => new CommandBuilder(registry, "stop")).toThrow(/conflicts with alias/);
   });
 });
 

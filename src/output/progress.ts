@@ -124,6 +124,14 @@ function isTTY(stream: Writable): boolean {
   return "isTTY" in stream && (stream as NodeJS.WriteStream).isTTY === true;
 }
 
+function hideCursor(stream: Writable): void {
+  if (isTTY(stream)) stream.write("\x1b[?25l");
+}
+
+function showCursor(stream: Writable): void {
+  if (isTTY(stream)) stream.write("\x1b[?25h");
+}
+
 // ── Bar Implementation ──
 
 /**
@@ -143,6 +151,9 @@ function createBar(options: BarOptions): Bar {
 
   let current = 0;
   let finished = false;
+  let started = false;
+  let renderedRows = 0;
+  let sigintHandler: (() => void) | null = null;
   const startTime = Date.now();
   const tty = isTTY(stream);
   const col = createColorizer(stream);
@@ -157,12 +168,26 @@ function createBar(options: BarOptions): Bar {
 
   function render(): void {
     if (!tty) return;
+    if (!started) {
+      started = true;
+      hideCursor(stream);
+      sigintHandler = () => {
+        cleanup();
+        process.kill(process.pid, "SIGINT");
+      };
+      process.once("SIGINT", sigintHandler);
+    }
 
     const state = getState();
 
     if (customFormat) {
       const line = customFormat(state);
+      if (renderedRows > 0) stream.write(`\x1b[${renderedRows}A`);
       stream.write(`\r\x1b[K${line}`);
+      renderedRows = Math.max(
+        1,
+        Math.ceil(stringWidth(line) / ((stream as NodeJS.WriteStream).columns || 80)),
+      );
       return;
     }
 
@@ -184,7 +209,21 @@ function createBar(options: BarOptions): Bar {
     parts.push(`${state.percent}%`);
     parts.push(`${state.current}/${state.total}`);
 
-    stream.write(`\r\x1b[K${parts.join("  ")}`);
+    const line = parts.join("  ");
+    if (renderedRows > 0) stream.write(`\x1b[${renderedRows}A`);
+    stream.write(`\r\x1b[K${line}`);
+    renderedRows = Math.max(
+      1,
+      Math.ceil(stringWidth(line) / ((stream as NodeJS.WriteStream).columns || 80)),
+    );
+  }
+
+  function cleanup(): void {
+    if (sigintHandler) {
+      process.removeListener("SIGINT", sigintHandler);
+      sigintHandler = null;
+    }
+    showCursor(stream);
   }
 
   return {
@@ -201,11 +240,13 @@ function createBar(options: BarOptions): Bar {
       finished = true;
       current = total;
       render();
+      cleanup();
       if (tty) stream.write("\n");
     },
     stop() {
       if (finished) return;
       finished = true;
+      cleanup();
       if (tty) stream.write("\n");
     },
   };
@@ -251,10 +292,6 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     if (tty) stream.write("\r\x1b[K");
   }
 
-  function showCursor(): void {
-    if (tty) stream.write("\x1b[?25h");
-  }
-
   function cleanup(): void {
     if (timer) {
       clearInterval(timer);
@@ -274,11 +311,11 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       sigintHandler = () => {
         cleanup();
         clearLine();
-        showCursor();
+        showCursor(stream);
         process.kill(process.pid, "SIGINT");
       };
       process.once("SIGINT", sigintHandler);
-      if (tty) stream.write("\x1b[?25l");
+      hideCursor(stream);
       render();
       // Keep the interval from holding the event loop open on its own.
       timer = setInterval(render, interval);
@@ -294,8 +331,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      showCursor();
-      if (!tty) return;
+      showCursor(stream);
       const msg = message ?? label;
       stream.write(`${col.green("✔")} ${msg}\n`);
     },
@@ -305,8 +341,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      showCursor();
-      if (!tty) return;
+      showCursor(stream);
       const msg = message ?? label;
       stream.write(`${col.red("✖")} ${msg}\n`);
     },
@@ -316,8 +351,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      showCursor();
-      if (!tty) return;
+      showCursor(stream);
       const msg = message ?? label;
       stream.write(`${col.yellow("⚠")} ${msg}\n`);
     },
@@ -327,7 +361,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      showCursor();
+      showCursor(stream);
     },
   };
 }
@@ -347,9 +381,36 @@ function createMultiBar(): MultiBar {
   // cursor up. Wrapped lines occupy multiple rows, so this is not bars.length.
   let renderedRows = 0;
   let closed = false;
+  let cursorHidden = false;
+  let sigintHandler: (() => void) | null = null;
+
+  function startTerminalSession(): void {
+    if (cursorHidden || !isTTY(stream)) return;
+    cursorHidden = true;
+    hideCursor(stream);
+    sigintHandler = () => {
+      cleanup();
+      process.kill(process.pid, "SIGINT");
+    };
+    process.once("SIGINT", sigintHandler);
+  }
+
+  function cleanup(): void {
+    if (sigintHandler) {
+      process.removeListener("SIGINT", sigintHandler);
+      sigintHandler = null;
+    }
+    if (cursorHidden) {
+      showCursor(stream);
+      cursorHidden = false;
+    }
+  }
 
   return {
     add(options: BarOptions): Bar {
+      if (closed) {
+        throw new Error("Cannot add a bar after multi progress has been closed");
+      }
       if (!streamSet && options.stream) {
         stream = options.stream;
         streamSet = true;
@@ -361,19 +422,24 @@ function createMultiBar(): MultiBar {
 
       const wrapper: Bar = {
         update(value: number) {
+          if (closed) return;
           entry.current = Math.max(0, Math.min(value, total));
           if (isTTY(stream)) renderAll();
         },
         tick(delta = 1) {
+          if (closed) return;
           entry.current = Math.max(0, Math.min(entry.current + delta, total));
           if (isTTY(stream)) renderAll();
         },
         finish() {
+          if (closed) return;
           entry.current = total;
           if (isTTY(stream)) renderAll();
         },
         stop() {
-          // no-op for individual bars in multi
+          if (closed) return;
+          entry.current = total;
+          if (isTTY(stream)) renderAll();
         },
       };
 
@@ -385,6 +451,7 @@ function createMultiBar(): MultiBar {
       closed = true;
       if (isTTY(stream)) {
         renderAll();
+        cleanup();
         stream.write("\n");
       }
     },
@@ -392,11 +459,13 @@ function createMultiBar(): MultiBar {
     stop() {
       if (closed) return;
       closed = true;
+      cleanup();
       if (isTTY(stream)) stream.write("\n");
     },
   };
 
   function renderAll(): void {
+    startTerminalSession();
     const col = createColorizer(stream);
     // Terminal width used to estimate how many physical rows each logical line
     // occupies once it wraps.

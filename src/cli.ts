@@ -4,7 +4,7 @@ import type { Writable } from "node:stream";
 import { CommandBuilder } from "./command/builder.js";
 import { CommandRegistry } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
-import { CLIError, CommandNotFoundError } from "./errors.js";
+import { CLIError, CommandNotFoundError, formatErrorMessage } from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
 import { Shell } from "./shell/repl.js";
 import type { CatchContext, CLIEventMap, CLIOptions } from "./types.js";
@@ -234,21 +234,18 @@ export class CLI {
     if (args.length > 0) {
       // Direct CLI mode. Route SIGINT to the running command's cancel handler so
       // Ctrl-C cleanup (e.g. removing a lock file) works the same as in the REPL.
-      const onSigint = () => {
-        this.router.triggerCancel();
-      };
-      process.once("SIGINT", onSigint);
       try {
-        await this.router.execute(args, {
-          stdout: process.stdout,
-          stderr: process.stderr,
+        await this.router.runWithSigintCancel(async () => {
+          await this.router.execute(args, {
+            stdin: process.stdin,
+            stdout: process.stdout,
+            stderr: process.stderr,
+          });
         });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err);
         process.stderr.write(`Error: ${message}\n`);
         process.exitCode = err instanceof CLIError ? err.exitCode : 1;
-      } finally {
-        process.removeListener("SIGINT", onSigint);
       }
     } else if (process.stdin.isTTY) {
       // Interactive shell mode

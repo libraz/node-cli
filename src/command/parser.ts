@@ -41,6 +41,19 @@ function splitRespectingQuotes(
     }
 
     if (ch === "\\") {
+      if (inSingle && !preserveSyntax) {
+        current += ch;
+        continue;
+      }
+      if (inDouble && !preserveSyntax) {
+        const next = input[i + 1];
+        if (next !== undefined && ['"', "\\", "$", "`", "\n"].includes(next)) {
+          escaped = true;
+        } else {
+          current += ch;
+        }
+        continue;
+      }
       if (preserveSyntax) current += ch;
       escaped = true;
       continue;
@@ -64,6 +77,13 @@ function splitRespectingQuotes(
     }
 
     current += ch;
+  }
+
+  if (escaped && !preserveSyntax) {
+    current += "\\";
+  }
+  if (inSingle || inDouble) {
+    throw new Error(`Unclosed ${inSingle ? "single" : "double"} quote in input`);
   }
 
   flush();
@@ -181,6 +201,10 @@ export function parseOptionFlags(flags: string): {
     } else if (part.startsWith("-")) {
       aliases.push(part.slice(1));
     }
+  }
+
+  if (!long && aliases.length > 0) {
+    long = aliases[0];
   }
 
   return { long, aliases, takesValue };
@@ -474,6 +498,40 @@ function mapPositionalArgs(
  * @returns An array of trimmed command strings.
  */
 export function splitPipes(input: string): string[] {
+  let previousPipe = true;
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (const ch of input) {
+    if (escaped) {
+      escaped = false;
+      previousPipe = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      previousPipe = false;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      previousPipe = false;
+      continue;
+    }
+    if (ch === "|" && !inSingle && !inDouble) {
+      if (previousPipe) throw new Error("Invalid empty pipe segment");
+      previousPipe = true;
+      continue;
+    }
+    if (!/\s/.test(ch)) previousPipe = false;
+  }
+  if (previousPipe && input.trim() !== "") {
+    throw new Error("Invalid trailing pipe");
+  }
   // Preserve quotes/escapes so each segment can be tokenized again downstream.
   return splitRespectingQuotes(input, (ch) => ch === "|", true);
 }

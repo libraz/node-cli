@@ -327,6 +327,7 @@ describe("color and width", () => {
 
   it("createColorizer disables color for a non-TTY stream", () => {
     resetColorEnabled();
+    delete process.env.NO_COLOR;
     const plain = createColorizer(createMockStdout());
     expect(plain.red("x")).toBe("x");
     const tty = createColorizer(createMockTTY());

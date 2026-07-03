@@ -69,4 +69,38 @@ describe("piped execution", () => {
     await router.execute("hello", { stdout: stream, stderr: stream });
     expect(stream.getOutput()).toBe("world");
   });
+
+  it("tears down upstream producers when a downstream stage exits early", async () => {
+    const registry = new CommandRegistry();
+    let producerReleased = false;
+
+    new CommandBuilder(registry, "produce").action(async (ctx) => {
+      while (!producerReleased) {
+        const canContinue = ctx.stdout.write("x".repeat(1024));
+        if (!canContinue) {
+          await new Promise<void>((resolve) => ctx.stdout.once("drain", resolve));
+        }
+        if ((ctx.stdout as NodeJS.WritableStream).destroyed) {
+          producerReleased = true;
+        }
+      }
+    });
+
+    new CommandBuilder(registry, "take").action(async (ctx) => {
+      if (!ctx.stdin) return;
+      await new Promise<void>((resolve) => ctx.stdin?.once("data", () => resolve()));
+      ctx.stdout.write("done");
+    });
+
+    const router = new CommandRouter(registry);
+    const stream = createMockStdout();
+    const execution = router.execute("produce | take", { stdout: stream, stderr: stream });
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error("pipeline hung")), 1000);
+    });
+
+    await Promise.race([execution, timeout]);
+    expect(producerReleased).toBe(true);
+    expect(stream.getOutput()).toBe("done");
+  });
 });

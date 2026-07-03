@@ -124,7 +124,12 @@ export class HelpGenerator {
     // Options — always advertise the built-in --help flag.
     const visibleOptions = [...command.options.values()].filter((o) => !o.schema.hidden);
     const optionEntries = formatOptionEntries(visibleOptions);
-    optionEntries.push(["-h, --help", "Show help for this command"]);
+    const hasHelpOption = visibleOptions.some(
+      (opt) => opt.long === "help" || opt.aliases.includes("h"),
+    );
+    if (!hasHelpOption) {
+      optionEntries.push(["-h, --help", "Show help for this command"]);
+    }
     lines.push("", "Options:");
     const maxWidth = Math.max(...optionEntries.map(([flags]) => stringWidth(flags)));
     for (const [flags, desc] of optionEntries) {
@@ -183,9 +188,7 @@ export function formatUsage(
       parts.push(arg.required ? `<${arg.name}>` : `[${arg.name}]`);
     }
   }
-  if (command.options.size > 0) {
-    parts.push("[options]");
-  }
+  parts.push("[options]");
   return parts.join(" ");
 }
 

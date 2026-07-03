@@ -82,13 +82,15 @@ describe("c (template tag)", () => {
   });
 
   it("does not support nested style blocks (documented limitation)", () => {
-    // The inner "{bold inner}" is consumed by the non-greedy text match, so the
-    // outer style only wraps up to the first closing brace and the trailing
-    // " outer}" remains as plain text.
     const result = c`{yellow a {bold inner} b}`;
     const plain = stripAnsi(result);
-    expect(plain).toBe("a {bold inner b}");
+    expect(plain).toBe("a inner b");
     expect(result).toContain("\x1b[33m");
+    expect(result).toContain("\x1b[1m");
+  });
+
+  it("leaves unknown brace patterns as plain text", () => {
+    expect(c`value: {not-a-style text}`).toBe("value: {not-a-style text}");
   });
 });
 
@@ -134,6 +136,10 @@ describe("stringWidth", () => {
     // Family emoji "👨‍👩‍👧" is one displayed grapheme, width 2.
     expect(stringWidth("👨‍👩‍👧")).toBe(2);
   });
+
+  it("counts a ZWJ emoji sequence with variation selectors as a single wide grapheme", () => {
+    expect(stringWidth("❤️‍🔥")).toBe(2);
+  });
 });
 
 describe("color detection precedence", () => {
@@ -146,6 +152,7 @@ describe("color detection precedence", () => {
 
   it("honors FORCE_COLOR over TERM=dumb", async () => {
     resetColorEnabled();
+    delete process.env.NO_COLOR;
     process.env.FORCE_COLOR = "1";
     process.env.TERM = "dumb";
     const { isColorEnabled } = await import("../src/output/color.js");

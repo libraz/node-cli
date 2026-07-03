@@ -42,10 +42,38 @@ describe("ShellCompleter", () => {
     expect(candidates).toEqual(["create"]);
   });
 
+  it("completes nested subcommand aliases", () => {
+    const reg = new CommandRegistry();
+    const user = new CommandBuilder(reg, "user");
+    user
+      .command("create <name>")
+      .alias("c")
+      .action(() => {});
+    const comp = new ShellCompleter(reg);
+
+    const [candidates] = comp.complete("user c") as [string[], string];
+    expect(candidates).toContain("create");
+    expect(candidates).toContain("c");
+  });
+
   it("completes option flags", () => {
     const [candidates] = completer.complete("deploy prod --") as [string[], string];
     expect(candidates).toContain("--force");
     expect(candidates).toContain("--tag");
+  });
+
+  it("includes built-in help flags in option completion", () => {
+    const [longCandidates] = completer.complete("deploy prod --h") as [string[], string];
+    expect(longCandidates).toContain("--help");
+
+    const [shortCandidates] = completer.complete("deploy prod -") as [string[], string];
+    expect(shortCandidates).toContain("-h");
+  });
+
+  it("does not complete option flags after the double-dash separator", () => {
+    const [candidates, current] = completer.complete("deploy prod -- -") as [string[], string];
+    expect(candidates).toEqual([]);
+    expect(current).toBe("-");
   });
 
   it("completes partial option flags", () => {
@@ -235,6 +263,35 @@ describe("ShellCompleter", () => {
       expect(result).toBeInstanceOf(Promise);
       const [candidates] = (await result) as [string[], string];
       expect(candidates).toEqual(["localhost", "example.com"]);
+    });
+
+    it("scopes the custom completer line to the active pipe segment", () => {
+      const reg = new CommandRegistry();
+      let observedLine = "";
+      new CommandBuilder(reg, "list").action(() => {});
+      new CommandBuilder(reg, "connect <host>")
+        .complete((ctx) => {
+          observedLine = ctx.line;
+          return ["localhost"];
+        })
+        .action(() => {});
+      const comp = new ShellCompleter(reg);
+
+      const [candidates] = comp.complete("list | connect ") as [string[], string];
+      expect(candidates).toEqual(["localhost"]);
+      expect(observedLine).toBe("connect ");
+    });
+
+    it("falls through to a group command completer when no subcommand matches", () => {
+      const reg = new CommandRegistry();
+      new CommandBuilder(reg, "tool")
+        .complete(() => ["custom-target"])
+        .command("known")
+        .action(() => {});
+      const comp = new ShellCompleter(reg);
+
+      const [candidates] = comp.complete("tool custom") as [string[], string];
+      expect(candidates).toEqual(["custom-target"]);
     });
   });
 });

@@ -48,6 +48,10 @@ cli.command("deploy <env> [region]")
 
 インタラクティブシェル起動時に表示するバナーテキストを設定。`""` を渡すと抑制。未設定の場合は `name` と `version` から自動生成。
 
+#### 組み込みフラグ
+
+各コマンドは、そのフラグを明示定義していない限り `--help` と `-h` をサポートします。`options.version` を持つトップレベル CLI は `--version` と `-V` もサポートします。
+
 #### `history(filePath: string): this`
 
 履歴ファイルパスを設定。
@@ -251,6 +255,7 @@ interface OptionSchema {
   parse?: (value: string, ctx: CommandContext) => unknown;
   validate?: (value: unknown, ctx: CommandContext) => void;
   hidden?: boolean;
+  autocomplete?: string[] | ((current: string) => string[] | Promise<string[]>);
 }
 ```
 
@@ -525,6 +530,9 @@ function prompt.text(message: string, options?: TextOptions): Promise<string>
 | `placeholder` | `string` | — | プレースホルダーテキスト |
 | `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
 | `required` | `boolean` | `true` | 空でないことを要求 |
+| `prefix` | `string` | `"?"` | プロンプト接頭辞 |
+| `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
+| `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
 
 ### prompt.confirm
 
@@ -535,6 +543,10 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 | オプション | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `default` | `boolean` | `false` | デフォルト値 |
+| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `prefix` | `string` | `"?"` | プロンプト接頭辞 |
+| `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
+| `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
 
 ### prompt.select
 
@@ -549,6 +561,10 @@ function prompt.select<T>(
 | オプション | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `default` | `T` | — | デフォルトの選択値。ユーザーが何も入力せず Enter を押した際に返される |
+| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `prefix` | `string` | `"?"` | プロンプト接頭辞 |
+| `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
+| `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
 
 ### prompt.multiselect
 
@@ -565,6 +581,10 @@ function prompt.multiselect<T>(
 | `default` | `T[]` | — | 事前選択済みの値 |
 | `min` | `number` | — | 最小選択数 |
 | `max` | `number` | — | 最大選択数 |
+| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `prefix` | `string` | `"?"` | プロンプト接頭辞 |
+| `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
+| `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
 
 ### prompt.password
 
@@ -573,6 +593,14 @@ function prompt.password(message: string, options?: PromptBaseOptions): Promise<
 ```
 
 入力はアスタリスクでマスクされます。
+
+| オプション | 型 | デフォルト | 説明 |
+|-----------|------|---------|------|
+| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `required` | `boolean` | `true` | 空でないことを要求 |
+| `prefix` | `string` | `"?"` | プロンプト接頭辞 |
+| `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
+| `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
 
 すべてのプロンプトは Ctrl+C または Ctrl+D で `PromptCancelError` を投げる。
 
@@ -590,7 +618,7 @@ function logger(options?: LoggerOptions): Logger
 |-----------|------|---------|------|
 | `level` | `LogLevel` | `"info"` | 最小ログレベル |
 | `prefix` | `string` | — | 角括弧付きのプレフィックス |
-| `timestamp` | `boolean` | `false` | `[HH:MM:SS]` を表示 |
+| `timestamp` | `boolean` | `false` | `HH:MM:SS` を表示 |
 | `stream` | `Writable` | `process.stderr` | 出力ストリーム |
 
 ### Logger

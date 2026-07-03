@@ -10,7 +10,7 @@
  *   npx tsx examples/03-deploy-tool.ts rollback prod
  *   npx tsx examples/03-deploy-tool.ts status
  */
-import { createCLI, color, c } from "../src/index.js";
+import { createCLI, c } from "../src/index.js";
 
 const cli = createCLI({ name: "deploy-tool" });
 

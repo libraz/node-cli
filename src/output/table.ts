@@ -1,4 +1,4 @@
-import { color as c, stringWidth, stripAnsi } from "./color.js";
+import { color as c, splitAnsi, stringWidth } from "./color.js";
 
 /**
  * Custom border characters for table rendering.
@@ -259,7 +259,7 @@ export function table(
     return renderNone(styledHeader, truncated, colWidths, colPadding, getAlign);
   }
   if (border === "simple") {
-    return renderSimple(styledHeader, truncated, colWidths, getAlign);
+    return renderSimple(styledHeader, truncated, colWidths, getAlign, chars);
   }
 
   return renderBoxed(
@@ -399,19 +399,30 @@ function calculateWidths(
 function truncateCell(cell: string, maxWidth: number, truncChar: string): string {
   if (stringWidth(cell) <= maxWidth) return cell;
 
-  const stripped = stripAnsi(cell);
   const truncWidth = stringWidth(truncChar);
   let width = 0;
   let result = "";
+  const segmenter =
+    typeof Intl !== "undefined" && "Segmenter" in Intl
+      ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+      : undefined;
 
-  for (const char of stripped) {
-    const charWidth = stringWidth(char);
-    if (width + charWidth + truncWidth > maxWidth) {
-      result += truncChar;
-      break;
+  const graphemes = (text: string): string[] =>
+    segmenter ? [...segmenter.segment(text)].map((segment) => segment.segment) : [...text];
+
+  for (const segment of splitAnsi(cell)) {
+    if (segment.ansi) {
+      result += segment.text;
+      continue;
     }
-    result += char;
-    width += charWidth;
+    for (const char of graphemes(segment.text)) {
+      const charWidth = stringWidth(char);
+      if (width + charWidth + truncWidth > maxWidth) {
+        return result + truncChar;
+      }
+      result += char;
+      width += charWidth;
+    }
   }
 
   return result;
@@ -518,14 +529,18 @@ function renderSimple(
   rows: string[][],
   widths: number[],
   getAlign: (i: number) => "left" | "right" | "center",
+  chars?: Required<TableChars>,
 ): string {
   const lines: string[] = [];
+  const middle = chars?.middle ?? " | ";
+  const separator = chars ? chars.mid : "-";
+  const separatorMiddle = chars?.["mid-mid"] ?? "-|-";
   if (header) {
-    lines.push(header.map((h, i) => padCell(h, widths[i], getAlign(i))).join(" | "));
-    lines.push(widths.map((w) => "-".repeat(w)).join("-|-"));
+    lines.push(header.map((h, i) => padCell(h, widths[i], getAlign(i))).join(middle));
+    lines.push(widths.map((w) => separator.repeat(w)).join(separatorMiddle));
   }
   for (const row of rows) {
-    lines.push(row.map((cell, i) => padCell(cell, widths[i], getAlign(i))).join(" | "));
+    lines.push(row.map((cell, i) => padCell(cell, widths[i], getAlign(i))).join(middle));
   }
   return lines.join("\n");
 }

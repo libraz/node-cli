@@ -1,5 +1,7 @@
 export type { PluginContext } from "./cli.js";
 export { CLI } from "./cli.js";
+export { CommandBuilder } from "./command/builder.js";
+export { activePipeSegment } from "./command/parser.js";
 export type { CLIErrorCode } from "./errors.js";
 export {
   CLIError,
@@ -48,6 +50,7 @@ export { maskInput, prompt } from "./output/prompt.js";
 export type { TableChars, TableOptions, TableStyle } from "./output/table.js";
 export { table } from "./output/table.js";
 export type { ModeConfig } from "./shell/repl.js";
+export { Shell } from "./shell/repl.js";
 export type {
   Action,
   ArgDef,

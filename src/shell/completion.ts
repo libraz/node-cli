@@ -68,6 +68,17 @@ export class ShellCompleter {
     }
 
     // Try to match command path
+    if (tokens.length > 1 && !endsWithSpace) {
+      const parentMatch = this.registry.matchCommandPath(tokens.slice(0, -1));
+      const partial = tokens[tokens.length - 1];
+      if (parentMatch?.command.subcommands.size && !partial.startsWith("-")) {
+        const candidates = this.subcommandNames(parentMatch.command).filter((name) =>
+          name.startsWith(partial),
+        );
+        if (candidates.length > 0) return [candidates, partial];
+      }
+    }
+
     const match = this.registry.matchCommandPath(tokens);
     if (!match) {
       // No match — try completing first token as command
@@ -79,7 +90,16 @@ export class ShellCompleter {
     const { command, consumed } = match;
     const remaining = tokens.slice(consumed);
     const lastToken = remaining[remaining.length - 1] ?? "";
-    const typingOption = !endsWithSpace && lastToken.startsWith("-");
+    const doubleDashIndex = remaining.indexOf("--");
+    const pastDoubleDash =
+      doubleDashIndex !== -1 && (endsWithSpace || doubleDashIndex < remaining.length - 1);
+    const optionScopeRemaining = pastDoubleDash ? remaining.slice(0, doubleDashIndex) : remaining;
+    const positionalScopeRemaining = pastDoubleDash
+      ? remaining.slice(doubleDashIndex + 1)
+      : remaining;
+    const currentRemaining = pastDoubleDash ? positionalScopeRemaining : remaining;
+    const currentLastToken = currentRemaining[currentRemaining.length - 1] ?? "";
+    const typingOption = !pastDoubleDash && !endsWithSpace && lastToken.startsWith("-");
 
     // If we're at a command boundary and expecting subcommand (but not when the
     // user is clearly typing an option flag, which should list options instead).
@@ -87,17 +107,15 @@ export class ShellCompleter {
       if (remaining.length === 0 && endsWithSpace) {
         // Show subcommands plus the command's own option flags, so a group that
         // also declares options offers both at the boundary.
-        const subs = [...new Set(command.subcommands.values())].map((s) => s.name);
+        const subs = this.subcommandNames(command);
         return [[...subs, ...this.optionFlags(command, "")], ""];
       }
 
       if (remaining.length === 1 && !endsWithSpace) {
         // Partial subcommand
         const current = remaining[0];
-        const candidates = [...new Set(command.subcommands.values())]
-          .map((s) => s.name)
-          .filter((name) => name.startsWith(current));
-        return [candidates, current];
+        const candidates = this.subcommandNames(command).filter((name) => name.startsWith(current));
+        if (candidates.length > 0) return [candidates, current];
       }
     }
 
@@ -116,13 +134,13 @@ export class ShellCompleter {
       }
     }
 
-    const current = endsWithSpace ? "" : (remaining[remaining.length - 1] ?? "");
-    const isTypingOption = current.startsWith("-");
+    const current = endsWithSpace ? "" : currentLastToken;
+    const isTypingOption = !pastDoubleDash && current.startsWith("-");
 
     // When the previous token is a value-taking option, complete its value (checked
     // before listing flags so `--region <TAB>` offers values, not more flags).
-    if (!isTypingOption && remaining.length > 0) {
-      const optDef = this.findPrecedingOption(remaining, endsWithSpace, command.options);
+    if (!pastDoubleDash && !isTypingOption && optionScopeRemaining.length > 0) {
+      const optDef = this.findPrecedingOption(optionScopeRemaining, endsWithSpace, command.options);
       if (optDef) {
         const valueCurrent = endsWithSpace ? "" : current;
         return this.completeOptionValue(optDef, valueCurrent);
@@ -131,7 +149,7 @@ export class ShellCompleter {
 
     // Show option flags when the user is typing one, or at a fresh token position
     // on a leaf command — including after positional arguments have been entered.
-    if (isTypingOption || (endsWithSpace && command.subcommands.size === 0)) {
+    if (isTypingOption || (endsWithSpace && command.subcommands.size === 0 && !command.completer)) {
       const candidates = this.optionFlags(command, current);
       if (candidates.length > 0) {
         return [candidates, current];
@@ -157,7 +175,7 @@ export class ShellCompleter {
       const filterByPrefix = (candidates: string[]) =>
         current ? candidates.filter((v) => v.startsWith(current)) : candidates;
       const result = command.completer({
-        line,
+        line: segment,
         current,
         commandPath,
         args: parsedArgs,
@@ -198,12 +216,28 @@ export class ShellCompleter {
     return names;
   }
 
+  private subcommandNames(command: CommandDefinition): string[] {
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const sub of new Set(command.subcommands.values())) {
+      for (const name of [sub.name, ...(sub.aliases ?? [])]) {
+        if (!seen.has(name)) {
+          seen.add(name);
+          names.push(name);
+        }
+      }
+    }
+    return names;
+  }
+
   /**
    * Returns a command's visible option flags (long form and short aliases) that
    * start with the given prefix.
    */
   private optionFlags(command: CommandDefinition, prefix: string): string[] {
     const candidates: string[] = [];
+    if ("--help".startsWith(prefix)) candidates.push("--help");
+    if ("-h".startsWith(prefix)) candidates.push("-h");
     for (const [, opt] of command.options) {
       if (opt.schema.hidden) continue;
       const flag = `--${opt.long}`;

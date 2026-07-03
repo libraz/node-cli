@@ -9,8 +9,8 @@
  *   npx tsx examples/06-plugin-system.ts ping
  *   npx tsx examples/06-plugin-system.ts greet World
  */
-import type { PluginContext, CLIEventMap } from "../src/index.js";
-import { createCLI, c, color } from "../src/index.js";
+import type { PluginContext } from "../src/index.js";
+import { createCLI, c } from "../src/index.js";
 
 // ── Plugin: Timing ──
 // Adds execution timing to all commands

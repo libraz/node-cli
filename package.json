@@ -30,6 +30,7 @@
     "test": "vitest",
     "test:coverage": "vitest --coverage",
     "lint": "biome check src tests",
+    "lint:fix": "biome check --write src tests",
     "format": "biome format --write src tests",
     "check": "biome check --write src tests",
     "prepack": "cp README.md .readme-backup && cp README.npm.md .npm-readme-backup && cp README.npm.md README.md && rm README.npm.md",
@@ -39,8 +40,8 @@
     "node": "24.18.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.1",
-    "@types/node": "^26.0.1",
+    "@biomejs/biome": "^2.5.2",
+    "@types/node": "^26.1.0",
     "@vitest/coverage-v8": "^4.1.9",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"

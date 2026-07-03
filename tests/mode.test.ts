@@ -160,4 +160,113 @@ describe("mode command", () => {
     expect(stdout.getOutput()).toContain("mode:select 1");
     expect(stderr.getOutput()).toBe("");
   });
+
+  it("returns to the parent prompt when EOF closes a mode readline", async () => {
+    const originalStdin = process.stdin;
+    const originalStdout = process.stdout;
+    const originalStderr = process.stderr;
+    const stdin = new PassThrough();
+    const stdout = createMockTTY();
+    const stderr = createMockTTY();
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const modeEntered = vi.fn();
+
+    new CommandBuilder(registry, "sql").action((ctx) => {
+      ctx.shell?.enterMode({
+        prompt: "sql> ",
+        action: () => {},
+      });
+      modeEntered();
+    });
+
+    const shell = new Shell({
+      router,
+      registry,
+      prompt: "app> ",
+      historyFile: `/tmp/node-cli-mode-eof-${process.pid}-${Date.now()}.history`,
+    });
+
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
+    Object.defineProperty(process, "stdout", { configurable: true, value: stdout });
+    Object.defineProperty(process, "stderr", { configurable: true, value: stderr });
+
+    try {
+      const running = shell.start();
+      stdin.write("sql\n");
+      await vi.waitFor(() => expect(modeEntered).toHaveBeenCalledOnce());
+
+      (shell as unknown as { rl?: { close: () => void } }).rl?.close();
+      await vi.waitFor(() => expect(stdout.getOutput()).toContain("app> "));
+      stdin.end("quit\n");
+
+      await expect(running).resolves.toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "stdin", { configurable: true, value: originalStdin });
+      Object.defineProperty(process, "stdout", { configurable: true, value: originalStdout });
+      Object.defineProperty(process, "stderr", { configurable: true, value: originalStderr });
+    }
+
+    expect(stderr.getOutput()).toBe("");
+  });
+
+  it("routes SIGINT while a mode action is running", async () => {
+    const originalStdin = process.stdin;
+    const originalStdout = process.stdout;
+    const originalStderr = process.stderr;
+    const stdin = new PassThrough();
+    const stdout = createMockTTY();
+    const stderr = createMockTTY();
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const triggerCancel = vi.spyOn(router, "triggerCancel");
+    let resolveModeAction: (() => void) | undefined;
+    const modeActionStarted = vi.fn();
+
+    new CommandBuilder(registry, "sql").action((ctx) => {
+      ctx.shell?.enterMode({
+        prompt: "sql> ",
+        action: () =>
+          new Promise<void>((resolve) => {
+            resolveModeAction = resolve;
+            modeActionStarted();
+          }),
+      });
+    });
+
+    const shell = new Shell({
+      router,
+      registry,
+      prompt: "app> ",
+      historyFile: `/tmp/node-cli-mode-sigint-${process.pid}-${Date.now()}.history`,
+    });
+
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
+    Object.defineProperty(process, "stdout", { configurable: true, value: stdout });
+    Object.defineProperty(process, "stderr", { configurable: true, value: stderr });
+
+    try {
+      const running = shell.start();
+      stdin.write("sql\n");
+      await vi.waitFor(() => expect(stdout.getOutput()).toContain("sql> "));
+      stdin.write("select 1\n");
+      await vi.waitFor(() => expect(modeActionStarted).toHaveBeenCalledOnce());
+
+      process.emit("SIGINT");
+      expect(triggerCancel).toHaveBeenCalledOnce();
+
+      resolveModeAction?.();
+      await vi.waitFor(() => expect((shell as unknown as { rl?: unknown }).rl).toBeDefined());
+      feedLines(stdin, ["exit", "quit"]);
+
+      await expect(running).resolves.toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "stdin", { configurable: true, value: originalStdin });
+      Object.defineProperty(process, "stdout", { configurable: true, value: originalStdout });
+      Object.defineProperty(process, "stderr", { configurable: true, value: originalStderr });
+      triggerCancel.mockRestore();
+    }
+
+    expect(stderr.getOutput()).toBe("");
+  });
 });

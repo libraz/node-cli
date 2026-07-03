@@ -48,6 +48,10 @@ Set the description displayed in the help header.
 
 Set the banner text displayed when the interactive shell starts. Pass `""` to suppress. If not set, a banner is auto-generated from `name` and `version`.
 
+#### Built-in Flags
+
+Every command supports `--help` and `-h` unless those flags are explicitly declared by the command. A top-level CLI with `options.version` also supports `--version` and `-V`.
+
 #### `history(filePath: string): this`
 
 Set the history file path.
@@ -251,6 +255,7 @@ interface OptionSchema {
   parse?: (value: string, ctx: CommandContext) => unknown;
   validate?: (value: unknown, ctx: CommandContext) => void;
   hidden?: boolean;
+  autocomplete?: string[] | ((current: string) => string[] | Promise<string[]>);
 }
 ```
 
@@ -526,6 +531,9 @@ function prompt.text(message: string, options?: TextOptions): Promise<string>
 | `placeholder` | `string` | — | Placeholder text |
 | `validate` | `(v: unknown) => void` | — | Throw on invalid |
 | `required` | `boolean` | `true` | Require non-empty |
+| `prefix` | `string` | `"?"` | Prompt prefix |
+| `stdin` | `Readable` | `process.stdin` | Input stream |
+| `stdout` | `Writable` | `process.stdout` | Output stream |
 
 ### prompt.confirm
 
@@ -536,6 +544,10 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `default` | `boolean` | `false` | Default value |
+| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `prefix` | `string` | `"?"` | Prompt prefix |
+| `stdin` | `Readable` | `process.stdin` | Input stream |
+| `stdout` | `Writable` | `process.stdout` | Output stream |
 
 ### prompt.select
 
@@ -550,6 +562,10 @@ function prompt.select<T>(
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `default` | `T` | — | Default selected value, returned when the user presses Enter with no input |
+| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `prefix` | `string` | `"?"` | Prompt prefix |
+| `stdin` | `Readable` | `process.stdin` | Input stream |
+| `stdout` | `Writable` | `process.stdout` | Output stream |
 
 ### prompt.multiselect
 
@@ -566,6 +582,10 @@ function prompt.multiselect<T>(
 | `default` | `T[]` | — | Pre-selected values |
 | `min` | `number` | — | Minimum selections |
 | `max` | `number` | — | Maximum selections |
+| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `prefix` | `string` | `"?"` | Prompt prefix |
+| `stdin` | `Readable` | `process.stdin` | Input stream |
+| `stdout` | `Writable` | `process.stdout` | Output stream |
 
 ### prompt.password
 
@@ -574,6 +594,14 @@ function prompt.password(message: string, options?: PromptBaseOptions): Promise<
 ```
 
 Input is masked with asterisks.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `required` | `boolean` | `true` | Require non-empty |
+| `prefix` | `string` | `"?"` | Prompt prefix |
+| `stdin` | `Readable` | `process.stdin` | Input stream |
+| `stdout` | `Writable` | `process.stdout` | Output stream |
 
 All prompts throw `PromptCancelError` on Ctrl+C or Ctrl+D.
 
@@ -591,7 +619,7 @@ function logger(options?: LoggerOptions): Logger
 |--------|------|---------|-------------|
 | `level` | `LogLevel` | `"info"` | Minimum log level |
 | `prefix` | `string` | — | Prefix in brackets |
-| `timestamp` | `boolean` | `false` | Show `[HH:MM:SS]` |
+| `timestamp` | `boolean` | `false` | Show `HH:MM:SS` |
 | `stream` | `Writable` | `process.stderr` | Output stream |
 
 ### Logger

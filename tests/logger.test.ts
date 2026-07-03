@@ -117,14 +117,23 @@ describe("logger", () => {
     expect(stream.getOutput()).toContain("child-debug");
   });
 
-  it("child inherits the parent's level at creation time", () => {
+  it("child dynamically inherits parent level changes until overridden", () => {
     const stream = createMockStdout();
     const parent = logger({ stream, level: "warn" });
     const child = parent.child("db");
     child.info("hidden");
     expect(stream.getOutput()).toBe("");
 
+    parent.setLevel("info");
+    child.info("now-visible");
+    expect(stream.getOutput()).toContain("now-visible");
+
+    child.setLevel("error");
+    parent.setLevel("debug");
+    child.warn("still-hidden");
+    expect(stream.getOutput()).not.toContain("still-hidden");
+
     child.warn("shown");
-    expect(stream.getOutput()).toContain("shown");
+    expect(stream.getOutput()).not.toContain("shown");
   });
 });

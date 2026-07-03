@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
-import { PromptCancelError } from "../errors.js";
+import { formatErrorMessage, PromptCancelError } from "../errors.js";
 import { ShellCompleter } from "./completion.js";
 import { History } from "./history.js";
 
@@ -78,7 +78,7 @@ export class Shell {
       terminal: true,
     });
     this.rl.on("close", () => {
-      if (!this.reopeningReadline) {
+      if (!this.reopeningReadline && !this.mode) {
         this.running = false;
       }
     });
@@ -175,31 +175,26 @@ export class Shell {
 
       if (this.mode) {
         try {
-          await this.mode.action(trimmed, {
-            stdout: process.stdout,
-            stderr: process.stderr,
+          await this.router.runWithSigintCancel(async () => {
+            await this.mode?.action(trimmed, {
+              stdout: process.stdout,
+              stderr: process.stderr,
+            });
           });
         } catch (err) {
           this.reportError(err);
         }
       } else {
-        // Route SIGINT during command execution to the command's cancel handler.
-        // A second Ctrl+C (or one with no handler installed) falls through to
-        // the default terminate behavior.
-        const onSigint = () => {
-          this.router.triggerCancel();
-        };
-        process.once("SIGINT", onSigint);
         try {
-          await this.router.execute(trimmed, {
-            shell: this,
-            stdout: process.stdout,
-            stderr: process.stderr,
+          await this.router.runWithSigintCancel(async () => {
+            await this.router.execute(trimmed, {
+              shell: this,
+              stdout: process.stdout,
+              stderr: process.stderr,
+            });
           });
         } catch (err) {
           this.reportError(err);
-        } finally {
-          process.removeListener("SIGINT", onSigint);
         }
       }
 
@@ -222,10 +217,10 @@ export class Shell {
    */
   private reportError(err: unknown): void {
     if (err instanceof PromptCancelError) {
-      process.stderr.write("Cancelled\n");
+      process.stderr.write(`${formatErrorMessage(err)}\n`);
       return;
     }
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     process.stderr.write(`Error: ${message}\n`);
   }
 

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
-import { parse, parseDefinitionString, parseOptionFlags, tokenize } from "../src/command/parser.js";
+import {
+  parse,
+  parseDefinitionString,
+  parseOptionFlags,
+  splitPipes,
+  tokenize,
+} from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { InvalidOptionError, UnknownOptionError } from "../src/errors.js";
 
@@ -31,6 +37,25 @@ describe("tokenize", () => {
 
   it("handles mixed quotes", () => {
     expect(tokenize(`deploy "it's here"`)).toEqual(["deploy", "it's here"]);
+  });
+
+  it("preserves backslashes inside single quotes", () => {
+    expect(tokenize(String.raw`copy 'C:\temp\new'`)).toEqual(["copy", String.raw`C:\temp\new`]);
+  });
+
+  it("preserves non-special backslashes inside double quotes", () => {
+    expect(tokenize(String.raw`copy "C:\temp\new"`)).toEqual(["copy", String.raw`C:\temp\new`]);
+  });
+
+  it("throws on unclosed quotes", () => {
+    expect(() => tokenize("echo 'hello")).toThrow(/Unclosed single quote/);
+  });
+});
+
+describe("splitPipes", () => {
+  it("throws on trailing and empty pipe segments", () => {
+    expect(() => splitPipes("echo hi |")).toThrow(/trailing pipe/);
+    expect(() => splitPipes("echo hi || grep hi")).toThrow(/empty pipe/);
   });
 });
 
@@ -99,6 +124,13 @@ describe("parseOptionFlags", () => {
     expect(result.long).toBe("verbose");
     expect(result.aliases).toEqual(["v"]);
   });
+
+  it("uses the first short alias as the key for short-only options", () => {
+    const result = parseOptionFlags("-p <port>");
+    expect(result.long).toBe("p");
+    expect(result.aliases).toEqual(["p"]);
+    expect(result.takesValue).toBe(true);
+  });
 });
 
 describe("parse", () => {
@@ -155,6 +187,14 @@ describe("parse", () => {
     // Short alias -t is stored under the raw alias key;
     // alias resolution happens in OptionResolver, not in the parser.
     expect(result.options.tag ?? result.options.t).toBe("v2");
+  });
+
+  it("parses short-only options under their short key", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "serve").option("-p <port>", { type: "number" });
+
+    const result = parse("serve -p 3000", registry);
+    expect(result.options.p).toBe("3000");
   });
 
   it("parses -- double dash", () => {

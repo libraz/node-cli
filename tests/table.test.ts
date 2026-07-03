@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resetColorEnabled, setColorEnabled } from "../src/output/color.js";
+import { color, resetColorEnabled, setColorEnabled, stripAnsi } from "../src/output/color.js";
 import { table } from "../src/output/table.js";
 
 describe("table", () => {
@@ -152,6 +152,25 @@ describe("table", () => {
     expect(result).toContain("|");
   });
 
+  it("honors custom chars with simple borders", () => {
+    const result = table(
+      [
+        ["A", "B"],
+        ["1", "2"],
+      ],
+      {
+        border: "simple",
+        chars: {
+          middle: " ~ ",
+          mid: "=",
+          "mid-mid": "=+=",
+        },
+      },
+    );
+    expect(result).toContain("A ~ B");
+    expect(result).toContain("=+=");
+  });
+
   it("supports compact mode (no row separators)", () => {
     const result = table([{ name: "alice" }, { name: "bob" }, { name: "charlie" }], {
       columns: ["name"],
@@ -240,6 +259,24 @@ describe("table", () => {
     });
     expect(result).toContain("..");
     expect(result).not.toContain("…");
+  });
+
+  it("preserves ANSI color when truncating cells", () => {
+    setColorEnabled(true);
+    const result = table([{ name: color.red("alexander") }], {
+      columns: ["name"],
+      maxWidth: { name: 5 },
+    });
+    expect(result).toContain("\x1b[31m");
+    expect(stripAnsi(result)).toContain("alex…");
+  });
+
+  it("does not split ZWJ emoji graphemes when truncating cells", () => {
+    const result = table([{ icon: "❤️‍🔥abcdef" }], {
+      columns: ["icon"],
+      maxWidth: { icon: 3 },
+    });
+    expect(stripAnsi(result)).toContain("❤️‍🔥…");
   });
 
   it("does not throw for documented grey border style", () => {

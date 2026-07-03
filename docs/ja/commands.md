@@ -47,6 +47,7 @@ interface OptionSchema {
   parse?: (value: string, ctx: CommandContext) => unknown;
   validate?: (value: unknown, ctx: CommandContext) => void;
   hidden?: boolean;
+  autocomplete?: string[] | ((current: string) => string[] | Promise<string[]>);
 }
 ```
 
@@ -87,7 +88,7 @@ interface OptionSchema {
 | `--no-force` | `{ force: false }` |
 | `--tag v2` | `{ tag: "v2" }` |
 | `--tag=v2` | `{ tag: "v2" }` |
-| `-t v2` | `{ t: "v2" }` (リゾルバでロング名に解決) |
+| `-t v2` | オプション解決後は `{ tag: "v2" }` |
 | `-abc` | `{ a: true, b: true, c: true }` |
 | `-- --not-an-option` | 位置引数として扱われる |
 
@@ -274,6 +275,8 @@ cli.use(myPlugin);
 interface PluginContext {
   command(definition: string): CommandBuilder;
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
+  catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void;
 }
 ```
 

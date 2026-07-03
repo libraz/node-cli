@@ -417,6 +417,10 @@ const password = await prompt.password("Enter password:");
 // Input is masked with asterisks
 ```
 
+### Prompt Options
+
+All prompt methods accept `prefix`, `stdin`, `stdout`, and `validate` through their options object. Text and password prompts also support `required`; confirm/select/multiselect support `default`; multiselect additionally supports `min` and `max`.
+
 ### Cancellation
 
 All prompts throw `PromptCancelError` if the user presses Ctrl+C or Ctrl+D:
@@ -457,12 +461,14 @@ log.error("Something broke");  // ✖ Something broke
 const log = logger({
   level: "debug",         // "debug" | "info" | "warn" | "error" | "silent"
   prefix: "server",       // [server] prefix
-  timestamp: true,        // [HH:MM:SS] prefix
+  timestamp: true,        // HH:MM:SS prefix
   stream: process.stderr, // Output stream (default: stderr)
 });
 ```
 
 ### Printf-Style Formatting
+
+Child loggers inherit the parent's current log level dynamically until `child.setLevel(...)` is called on that child.
 
 ```typescript
 log.info("Port: %d", 3000);

@@ -198,6 +198,7 @@ interface CommandContext {
   stdin: Readable | null;            // stdin (パイプコマンドで利用可能)
   stdout: Writable;                  // stdout ストリーム
   stderr: Writable;                  // stderr ストリーム
+  signal: AbortSignal;               // コマンド実行がキャンセルされたときに abort される
 }
 ```
 

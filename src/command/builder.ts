@@ -33,14 +33,14 @@ export class CommandBuilder {
 
     this.parentPath = [...parentPath, ...defParent];
 
-    this.definition = {
+    const definition = {
       name,
       argDefs,
       options: new Map(),
       subcommands: new Map(),
     };
 
-    registry.register(this.definition, this.parentPath);
+    this.definition = registry.register(definition, this.parentPath);
   }
 
   /**

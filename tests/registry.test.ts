@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import type { CommandDefinition } from "../src/types.js";
 
@@ -107,5 +108,34 @@ describe("CommandRegistry", () => {
     expect(createCmd).toBeDefined();
     expect(createCmd?.parent).toBeDefined();
     expect(createCmd?.parent?.name).toBe("user");
+  });
+
+  it("returns the registered existing definition when a command path is redeclared", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "group sub").action(() => {});
+    const action = () => {};
+
+    new CommandBuilder(registry, "group").description("Group command").action(action);
+
+    const group = registry.resolve(["group"]);
+    expect(group?.description).toBe("Group command");
+    expect(group?.action).toBe(action);
+    expect(group?.subcommands.has("sub")).toBe(true);
+  });
+
+  it("does not delete an independent command whose name matches another command alias", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "foo").alias("bar");
+    registry.unregister(["foo"]);
+    new CommandBuilder(registry, "bar").action(() => {});
+
+    expect(registry.resolve(["bar"])?.name).toBe("bar");
+  });
+
+  it("rejects registering a command that conflicts with an existing alias", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "foo").alias("bar");
+
+    expect(() => new CommandBuilder(registry, "bar")).toThrow(/conflicts with alias/);
   });
 });

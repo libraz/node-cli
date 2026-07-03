@@ -139,3 +139,22 @@ describe("HelpGenerator", () => {
     });
   });
 });
+
+describe("built-in help option rendering", () => {
+  it("does not duplicate help when a command declares its own help option", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "run").option("--help", { type: "boolean" }).action(() => {});
+    const help = new HelpGenerator(registry).generateCommand(["run"]);
+
+    expect(help.match(/--help/g)?.length).toBe(1);
+  });
+
+  it("includes [options] in usage even when only built-in help is available", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "run").action(() => {});
+    const help = new HelpGenerator(registry).generateCommand(["run"]);
+
+    expect(help).toContain("Usage: run [options]");
+    expect(help).toContain("Options:");
+  });
+});

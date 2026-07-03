@@ -198,6 +198,7 @@ interface CommandContext {
   stdin: Readable | null;            // stdin (available in piped commands)
   stdout: Writable;                  // stdout stream
   stderr: Writable;                  // stderr stream
+  signal: AbortSignal;               // Aborted when command execution is cancelled
 }
 ```
 

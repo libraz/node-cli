@@ -47,6 +47,7 @@ interface OptionSchema {
   parse?: (value: string, ctx: CommandContext) => unknown;
   validate?: (value: unknown, ctx: CommandContext) => void;
   hidden?: boolean;
+  autocomplete?: string[] | ((current: string) => string[] | Promise<string[]>);
 }
 ```
 
@@ -87,7 +88,7 @@ interface OptionSchema {
 | `--no-force` | `{ force: false }` |
 | `--tag v2` | `{ tag: "v2" }` |
 | `--tag=v2` | `{ tag: "v2" }` |
-| `-t v2` | `{ t: "v2" }` (resolved to long name by resolver) |
+| `-t v2` | `{ tag: "v2" }` after option resolution |
 | `-abc` | `{ a: true, b: true, c: true }` |
 | `-- --not-an-option` | Treated as positional arg |
 
@@ -274,6 +275,8 @@ The `PluginContext` interface:
 interface PluginContext {
   command(definition: string): CommandBuilder;
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
+  catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void;
 }
 ```
 

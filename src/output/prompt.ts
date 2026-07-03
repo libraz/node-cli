@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { type Readable, Writable } from "node:stream";
 import { PromptCancelError } from "../errors.js";
-import { color as c, splitAnsi, stringWidth } from "./color.js";
+import { type color as c, createColorizer, splitAnsi } from "./color.js";
 
 // ── Types ──
 
@@ -122,7 +122,11 @@ function findDefaultIndex<T>(normalized: SelectChoice<T>[], defaultValue: unknow
  * @param normalized - Normalized choices to inspect.
  * @param stdout - Stream the warning is written to.
  */
-function warnDuplicateLabels<T>(normalized: SelectChoice<T>[], stdout: Writable): void {
+function warnDuplicateLabels<T>(
+  normalized: SelectChoice<T>[],
+  stdout: Writable,
+  col: typeof c,
+): void {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
   for (const ch of normalized) {
@@ -130,7 +134,7 @@ function warnDuplicateLabels<T>(normalized: SelectChoice<T>[], stdout: Writable)
     seen.add(ch.label);
   }
   for (const label of duplicates) {
-    stdout.write(`${c.yellow("!")} Duplicate label "${label}"; select it by its number\n`);
+    stdout.write(`${col.yellow("!")} Duplicate label "${label}"; select it by its number\n`);
   }
 }
 
@@ -236,20 +240,21 @@ async function ask(
 async function text(message: string, options: TextOptions = {}): Promise<string> {
   const { default: defaultValue, validate, required = true, prefix = "?" } = options;
   const stdout = options.stdout ?? process.stdout;
+  const col = createColorizer(stdout);
 
   const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
   const hint =
     defaultValue !== undefined
-      ? c.dim(` (${defaultValue})`)
+      ? col.dim(` (${defaultValue})`)
       : options.placeholder
-        ? c.dim(` (${options.placeholder})`)
+        ? col.dim(` (${options.placeholder})`)
         : "";
 
   try {
     while (true) {
       const answer = await ask(
         rl,
-        `${c.green(prefix)} ${c.bold(message)}${hint} `,
+        `${col.green(prefix)} ${col.bold(message)}${hint} `,
         signal,
         isClosed,
       );
@@ -263,7 +268,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
       }
 
       if (!usedDefault && required && value === "") {
-        stdout.write(`${c.red("✖")} Value is required\n`);
+        stdout.write(`${col.red("✖")} Value is required\n`);
         continue;
       }
 
@@ -272,7 +277,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
           validate(value);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          stdout.write(`${c.red("✖")} ${msg}\n`);
+          stdout.write(`${col.red("✖")} ${msg}\n`);
           continue;
         }
       }
@@ -297,12 +302,18 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
 async function confirm(message: string, options: ConfirmOptions = {}): Promise<boolean> {
   const { default: defaultValue = false, prefix = "?" } = options;
   const stdout = options.stdout ?? process.stdout;
+  const col = createColorizer(stdout);
 
   const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
-  const hint = defaultValue ? c.dim(" (Y/n)") : c.dim(" (y/N)");
+  const hint = defaultValue ? col.dim(" (Y/n)") : col.dim(" (y/N)");
 
   try {
-    const answer = await ask(rl, `${c.green(prefix)} ${c.bold(message)}${hint} `, signal, isClosed);
+    const answer = await ask(
+      rl,
+      `${col.green(prefix)} ${col.bold(message)}${hint} `,
+      signal,
+      isClosed,
+    );
     const trimmed = answer.trim().toLowerCase();
     if (trimmed === "") return defaultValue;
     return trimmed === "y" || trimmed === "yes";
@@ -332,6 +343,7 @@ async function select<T = string>(
 ): Promise<T> {
   const { prefix = "?", default: defaultValue, validate } = options;
   const stdout = options.stdout ?? process.stdout;
+  const col = createColorizer(stdout);
 
   const normalized = normalizeChoices(choices);
   if (normalized.length === 0) {
@@ -342,21 +354,21 @@ async function select<T = string>(
   const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
 
   try {
-    stdout.write(`${c.green(prefix)} ${c.bold(message)}\n`);
+    stdout.write(`${col.green(prefix)} ${col.bold(message)}\n`);
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
       const isDefault = i === defaultIndex;
-      const hint = ch.hint ? c.dim(` (${ch.hint})`) : "";
-      const marker = isDefault ? c.dim(" [default]") : "";
-      stdout.write(`  ${c.cyan(`${i + 1})`)} ${ch.label}${hint}${marker}\n`);
+      const hint = ch.hint ? col.dim(` (${ch.hint})`) : "";
+      const marker = isDefault ? col.dim(" [default]") : "";
+      stdout.write(`  ${col.cyan(`${i + 1})`)} ${ch.label}${hint}${marker}\n`);
     }
-    warnDuplicateLabels(normalized, stdout);
+    warnDuplicateLabels(normalized, stdout, col);
 
     const promptLabel =
       defaultIndex >= 0 ? `Enter number (default ${defaultIndex + 1}):` : "Enter number:";
 
     while (true) {
-      const answer = await ask(rl, `${c.dim(promptLabel)} `, signal, isClosed);
+      const answer = await ask(rl, `${col.dim(promptLabel)} `, signal, isClosed);
       const trimmed = answer.trim();
 
       let chosen: SelectChoice<T> | undefined;
@@ -377,7 +389,7 @@ async function select<T = string>(
       }
 
       if (!chosen) {
-        stdout.write(`${c.red("✖")} Please enter a number between 1 and ${normalized.length}\n`);
+        stdout.write(`${col.red("✖")} Please enter a number between 1 and ${normalized.length}\n`);
         continue;
       }
 
@@ -386,7 +398,7 @@ async function select<T = string>(
           validate(chosen.value);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          stdout.write(`${c.red("✖")} ${msg}\n`);
+          stdout.write(`${col.red("✖")} ${msg}\n`);
           continue;
         }
       }
@@ -419,6 +431,7 @@ async function multiselect<T = string>(
 ): Promise<T[]> {
   const { prefix = "?", min, max, default: defaults, validate } = options;
   const stdout = options.stdout ?? process.stdout;
+  const col = createColorizer(stdout);
 
   const normalized = normalizeChoices(choices);
   if (normalized.length === 0) {
@@ -431,16 +444,18 @@ async function multiselect<T = string>(
   const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
 
   try {
-    stdout.write(`${c.green(prefix)} ${c.bold(message)} ${c.dim("(comma-separated numbers)")}\n`);
+    stdout.write(
+      `${col.green(prefix)} ${col.bold(message)} ${col.dim("(comma-separated numbers)")}\n`,
+    );
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
-      const marker = defaultIndexes.has(i) ? c.dim(" [default]") : "";
-      stdout.write(`  ${c.cyan(`${i + 1})`)} ${ch.label}${marker}\n`);
+      const marker = defaultIndexes.has(i) ? col.dim(" [default]") : "";
+      stdout.write(`  ${col.cyan(`${i + 1})`)} ${ch.label}${marker}\n`);
     }
-    warnDuplicateLabels(normalized, stdout);
+    warnDuplicateLabels(normalized, stdout, col);
 
     while (true) {
-      const answer = await ask(rl, `${c.dim("Enter numbers:")} `, signal, isClosed);
+      const answer = await ask(rl, `${col.dim("Enter numbers:")} `, signal, isClosed);
       const trimmed = answer.trim();
 
       // Deduplicate selected indices so min/max count distinct items.
@@ -448,28 +463,28 @@ async function multiselect<T = string>(
       if (trimmed === "" && defaultIndexes.size > 0) {
         indices = [...defaultIndexes];
       } else {
-        const nums = trimmed
-          .split(",")
-          .map((s) => Number.parseInt(s.trim(), 10))
-          .filter((n) => !Number.isNaN(n));
+        const tokens = trimmed.split(",").map((s) => s.trim());
+        const nums = tokens.every((token) => /^\d+$/.test(token))
+          ? tokens.map((token) => Number.parseInt(token, 10))
+          : [];
         indices = [...new Set(nums.map((n) => n - 1))];
       }
 
       const valid = indices.length > 0 && indices.every((i) => i >= 0 && i < normalized.length);
       if (!valid) {
         stdout.write(
-          `${c.red("✖")} Please enter valid numbers between 1 and ${normalized.length}\n`,
+          `${col.red("✖")} Please enter valid numbers between 1 and ${normalized.length}\n`,
         );
         continue;
       }
 
       if (min !== undefined && indices.length < min) {
-        stdout.write(`${c.red("✖")} Select at least ${min} items\n`);
+        stdout.write(`${col.red("✖")} Select at least ${min} items\n`);
         continue;
       }
 
       if (max !== undefined && indices.length > max) {
-        stdout.write(`${c.red("✖")} Select at most ${max} items\n`);
+        stdout.write(`${col.red("✖")} Select at most ${max} items\n`);
         continue;
       }
 
@@ -480,7 +495,7 @@ async function multiselect<T = string>(
           validate(values);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          stdout.write(`${c.red("✖")} ${msg}\n`);
+          stdout.write(`${col.red("✖")} ${msg}\n`);
           continue;
         }
       }
@@ -497,10 +512,9 @@ async function multiselect<T = string>(
 /**
  * Masks a chunk of readline echo output: ANSI escape sequences and line breaks
  * pass through unchanged, while every other run of visible characters is
- * replaced with as many asterisks as its visual column width. A wide character
- * (e.g. an emoji) is masked with two asterisks, and zero-width or combining
- * characters add none, so the masked output keeps the same visible width as the
- * input without leaking the original characters.
+ * replaced with one asterisk per input character. A wide character (e.g. an
+ * emoji) is still masked with a single asterisk, so the masked output does not
+ * reveal character display width.
  *
  * @param chunk - The raw output chunk readline is about to echo.
  * @returns The masked chunk.
@@ -522,7 +536,7 @@ export function maskInput(chunk: string): string {
     let visible = "";
     const flushVisible = () => {
       if (visible !== "") {
-        result += "*".repeat(stringWidth(visible));
+        result += "*".repeat([...visible].length);
         visible = "";
       }
     };
@@ -553,16 +567,28 @@ export function maskInput(chunk: string): string {
 async function password(message: string, options: PromptBaseOptions = {}): Promise<string> {
   const { validate, required = true, prefix = "?" } = options;
   const stdout = options.stdout ?? process.stdout;
+  const col = createColorizer(stdout);
 
   // Masking is scoped to this prompt: readline echoes to a private wrapper
   // stream that masks visible characters and forwards everything to the real
   // stdout. The shared stdout's own `write` is never replaced, so concurrent
   // spinner/logger output is untouched and re-entrant prompts cannot corrupt it.
   let masking = false;
+  let pendingPromptQuery = "";
+  let pendingPromptOutput = "";
   const maskingOutput = new Writable({
     write(chunk: string | Buffer, _encoding, callback) {
       const text = typeof chunk === "string" ? chunk : chunk.toString();
-      stdout.write(masking ? maskInput(text) : text);
+      if (masking && pendingPromptQuery !== "") {
+        stdout.write(text);
+        pendingPromptOutput += text;
+        if (pendingPromptOutput.includes(pendingPromptQuery)) {
+          pendingPromptQuery = "";
+          pendingPromptOutput = "";
+        }
+      } else {
+        stdout.write(masking ? maskInput(text) : text);
+      }
       callback();
     },
   });
@@ -576,22 +602,24 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
 
   try {
     while (true) {
-      // Write the (unmasked) prompt straight to stdout before masking begins.
-      stdout.write(`${c.green(prefix)} ${c.bold(message)} `);
+      const query = `${col.green(prefix)} ${col.bold(message)} `;
       masking = true;
+      pendingPromptQuery = query;
+      pendingPromptOutput = "";
 
       let answer: string;
       try {
-        answer = await ask(rl, "", signal, isClosed);
+        answer = await ask(rl, query, signal, isClosed);
       } finally {
         masking = false;
+        pendingPromptQuery = "";
+        pendingPromptOutput = "";
       }
-      stdout.write("\n");
 
       const value = answer.trim();
 
       if (required && value === "") {
-        stdout.write(`${c.red("✖")} Value is required\n`);
+        stdout.write(`${col.red("✖")} Value is required\n`);
         continue;
       }
 
@@ -600,7 +628,7 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
           validate(value);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          stdout.write(`${c.red("✖")} ${msg}\n`);
+          stdout.write(`${col.red("✖")} ${msg}\n`);
           continue;
         }
       }

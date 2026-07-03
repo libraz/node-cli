@@ -15,7 +15,7 @@ import type { CommandContext, OptionDef } from "../types.js";
  * @returns A record of fully resolved option values keyed by their long names.
  * @throws {MissingOptionError} If a required option is not provided.
  * @throws {InvalidOptionError} If a value fails type coercion or choice validation.
- * @throws {ValidationError} If a custom `validate` function rejects the value.
+ * @throws {ValidationError} If a custom `parse` or `validate` function rejects the value.
  */
 export function resolveOptions(
   raw: Record<string, unknown>,
@@ -53,7 +53,7 @@ export function resolveOptions(
             : schema.parse(String(value), ctx);
         } catch (err) {
           if (err instanceof Error) throw new ValidationError(err.message, err);
-          throw err;
+          throw new ValidationError(String(err), err);
         }
       } else {
         value = coerce(value, schema.type, long);
@@ -125,16 +125,14 @@ export function resolveOptions(
  * @param type - The target type declared in the option schema.
  * @param name - The long option name, used in error messages.
  * @returns The coerced value.
- * @throws {InvalidOptionError} If numeric coercion results in `NaN`.
- */
-/**
  * Converts a value to a finite number, returning null for empty/blank strings
- * or non-numeric input so callers can reject them instead of silently producing 0.
+ * or non-finite/non-numeric input so callers can reject them instead of
+ * silently producing 0 or accepting Infinity.
  */
 function toNumber(value: unknown): number | null {
   if (typeof value === "string" && value.trim() === "") return null;
   const num = Number(value);
-  return Number.isNaN(num) ? null : num;
+  return Number.isFinite(num) ? num : null;
 }
 
 function coerce(value: unknown, type: string | undefined, name: string): unknown {

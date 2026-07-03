@@ -2,6 +2,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { PromptCancelError } from "../src/errors.js";
 import type { Choice, PromptBaseOptions, SelectChoice, TextOptions } from "../src/index.js";
+import { resetColorEnabled } from "../src/output/color.js";
 
 function createPromptStreams() {
   const stdin = new PassThrough();
@@ -65,6 +66,31 @@ describe("prompt", () => {
 
     await expect(promise).resolves.toBe("");
     expect(streams.getOutput()).toContain("Jane");
+  });
+
+  it("does not emit ANSI color when a custom stdout is non-TTY", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const originalEnv = { ...process.env };
+    resetColorEnabled();
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+
+    try {
+      const promise = prompt.text("Name", {
+        stdin: streams.stdin,
+        stdout: streams.stdout,
+        required: false,
+      });
+      streams.stdin.end("\n");
+
+      await expect(promise).resolves.toBe("");
+      expect(streams.getOutput()).not.toContain("\x1b[32m");
+      expect(streams.getOutput()).not.toContain("\x1b[1m");
+    } finally {
+      resetColorEnabled();
+      process.env = originalEnv;
+    }
   });
 
   it("re-prompts text until validation succeeds", async () => {
@@ -142,6 +168,20 @@ describe("prompt", () => {
     expect(streams.getOutput()).toContain("Select at most 2 items");
   });
 
+  it("multiselect rejects partially numeric tokens", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.multiselect("Pick", ["a", "b", "c"], {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    feedLines(streams.stdin, ["1,2x", "1,2"]);
+
+    await expect(promise).resolves.toEqual(["a", "b"]);
+    expect(streams.getOutput()).toContain("Please enter valid numbers");
+  });
+
   it("password resolves input and does not write the password in clear text", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
@@ -154,6 +194,26 @@ describe("prompt", () => {
 
     await expect(promise).resolves.toBe("secret");
     expect(streams.getOutput()).not.toContain("secret");
+  });
+
+  it("password renders the prompt as readline query while masking typed input", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+
+    const promise = prompt.password("Password", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    streams.stdin.end("s\n");
+
+    await expect(promise).resolves.toBe("s");
+    expect(streams.getOutput()).toContain("Password");
+    expect(streams.getOutput()).not.toContain("s\n");
+  });
+
+  it("password masks wide characters with one asterisk per character", async () => {
+    const { maskInput } = await import("../src/output/prompt.js");
+    expect(maskInput("界")).toBe("*");
   });
 
   it("password does not replace the output stream's write reference", async () => {
@@ -297,13 +357,12 @@ describe("prompt", () => {
     expect(streams.getOutput()).toContain("[default]");
   });
 
-  it("maskInput masks emoji to the correct visible width", async () => {
+  it("maskInput masks emoji by character count rather than visible width", async () => {
     const { maskInput } = await import("../src/output/prompt.js");
-    const { stringWidth } = await import("../src/output/color.js");
 
     const input = "a😀b";
     const masked = maskInput(input);
-    expect(stringWidth(masked)).toBe(stringWidth(input));
+    expect(masked).toBe("***");
     expect(masked).not.toContain("a");
     expect(masked).not.toContain("b");
     expect(masked).not.toContain("😀");
