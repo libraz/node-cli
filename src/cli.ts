@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Writable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { CommandBuilder } from "./command/builder.js";
 import { CommandRegistry } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
@@ -23,6 +23,14 @@ export interface PluginContext {
   catch: (handler: (input: string, ctx: CatchContext) => void | Promise<void>) => void;
 }
 
+/** Streams and cancellation supplied to a programmatic execution. */
+export interface ExecOptions {
+  stdin?: Readable | null;
+  stdout?: Writable;
+  stderr?: Writable;
+  signal?: AbortSignal;
+}
+
 /**
  * Main CLI application class that manages command registration,
  * routing, and execution in both direct and interactive shell modes.
@@ -38,8 +46,11 @@ export class CLI {
   private bannerStr?: string;
   private historyFile: string;
   private historySize: number;
+  private historyFilterFn?: (line: string) => string | null;
   private started = false;
   private readonly pendingPlugins: Promise<void>[] = [];
+  private pluginInitialization?: Promise<void>;
+  private pluginInitializationError?: unknown;
 
   /**
    * Creates a new CLI instance.
@@ -53,6 +64,7 @@ export class CLI {
     this.bannerStr = options.banner;
     this.historyFile = options.historyFile ?? join(homedir(), `.${this.name}_history`);
     this.historySize = options.historySize ?? 1000;
+    this.historyFilterFn = options.historyFilter;
 
     this.registry = new CommandRegistry();
     this.router = new CommandRouter(this.registry);
@@ -124,6 +136,15 @@ export class CLI {
   }
 
   /**
+   * Sets a filter that can redact or omit lines before shell history is saved.
+   * Return `null` to omit a line entirely.
+   */
+  historyFilter(filter: (line: string) => string | null): this {
+    this.historyFilterFn = filter;
+    return this;
+  }
+
+  /**
    * Registers an event listener for a lifecycle event.
    * @param event - The event name (e.g., "beforeExecute", "afterExecute", "commandError", "exit").
    * @param handler - The handler function.
@@ -161,6 +182,7 @@ export class CLI {
    * @returns The CLI instance for method chaining.
    */
   use(plugin: (ctx: PluginContext) => void | Promise<void>): this {
+    if (this.pluginInitializationError !== undefined) throw this.pluginInitializationError;
     const context: PluginContext = {
       command: (definition: string) => this.command(definition),
       on: <K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]) => {
@@ -192,27 +214,36 @@ export class CLI {
    * async plugin registration completes before any command runs.
    */
   private async drainPendingPlugins(): Promise<void> {
-    if (this.pendingPlugins.length > 0) {
-      const pending = this.pendingPlugins.splice(0, this.pendingPlugins.length);
-      // Use allSettled so every plugin is awaited even if one rejects; then
-      // re-throw the first failure so the caller (start/exec) sees it.
-      const results = await Promise.allSettled(pending);
-      const failure = results.find((r) => r.status === "rejected");
-      if (failure) {
-        throw (failure as PromiseRejectedResult).reason;
-      }
+    if (this.pluginInitializationError !== undefined) throw this.pluginInitializationError;
+    if (!this.pluginInitialization) {
+      this.pluginInitialization = (async () => {
+        while (this.pendingPlugins.length > 0) {
+          const pending = this.pendingPlugins.splice(0, this.pendingPlugins.length);
+          const results = await Promise.allSettled(pending);
+          const failure = results.find((result) => result.status === "rejected");
+          if (failure) throw (failure as PromiseRejectedResult).reason;
+        }
+      })()
+        .catch((error) => {
+          this.pluginInitializationError = error;
+          throw error;
+        })
+        .finally(() => {
+          if (this.pluginInitializationError === undefined) this.pluginInitialization = undefined;
+        });
     }
+    await this.pluginInitialization;
   }
 
   /**
    * Programmatically executes a command as if typed by the user.
    * @param input - The command string to execute.
-   * @param options - Optional streams for stdout/stderr.
+   * @param options - Optional input/output streams and cancellation signal.
    */
-  async exec(input: string, options: { stdout?: Writable; stderr?: Writable } = {}): Promise<void> {
+  async exec(input: string, options: ExecOptions = {}): Promise<void> {
     await this.drainPendingPlugins();
-    const { stdout = process.stdout, stderr = process.stderr } = options;
-    await this.router.execute(input, { stdout, stderr });
+    const { stdin = null, stdout = process.stdout, stderr = process.stderr, signal } = options;
+    await this.router.execute(input, { stdin, stdout, stderr, signal });
   }
 
   /**
@@ -226,8 +257,16 @@ export class CLI {
     }
     this.started = true;
 
-    // Await any async plugins before running.
-    await this.drainPendingPlugins();
+    // Await any async plugins before running and report initialization failures
+    // through the same user-facing boundary as command failures.
+    try {
+      await this.drainPendingPlugins();
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      process.stderr.write(`Error: ${message}\n`);
+      process.exitCode = err instanceof CLIError ? err.exitCode : 1;
+      return;
+    }
 
     const args = argv ?? process.argv.slice(2);
 
@@ -247,7 +286,7 @@ export class CLI {
         process.stderr.write(`Error: ${message}\n`);
         process.exitCode = err instanceof CLIError ? err.exitCode : 1;
       }
-    } else if (process.stdin.isTTY) {
+    } else if (process.stdin.isTTY && process.stdout.isTTY) {
       // Interactive shell mode
       let banner: string;
       if (this.bannerStr !== undefined) {
@@ -265,13 +304,14 @@ export class CLI {
         banner,
         historyFile: this.historyFile,
         historySize: this.historySize,
+        historyFilter: this.historyFilterFn,
+        version: this.version,
       });
 
       await shell.start();
     } else {
-      // No arguments and stdin is not a terminal (e.g. piped or redirected):
-      // starting an interactive REPL would hang waiting for keystrokes that will
-      // never come, so print the help index instead.
+      // No arguments and either standard stream is not a terminal (e.g. piped
+      // input or redirected output): avoid an interactive REPL and print help.
       process.stdout.write(`${this.helpGenerator.generateIndex()}\n`);
     }
   }

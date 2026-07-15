@@ -31,6 +31,14 @@ describe("tokenize", () => {
     expect(tokenize("deploy   prod")).toEqual(["deploy", "prod"]);
   });
 
+  it("treats all unquoted whitespace as delimiters", () => {
+    expect(tokenize("deploy\tprod\n--force")).toEqual(["deploy", "prod", "--force"]);
+  });
+
+  it("preserves empty quoted tokens", () => {
+    expect(tokenize(`echo "" '' tail`)).toEqual(["echo", "", "", "tail"]);
+  });
+
   it("returns empty array for empty string", () => {
     expect(tokenize("")).toEqual([]);
   });
@@ -215,6 +223,27 @@ describe("parse", () => {
     expect(result.commandPath).toEqual(["deploy"]);
     expect(result.args.env).toBe("prod");
     expect(result.options.force).toBe(true);
+    expect(result.rawArgv).toEqual(["deploy", "prod", "--force"]);
+  });
+
+  it("stores reserved property names without changing record prototypes", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "set <__proto__>")
+      .option("--constructor <value>", { required: true })
+      .action(() => {});
+    const result = parse("set safe --constructor value", registry);
+    expect(Object.getPrototypeOf(result.args)).toBeNull();
+    expect(Object.getPrototypeOf(result.options)).toBeNull();
+    expect(Reflect.get(result.args, "__proto__")).toBe("safe");
+    expect(result.options.constructor).toBe("value");
+  });
+
+  it("distinguishes implicit help from a command-defined help option", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "custom").option("--help", { type: "boolean" }).action(() => {});
+    expect(parse("custom --help", registry)).toMatchObject({ builtInHelp: false });
+    new CommandBuilder(registry, "implicit").action(() => {});
+    expect(parse("implicit --help", registry)).toMatchObject({ builtInHelp: true });
   });
 
   it("throws on unknown long options", () => {

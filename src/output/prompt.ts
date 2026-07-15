@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { type Readable, Writable } from "node:stream";
 import { PromptCancelError } from "../errors.js";
-import { type color as c, createColorizer, splitAnsi } from "./color.js";
+import { type color as c, createColorizer, splitAnsi, splitGraphemes } from "./color.js";
 
 // ── Types ──
 
@@ -308,15 +308,26 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
   const hint = defaultValue ? col.dim(" (Y/n)") : col.dim(" (y/N)");
 
   try {
-    const answer = await ask(
-      rl,
-      `${col.green(prefix)} ${col.bold(message)}${hint} `,
-      signal,
-      isClosed,
-    );
-    const trimmed = answer.trim().toLowerCase();
-    if (trimmed === "") return defaultValue;
-    return trimmed === "y" || trimmed === "yes";
+    while (true) {
+      const answer = await ask(
+        rl,
+        `${col.green(prefix)} ${col.bold(message)}${hint} `,
+        signal,
+        isClosed,
+      );
+      const trimmed = answer.trim().toLowerCase();
+      const value = trimmed === "" ? defaultValue : trimmed === "y" || trimmed === "yes";
+      if (options.validate) {
+        try {
+          options.validate(value);
+        } catch (err) {
+          const validationMessage = err instanceof Error ? err.message : String(err);
+          stdout.write(`${col.red("✖")} ${validationMessage}\n`);
+          continue;
+        }
+      }
+      return value;
+    }
   } finally {
     dispose();
   }
@@ -460,17 +471,17 @@ async function multiselect<T = string>(
 
       // Deduplicate selected indices so min/max count distinct items.
       let indices: number[];
-      if (trimmed === "" && defaultIndexes.size > 0) {
+      let numericInputValid = true;
+      if (trimmed === "") {
         indices = [...defaultIndexes];
       } else {
         const tokens = trimmed.split(",").map((s) => s.trim());
-        const nums = tokens.every((token) => /^\d+$/.test(token))
-          ? tokens.map((token) => Number.parseInt(token, 10))
-          : [];
+        numericInputValid = tokens.every((token) => /^\d+$/.test(token));
+        const nums = numericInputValid ? tokens.map((token) => Number.parseInt(token, 10)) : [];
         indices = [...new Set(nums.map((n) => n - 1))];
       }
 
-      const valid = indices.length > 0 && indices.every((i) => i >= 0 && i < normalized.length);
+      const valid = numericInputValid && indices.every((i) => i >= 0 && i < normalized.length);
       if (!valid) {
         stdout.write(
           `${col.red("✖")} Please enter valid numbers between 1 and ${normalized.length}\n`,
@@ -512,9 +523,9 @@ async function multiselect<T = string>(
 /**
  * Masks a chunk of readline echo output: ANSI escape sequences and line breaks
  * pass through unchanged, while every other run of visible characters is
- * replaced with one asterisk per input character. A wide character (e.g. an
- * emoji) is still masked with a single asterisk, so the masked output does not
- * reveal character display width.
+ * replaced with one asterisk per grapheme. A wide or multi-code-point grapheme
+ * (e.g. an emoji with a skin-tone modifier) is still masked with one asterisk,
+ * so the masked output does not reveal its display width or scalar count.
  *
  * @param chunk - The raw output chunk readline is about to echo.
  * @returns The masked chunk.
@@ -531,12 +542,12 @@ export function maskInput(chunk: string): string {
       continue;
     }
 
-    // Within a plain-text run, mask each run of visible characters with as many
-    // asterisks as its visual width, while passing line breaks through unchanged.
+    // Within a plain-text run, mask each visible grapheme with one asterisk,
+    // while passing line breaks through unchanged.
     let visible = "";
     const flushVisible = () => {
       if (visible !== "") {
-        result += "*".repeat([...visible].length);
+        result += "*".repeat(splitGraphemes(visible).length);
         visible = "";
       }
     };
@@ -616,7 +627,7 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
         pendingPromptOutput = "";
       }
 
-      const value = answer.trim();
+      const value = answer;
 
       if (required && value === "") {
         stdout.write(`${col.red("✖")} Value is required\n`);

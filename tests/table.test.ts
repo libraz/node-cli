@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { color, resetColorEnabled, setColorEnabled, stripAnsi } from "../src/output/color.js";
+import {
+  color,
+  resetColorEnabled,
+  setColorEnabled,
+  stringWidth,
+  stripAnsi,
+} from "../src/output/color.js";
 import { table } from "../src/output/table.js";
 
 describe("table", () => {
@@ -80,6 +86,10 @@ describe("table", () => {
 
   it("returns empty string for empty data", () => {
     expect(table([])).toBe("");
+  });
+
+  it("returns empty string for a header-only array", () => {
+    expect(table([["Name", "Role"]], { border: "single" })).toBe("");
   });
 
   it("handles header: false for array data", () => {
@@ -315,6 +325,25 @@ describe("table", () => {
     // All bordered lines must share the same display width (no overflow).
     const widths = new Set(lines.map((l) => l.length));
     expect(widths.size).toBe(1);
+  });
+
+  it("normalizes ragged array rows to the widest row", () => {
+    const result = table([["A"], ["one"], ["two", "extra"]], { border: "single" });
+    const widths = new Set(result.split("\n").map((line) => stringWidth(line)));
+    expect(widths.size).toBe(1);
+    expect(result).toContain("extra");
+  });
+
+  it("never lets a wide truncation marker exceed maxWidth", () => {
+    const result = table([{ name: "abcdef" }], {
+      columns: ["name"],
+      maxWidth: { name: 1 },
+      truncate: "...",
+      border: "single",
+    });
+    const dataLine = result.split("\n").find((line) => line.includes("."));
+    expect(dataLine).toBeDefined();
+    expect(stripAnsi(dataLine ?? "")).not.toContain("...");
   });
 
   it("colAligns takes precedence over align", () => {

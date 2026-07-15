@@ -81,6 +81,21 @@ describe("CommandRouter", () => {
     expect(stdout.getOutput()).toContain("Deploy app");
   });
 
+  it("passes a command-defined boolean --help option to the action", async () => {
+    const { registry, router } = setup();
+    const action = vi.fn();
+    new CommandBuilder(registry, "custom").option("--help", { type: "boolean" }).action(action);
+    await router.execute("custom --help");
+    expect(action).toHaveBeenCalledOnce();
+    expect(action.mock.calls[0][0].options.help).toBe(true);
+  });
+
+  it("rejects an unknown child instead of showing successful group help", async () => {
+    const { registry, router } = setup();
+    new CommandBuilder(registry, "user create").action(() => {});
+    await expect(router.execute("user typo")).rejects.toThrow(ExtraArgumentError);
+  });
+
   it("resolves options with defaults", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
@@ -105,5 +120,85 @@ describe("CommandRouter", () => {
     const mockShell = {} as unknown as Shell;
     await router.execute("test", { shell: mockShell });
     expect(action.mock.calls[0][0].shell).toBe(mockShell);
+  });
+
+  it("aborts every active command before isolating cancel handler failures", async () => {
+    const { registry, router } = setup();
+    const aborted: string[] = [];
+    const cancelled: string[] = [];
+
+    for (const name of ["first", "second"]) {
+      new CommandBuilder(registry, name)
+        .cancel(() => {
+          cancelled.push(name);
+          if (name === "first") throw new Error("broken cleanup");
+        })
+        .action(
+          (ctx) =>
+            new Promise<void>((resolve) => {
+              ctx.signal.addEventListener(
+                "abort",
+                () => {
+                  aborted.push(name);
+                  resolve();
+                },
+                { once: true },
+              );
+            }),
+        );
+    }
+
+    const runs = [router.execute("first"), router.execute("second")];
+    await Promise.resolve();
+    expect(router.triggerCancel()).toBe(true);
+    await Promise.all(runs);
+    expect(aborted.sort()).toEqual(["first", "second"]);
+    expect(cancelled.sort()).toEqual(["first", "second"]);
+  });
+
+  it("makes validation and lifecycle hooks cancellable", async () => {
+    const { registry, router } = setup();
+    let validationAborted = false;
+    new CommandBuilder(registry, "validate-cancel")
+      .validate(
+        (ctx) =>
+          new Promise<void>((resolve) => {
+            ctx.signal.addEventListener(
+              "abort",
+              () => {
+                validationAborted = true;
+                resolve();
+              },
+              { once: true },
+            );
+          }),
+      )
+      .action(() => {});
+
+    const run = router.execute("validate-cancel");
+    await Promise.resolve();
+    expect(router.triggerCancel()).toBe(true);
+    await run;
+    expect(validationAborted).toBe(true);
+  });
+
+  it("invokes each cancel handler at most once during cooperative cleanup", async () => {
+    const { registry, router } = setup();
+    const cancel = vi.fn();
+    let finish: (() => void) | undefined;
+    new CommandBuilder(registry, "slow").cancel(cancel).action(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+
+    const run = router.execute("slow");
+    await Promise.resolve();
+    expect(router.triggerCancel()).toBe(true);
+    expect(router.triggerCancel()).toBe(false);
+    finish?.();
+    await run;
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });

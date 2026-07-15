@@ -36,6 +36,17 @@ describe("mode command", () => {
     expect(config.message).toBe("Entering SQL mode");
   });
 
+  it("ModeConfig supports isolated completion and session history policies", () => {
+    const config: ModeConfig = {
+      prompt: "sql> ",
+      action: () => {},
+      completer: (line) => [["SELECT"], line],
+      history: "session",
+    };
+    expect(config.completer?.("S")).toEqual([["SELECT"], "S"]);
+    expect(config.history).toBe("session");
+  });
+
   it("Shell has enterMode, exitMode, and setPrompt methods", () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
@@ -208,6 +219,60 @@ describe("mode command", () => {
     }
 
     expect(stderr.getOutput()).toBe("");
+  });
+
+  it("clears partial input on Ctrl+C before accepting the next command", async () => {
+    const originalStdin = process.stdin;
+    const originalStdout = process.stdout;
+    const originalStderr = process.stderr;
+    const stdin = new PassThrough() as PassThrough & { isTTY: true };
+    stdin.isTTY = true;
+    const stdout = createMockTTY();
+    const stderr = createMockTTY();
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const fresh = vi.fn();
+    const staleFresh = vi.fn();
+    new CommandBuilder(registry, "fresh").action(fresh);
+    new CommandBuilder(registry, "stalefresh").action(staleFresh);
+
+    const shell = new Shell({
+      router,
+      registry,
+      prompt: "app> ",
+      historyFile: `/tmp/node-cli-line-cancel-${process.pid}-${Date.now()}.history`,
+    });
+
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
+    Object.defineProperty(process, "stdout", { configurable: true, value: stdout });
+    Object.defineProperty(process, "stderr", { configurable: true, value: stderr });
+
+    try {
+      const running = shell.start();
+      await vi.waitFor(() => expect((shell as unknown as { rl?: unknown }).rl).toBeDefined());
+      stdin.write("stale");
+      await vi.waitFor(() =>
+        expect((shell as unknown as { rl?: { line: string } }).rl?.line).toBe("stale"),
+      );
+      (
+        shell as unknown as {
+          rl?: { emit: (event: string) => boolean; line: string };
+        }
+      ).rl?.emit("SIGINT");
+      await vi.waitFor(() =>
+        expect((shell as unknown as { rl?: { line: string } }).rl?.line).toBe(""),
+      );
+      stdin.end("fresh\nquit\n");
+
+      await expect(running).resolves.toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "stdin", { configurable: true, value: originalStdin });
+      Object.defineProperty(process, "stdout", { configurable: true, value: originalStdout });
+      Object.defineProperty(process, "stderr", { configurable: true, value: originalStderr });
+    }
+
+    expect(fresh).toHaveBeenCalledOnce();
+    expect(staleFresh).not.toHaveBeenCalled();
   });
 
   it("routes SIGINT while a mode action is running", async () => {

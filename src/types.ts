@@ -147,6 +147,8 @@ export interface CommandContext {
   options: Record<string, unknown>;
   /** The original raw input string. */
   rawInput: string;
+  /** Exact argv elements for direct argv execution, when available. */
+  rawArgv?: string[];
   /** The resolved command path (e.g. ["git", "commit"]). */
   commandPath: string[];
   /** The interactive shell instance, or null if running non-interactively. */
@@ -159,7 +161,7 @@ export interface CommandContext {
    * both fire on the same cancellation, so a command may use either or both.
    */
   signal: AbortSignal;
-  /** Readable stream for standard input (available in piped commands). */
+  /** Readable stream supplied by the current execution surface, or null when none is available. */
   stdin: Readable | null;
   /** Writable stream for standard output. */
   stdout: Writable;
@@ -182,8 +184,10 @@ export interface CatchContext {
  * Context passed to a command's completion provider.
  */
 export interface CompletionContext {
-  /** The full input line being completed. */
+  /** The active pipeline segment being completed. */
   line: string;
+  /** The complete input line, including earlier pipeline segments. */
+  fullLine: string;
   /** The current word (token) under the cursor. */
   current: string;
   /** The resolved command path up to the current input. */
@@ -216,6 +220,11 @@ export interface CLIOptions {
   historyFile?: string;
   /** Maximum number of history entries to retain. */
   historySize?: number;
+  /**
+   * Redacts or rejects a line before it is persisted to shell history. Return
+   * `null` to omit sensitive commands entirely.
+   */
+  historyFilter?: (line: string) => string | null;
 }
 
 // ── Parse Result ──
@@ -234,6 +243,10 @@ export interface ParseResult {
   extraArgs?: string[];
   /** The original raw input string. */
   rawInput: string;
+  /** Exact argv elements when parsing an argv array; unlike `rawInput`, this is reversible. */
+  rawArgv?: string[];
+  /** True only when the parser supplied the implicit `--help`/`-h` flag. */
+  builtInHelp?: boolean;
   /** The matched command definition, if found. */
   command?: CommandDefinition;
 }

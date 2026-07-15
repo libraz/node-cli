@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLI } from "../src/cli.js";
 import { createMockStdout } from "./helpers.js";
 
 describe("plugin system", () => {
+  const originalExitCode = process.exitCode;
+
+  afterEach(() => {
+    process.exitCode = originalExitCode;
+    vi.restoreAllMocks();
+  });
   it("registers commands via plugin", async () => {
     const cli = new CLI();
     const stream = createMockStdout();
@@ -77,5 +83,79 @@ describe("plugin system", () => {
     // start with explicit argv triggers direct mode
     await cli.start(["async-cmd"]);
     expect(registered).toBe(true);
+  });
+
+  it("shares one initialization barrier across concurrent exec calls", async () => {
+    const cli = new CLI();
+    const stream = createMockStdout();
+    let release: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    cli.use(async (ctx) => {
+      await barrier;
+      ctx.command("ready").action((command) => command.stdout.write("ok"));
+    });
+
+    const first = cli.exec("ready", { stdout: stream, stderr: stream });
+    const second = cli.exec("ready", { stdout: stream, stderr: stream });
+    release();
+    await Promise.all([first, second]);
+    expect(stream.getOutput()).toBe("okok");
+  });
+
+  it("shares the initialization barrier between start and exec", async () => {
+    const cli = new CLI();
+    let release: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const action = vi.fn();
+    cli.use(async (ctx) => {
+      await barrier;
+      ctx.command("ready").action(action);
+    });
+
+    const direct = cli.start(["ready"]);
+    const embedded = cli.exec("ready");
+    release();
+    await Promise.all([direct, embedded]);
+    expect(action).toHaveBeenCalledTimes(2);
+  });
+
+  it("drains plugins registered while another plugin is initializing", async () => {
+    const cli = new CLI();
+    const stream = createMockStdout();
+    cli.use(async () => {
+      await Promise.resolve();
+      cli.use(async (ctx) => {
+        await Promise.resolve();
+        ctx.command("nested").action((command) => command.stdout.write("nested"));
+      });
+    });
+    await cli.exec("nested", { stdout: stream, stderr: stream });
+    expect(stream.getOutput()).toBe("nested");
+  });
+
+  it("keeps plugin initialization failures sticky", async () => {
+    const cli = new CLI();
+    const failure = new Error("plugin failed");
+    cli.use(async () => {
+      throw failure;
+    });
+    await expect(cli.exec("missing")).rejects.toBe(failure);
+    await expect(cli.exec("missing")).rejects.toBe(failure);
+    expect(() => cli.use(() => {})).toThrow(failure);
+  });
+
+  it("reports start initialization failures through stderr and exitCode", async () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const cli = new CLI();
+    cli.use(async () => {
+      throw new Error("startup plugin failed");
+    });
+    await expect(cli.start(["help"])).resolves.toBeUndefined();
+    expect(write).toHaveBeenCalledWith("Error: startup plugin failed\n");
+    expect(process.exitCode).toBe(1);
   });
 });

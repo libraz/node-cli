@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { Readable } from "node:stream";
+import { describe, expect, it, vi } from "vitest";
 import { CLI, ExtraArgumentError, UnknownOptionError } from "../src/index.js";
 import { createMockStdout } from "./helpers.js";
 
@@ -67,5 +68,62 @@ describe("programmatic exec", () => {
 
     await cli.exec("ping", { stdout: stream, stderr: stream });
     expect(events).toEqual(["before", "after"]);
+  });
+
+  it("injects stdin into programmatic commands", async () => {
+    const cli = new CLI();
+    const stream = createMockStdout();
+    cli.command("read").action(async (ctx) => {
+      let input = "";
+      for await (const chunk of ctx.stdin ?? []) input += chunk.toString();
+      ctx.stdout.write(input.toUpperCase());
+    });
+    await cli.exec("read", {
+      stdin: Readable.from(["hello"]),
+      stdout: stream,
+      stderr: stream,
+    });
+    expect(stream.getOutput()).toBe("HELLO");
+  });
+
+  it("links an external AbortSignal and removes its listener", async () => {
+    const cli = new CLI();
+    const controller = new AbortController();
+    const add = vi.spyOn(controller.signal, "addEventListener");
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const cancel = vi.fn();
+    let actionStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      actionStarted = resolve;
+    });
+    cli
+      .command("wait")
+      .cancel(cancel)
+      .action(
+        (ctx) =>
+          new Promise<void>((resolve) => {
+            actionStarted();
+            ctx.signal.addEventListener("abort", () => resolve());
+          }),
+      );
+    const execution = cli.exec("wait", { signal: controller.signal });
+    await started;
+    controller.abort("test");
+    await execution;
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(add).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("passes an already-aborted signal to the action", async () => {
+    const cli = new CLI();
+    const controller = new AbortController();
+    controller.abort();
+    let aborted = false;
+    cli.command("check").action((ctx) => {
+      aborted = ctx.signal.aborted;
+    });
+    await cli.exec("check", { signal: controller.signal });
+    expect(aborted).toBe(true);
   });
 });

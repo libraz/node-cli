@@ -104,6 +104,22 @@ export class CommandBuilder {
       }
     }
 
+    if (!long) throw new Error(`Invalid option flags: missing option name in "${flags}"`);
+    for (const alias of mergedAliases) {
+      if (alias.length !== 1) {
+        throw new Error(`Option alias "-${alias}" must be exactly one character`);
+      }
+    }
+
+    const candidateNames = new Set([long, ...mergedAliases]);
+    for (const existing of this.definition.options.values()) {
+      for (const existingName of [existing.long, ...existing.aliases]) {
+        if (candidateNames.has(existingName)) {
+          throw new Error(`Option name or alias "${existingName}" is already registered`);
+        }
+      }
+    }
+
     this.definition.options.set(long, {
       long,
       aliases: mergedAliases,

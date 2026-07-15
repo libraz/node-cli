@@ -209,13 +209,16 @@ export function createColorizer(stream: Writable): Record<string, ColorFn> {
  * @returns The formatted string with ANSI escape codes applied.
  */
 export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
-  const raw = strings.reduce(
-    (acc, str, i) => acc + str + (i < values.length ? String(values[i]) : ""),
-    "",
-  );
+  const valueStrings = values.map(String);
+  const allInput = [...strings, ...valueStrings];
+  let marker = "\u{f0000}";
+  while (allInput.some((part) => part.includes(marker))) marker += "\u{f0000}";
+  const tokens = valueStrings.map((_, index) => `${marker}${index}${marker}`);
+  const raw = strings.reduce((acc, str, i) => acc + str + (i < tokens.length ? tokens[i] : ""), "");
 
   const enabled = isColorEnabled();
-  const formatInline = (text: string): string => {
+  const formatInline = (text: string, nesting = 0): string => {
+    if (nesting > 64) throw new Error("Inline color markup nesting exceeds 64 levels");
     let result = "";
     for (let i = 0; i < text.length; i++) {
       if (text[i] !== "{") {
@@ -249,14 +252,18 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
       }
 
       const codes = names.map((name) => styles[name]);
-      const inner = formatInline(text.slice(styleEnd + 1, end));
+      const inner = formatInline(text.slice(styleEnd + 1, end), nesting + 1);
       result += applyStyle(inner, codes, enabled);
       i = end;
     }
     return result;
   };
 
-  return formatInline(raw);
+  let result = formatInline(raw);
+  for (let index = 0; index < tokens.length; index++) {
+    result = result.replaceAll(tokens[index], valueStrings[index]);
+  }
+  return result;
 }
 
 // ── Strip ANSI ──
@@ -264,7 +271,7 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
 /** Regular expression matching ANSI escape sequences (CSI and OSC). */
 const ansiRegex =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence matching requires control characters
-  /[\x1b\x9b][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\x07)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+  /[\x1b\x9b][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?(?:\x07|\x1b\\))|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 
 /**
  * Remove all ANSI escape sequences from the given string.
@@ -327,43 +334,68 @@ export function splitAnsi(text: string): AnsiSegment[] {
  */
 export function stringWidth(text: string): number {
   const stripped = stripAnsi(text);
-  const chars = [...stripped];
-  let width = 0;
-  for (let i = 0; i < chars.length; i++) {
-    const code = chars[i].codePointAt(0) as number;
-    // Collapse a ZWJ sequence into one wide grapheme. Variation selectors and
-    // other zero-width marks may appear between a base scalar and the joiner.
-    let joinerIndex = i + 1;
-    while (
-      joinerIndex < chars.length &&
-      isZeroWidth(chars[joinerIndex].codePointAt(0) as number) &&
-      chars[joinerIndex].codePointAt(0) !== 0x200d
-    ) {
-      joinerIndex++;
+  return splitGraphemes(stripped).reduce((width, grapheme) => {
+    let graphemeWidth = 0;
+    for (const char of grapheme) {
+      graphemeWidth = Math.max(graphemeWidth, getCharWidth(char.codePointAt(0) as number));
     }
-    if (joinerIndex < chars.length && chars[joinerIndex].codePointAt(0) === 0x200d) {
-      width += 2;
-      // Skip the remaining joined scalars and their joiners.
-      i = joinerIndex + 1;
-      while (i < chars.length) {
-        let nextJoiner = i + 1;
-        while (
-          nextJoiner < chars.length &&
-          isZeroWidth(chars[nextJoiner].codePointAt(0) as number) &&
-          chars[nextJoiner].codePointAt(0) !== 0x200d
-        ) {
-          nextJoiner++;
-        }
-        if (nextJoiner >= chars.length || chars[nextJoiner].codePointAt(0) !== 0x200d) {
-          break;
-        }
-        i = nextJoiner + 1;
+    return width + graphemeWidth;
+  }, 0);
+}
+
+/** Splits visible text into user-perceived grapheme clusters. */
+export function splitGraphemes(text: string): string[] {
+  if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
+    return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map(
+      (segment) => segment.segment,
+    );
+  }
+  return [...text];
+}
+
+/** Truncates terminal text without splitting graphemes or leaking active ANSI state. */
+export function truncateAnsi(text: string, maxWidth: number, marker = "…"): string {
+  if (maxWidth <= 0) return "";
+  if (stringWidth(text) <= maxWidth) return text;
+
+  const takePlain = (value: string, widthLimit: number) => {
+    let width = 0;
+    let result = "";
+    for (const grapheme of splitGraphemes(value)) {
+      const nextWidth = stringWidth(grapheme);
+      if (width + nextWidth > widthLimit) break;
+      result += grapheme;
+      width += nextWidth;
+    }
+    return result;
+  };
+
+  const fittedMarker = takePlain(stripAnsi(marker), maxWidth);
+  const contentLimit = maxWidth - stringWidth(fittedMarker);
+  let visibleWidth = 0;
+  let result = "";
+  let hasSgr = false;
+  let hasOpenHyperlink = false;
+  outer: for (const segment of splitAnsi(text)) {
+    if (segment.ansi) {
+      result += segment.text;
+      if (segment.text.startsWith("\x1b[") && segment.text.endsWith("m")) hasSgr = true;
+      if (segment.text.startsWith("\x1b]8;;")) {
+        hasOpenHyperlink = !["\x1b]8;;\x07", "\x1b]8;;\x1b\\"].includes(segment.text);
       }
       continue;
     }
-    width += getCharWidth(code);
+    for (const grapheme of splitGraphemes(segment.text)) {
+      const nextWidth = stringWidth(grapheme);
+      if (visibleWidth + nextWidth > contentLimit) break outer;
+      result += grapheme;
+      visibleWidth += nextWidth;
+    }
   }
-  return width;
+  result += fittedMarker;
+  if (hasOpenHyperlink) result += "\x1b]8;;\x1b\\";
+  if (hasSgr) result += "\x1b[0m";
+  return result;
 }
 
 /**

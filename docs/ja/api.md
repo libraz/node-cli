@@ -25,6 +25,7 @@ new CLI(options?: CLIOptions)
 | `options.banner` | `string` | 自動生成 | インタラクティブシェル起動時に表示するバナーテキスト。`""` で抑制 |
 | `options.historyFile` | `string` | `~/.{name}_history` | 履歴ファイルパス |
 | `options.historySize` | `number` | `1000` | 最大履歴エントリ数 |
+| `options.historyFilter` | `(line: string) => string \| null` | — | 履歴行を編集し、`null` なら保存しない |
 
 ### メソッド
 
@@ -55,6 +56,10 @@ cli.command("deploy <env> [region]")
 #### `history(filePath: string): this`
 
 履歴ファイルパスを設定。
+
+#### `historyFilter(filter: (line: string) => string | null): this`
+
+private な履歴ファイルへ書く前にコマンドを編集または除外します。資格情報などの秘密を含むコマンドは `null` を返して保存対象から外せます。
 
 #### `on<K>(event: K, handler: CLIEventMap[K]): this`
 
@@ -95,12 +100,14 @@ use(plugin: (ctx: PluginContext) => void | Promise<void>): this
 | パラメータ | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `input` | `string` | — | コマンド文字列 |
+| `options.stdin` | `Readable \| null` | `null` | `ctx.stdin` として公開する入力ストリーム |
 | `options.stdout` | `Writable` | `process.stdout` | 出力ストリーム |
 | `options.stderr` | `Writable` | `process.stderr` | エラーストリーム |
+| `options.signal` | `AbortSignal` | — | `ctx.signal` と `.cancel()` に連結する外部キャンセルシグナル |
 
 #### `start(argv?: string[]): Promise<void>`
 
-CLI を開始。`argv` が提供された場合 (または `process.argv` に引数がある場合) はダイレクトモードで実行。それ以外はインタラクティブシェルを起動。
+CLI を開始。`argv` が提供された場合 (または `process.argv` に引数がある場合) はダイレクトモードで実行。引数がない場合、stdin と stdout の両方が TTY のときだけインタラクティブシェルを起動し、それ以外はヘルプ一覧を出力。
 
 ---
 
@@ -171,7 +178,8 @@ type Action = (ctx: CommandContext) => void | Promise<void>
 type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>
 
 interface CompletionContext {
-  line: string;           // 入力行全体
+  line: string;           // 補完対象のパイプライン区間
+  fullLine: string;       // 以前の区間も含む入力行全体
   current: string;        // 補完中の単語
   commandPath: string[];  // 解決済みコマンドパス
   args: Record<string, unknown>;
@@ -219,6 +227,7 @@ interface CommandContext {
   args: Record<string, unknown>;
   options: Record<string, unknown>;
   rawInput: string;
+  rawArgv?: string[];
   commandPath: string[];
   shell: Shell | null;
   stdin: Readable | null;
@@ -233,12 +242,24 @@ interface CommandContext {
 | `args` | 名前をキーとするパース済み位置引数 |
 | `options` | ロング名をキーとするパース済みオプション |
 | `rawInput` | 元の入力文字列 |
+| `rawArgv` | 配列・ダイレクト実行時の正確な argv 要素。空文字や空白を含む引数も保持。文字列入力では未定義 |
 | `commandPath` | 解決されたコマンドパス (例: `["db", "migrate"]`) |
 | `shell` | インタラクティブモードの Shell インスタンス、ダイレクトモードでは `null` |
-| `stdin` | Readable ストリーム (パイプコマンドで利用可能) |
+| `stdin` | 実行サーフェスが選択した入力ストリーム。利用できない場合は `null` |
 | `stdout` | 出力用 Writable ストリーム |
 | `stderr` | エラー用 Writable ストリーム |
 | `signal` | コマンドのキャンセル (SIGINT) で abort される `AbortSignal`。abort 対応 API や `cancel()` と併用 |
+
+`rawInput` は文字列実行では元のコマンド文字列です。配列・ダイレクト実行では表示用に再構成されるため、引数境界を正確に扱う場合は `rawArgv` を使用してください。
+
+### 実行サーフェス別の標準入力
+
+| サーフェス | `ctx.stdin` |
+|-----------|-------------|
+| `start(argv)` のダイレクトコマンド | `process.stdin` |
+| パイプライン | 第1 stage: 呼び出し元サーフェスの入力、後続 stage: 直前 stage の出力 |
+| インタラクティブ REPL | `null` |
+| `exec(input)` | `options.stdin`。デフォルトは `null` |
 
 ---
 
@@ -319,10 +340,14 @@ interface CLIEventMap {
 ```typescript
 interface ModeConfig {
   prompt: string;
-  action: (input: string, ctx: { stdout: WritableStream; stderr: WritableStream }) => void | Promise<void>;
+  action: (input: string, ctx: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream }) => void | Promise<void>;
   message?: string;
+  completer?: (line: string) => [string[], string] | Promise<[string[], string]>;
+  history?: "session" | "none";
 }
 ```
+
+`completer` を指定しない限りモード内の補完は無効です。モード履歴は親 REPL とディスク履歴から分離され、既定の `"session"` はメモリ内だけに保持し、`"none"` は履歴を無効にします。
 
 ---
 
@@ -579,7 +604,7 @@ function prompt.multiselect<T>(
 | オプション | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `default` | `T[]` | — | 事前選択済みの値 |
-| `min` | `number` | — | 最小選択数 |
+| `min` | `number` | `0` | 最小選択数。省略時は Enter だけで空配列を返せる |
 | `max` | `number` | — | 最大選択数 |
 | `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
@@ -592,7 +617,7 @@ function prompt.multiselect<T>(
 function prompt.password(message: string, options?: PromptBaseOptions): Promise<string>
 ```
 
-入力はアスタリスクでマスクされます。
+入力はアスタリスクでマスクされ、先頭・末尾の空白も保持されます。
 
 | オプション | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
@@ -620,6 +645,7 @@ function logger(options?: LoggerOptions): Logger
 | `prefix` | `string` | — | 角括弧付きのプレフィックス |
 | `timestamp` | `boolean` | `false` | `HH:MM:SS` を表示 |
 | `stream` | `Writable` | `process.stderr` | 出力ストリーム |
+| `bufferLimit` | `number` | `1000` | backpressure 中に保持する最大行数。上限到達時は最も古い待機行を破棄 |
 
 ### Logger
 
@@ -637,6 +663,7 @@ function logger(options?: LoggerOptions): Logger
 |---------|------|
 | `setLevel(level: LogLevel)` | ランタイムで最小レベルを変更 |
 | `child(prefix: string): Logger` | ネストプレフィックスの子ロガーを作成 |
+| `flush(): Promise<void>` | logger 管理下の待機行がストリームへ渡されるまで待機 |
 
 ### LogLevel
 

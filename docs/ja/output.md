@@ -109,6 +109,8 @@ const data = [
 console.log(table(data, { header: true }));
 ```
 
+配列行は最も列数の多い行に合わせ、不足セルを空文字で補います。空のデータ配列とヘッダーだけの配列は空文字列を返します。
+
 ### オプション
 
 ```typescript
@@ -352,7 +354,9 @@ multi.stop();    // 全バーを停止
 
 ### TTY 検出
 
-プログレスバーとスピナーは TTY ストリームでのみレンダリングされます。非 TTY (パイプ出力、CI) では、すべての操作がサイレントに no-op となります。
+プログレスバーのアニメーションとスピナーのフレームは TTY ストリームでのみレンダリングされます。非 TTY（パイプ出力、CI）ではバーは出力せず、スピナーの `succeed()`、`fail()`、`warn()` だけが最終ステータスを1行出力します。`start()`、`update()`、`stop()` は出力しません。
+
+ラベルとカスタム進捗フォーマットは1行に正規化され、改行・タブ・その他の制御文字は空白へ置換されます。遅いストリームが backpressure 中の場合、中間フレームはまとめられ、最新の待機フレームだけを保持します。
 
 ## プロンプト
 
@@ -410,12 +414,20 @@ const features = await prompt.multiselect("有効にする機能:", [
 });
 ```
 
+`min` を省略した場合、Enter だけで0件を選択できます。1件以上を必須にする場合は `min: 1` を指定します。
+
 ### パスワード
 
 ```typescript
 const password = await prompt.password("パスワードを入力:");
 // 入力はアスタリスクでマスクされます
 ```
+
+パスワード値の先頭・末尾の空白は保持されます。既定の `required: true` で拒否されるのは完全な空文字列だけです。
+
+### 共通プロンプトオプション
+
+すべてのプロンプトは options object で `prefix`、`stdin`、`stdout`、`validate` を受け取ります。テキストとパスワードは `required`、confirm/select/multiselect は `default`、multiselect はさらに `min` と `max` を利用できます。
 
 ### キャンセル処理
 
@@ -459,8 +471,11 @@ const log = logger({
   prefix: "server",       // [server] プレフィックス
   timestamp: true,        // HH:MM:SS プレフィックス
   stream: process.stderr, // 出力ストリーム (デフォルト: stderr)
+  bufferLimit: 1000,      // backpressure 中に保持する最大行数
 });
 ```
+
+ストリームが backpressure を適用している間、logger は最大 `bufferLimit` 行を保持し、上限到達時は最も古い待機行を破棄します。`await log.flush()` で logger 管理下の待機行がストリームへ渡されるまで待機できます。`0` を指定すると backpressure 中の新しい行をすべて破棄します。
 
 ### printf スタイルのフォーマット
 

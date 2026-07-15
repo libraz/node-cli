@@ -26,6 +26,7 @@ export type CompletionResult = [string[], string];
  */
 export class ShellCompleter {
   private readonly registry: CommandRegistry;
+  private readonly hasVersion: boolean;
   private tabCount = 0;
   private lastLine = "";
 
@@ -33,8 +34,15 @@ export class ShellCompleter {
    * Creates a new ShellCompleter.
    * @param registry - The command registry used to look up commands and options.
    */
-  constructor(registry: CommandRegistry) {
+  constructor(registry: CommandRegistry, options: { hasVersion?: boolean } = {}) {
     this.registry = registry;
+    this.hasVersion = options.hasVersion ?? false;
+  }
+
+  /** Resets progressive completion state for a new readline prompt. */
+  reset(): void {
+    this.tabCount = 0;
+    this.lastLine = "";
   }
 
   /**
@@ -57,8 +65,8 @@ export class ShellCompleter {
     // mirroring how execution splits pipes — so `ls | gr<TAB>` completes `grep`,
     // not a candidate derived from the first stage.
     const segment = activePipeSegment(line);
-    const tokens = tokenize(segment);
-    const endsWithSpace = segment.endsWith(" ");
+    const tokens = this.tokenizeIncomplete(segment);
+    const endsWithSpace = /\s$/.test(segment);
 
     // Empty or just starting — show top-level commands (including aliases)
     if (tokens.length === 0 || (tokens.length === 1 && !endsWithSpace)) {
@@ -174,18 +182,24 @@ export class ShellCompleter {
       }
       const filterByPrefix = (candidates: string[]) =>
         current ? candidates.filter((v) => v.startsWith(current)) : candidates;
-      const result = command.completer({
-        line: segment,
-        current,
-        commandPath,
-        args: parsedArgs,
-        options: parsedOptions,
-        iteration: this.tabCount,
-      });
+      let result: ReturnType<NonNullable<CommandDefinition["completer"]>>;
+      try {
+        result = command.completer({
+          line: segment,
+          fullLine: line,
+          current,
+          commandPath,
+          args: parsedArgs,
+          options: parsedOptions,
+          iteration: this.tabCount,
+        });
+      } catch {
+        return [[], current];
+      }
       if (result instanceof Promise) {
-        return result.then(
-          (candidates) => [filterByPrefix(candidates), current] as CompletionResult,
-        );
+        return result
+          .then((candidates) => [filterByPrefix(candidates), current] as CompletionResult)
+          .catch(() => [[], current] as CompletionResult);
       }
       return [filterByPrefix(result), current];
     }
@@ -197,7 +211,8 @@ export class ShellCompleter {
    * Returns all top-level command names including aliases.
    */
   private getTopLevelNames(): string[] {
-    const names: string[] = [];
+    const names: string[] = ["--help", "-h"];
+    if (this.hasVersion) names.push("--version", "-V");
     const seen = new Set<string>();
     for (const cmd of this.registry.allTopLevel()) {
       if (!seen.has(cmd.name)) {
@@ -242,6 +257,10 @@ export class ShellCompleter {
       if (opt.schema.hidden) continue;
       const flag = `--${opt.long}`;
       if (flag.startsWith(prefix)) candidates.push(flag);
+      if (opt.schema.type === "boolean") {
+        const negated = `--no-${opt.long}`;
+        if (negated.startsWith(prefix)) candidates.push(negated);
+      }
       for (const alias of opt.aliases) {
         const shortFlag = `-${alias}`;
         if (shortFlag.startsWith(prefix)) candidates.push(shortFlag);
@@ -297,12 +316,19 @@ export class ShellCompleter {
         return [candidates, current];
       }
       // Function-based autocomplete
-      const result = autocomplete(current);
+      let result: ReturnType<Exclude<typeof autocomplete, string[]>>;
+      try {
+        result = autocomplete(current);
+      } catch {
+        return [[], current];
+      }
       if (result instanceof Promise) {
-        return result.then((candidates) => {
-          const filtered = candidates.filter((v) => v.startsWith(current));
-          return [filtered, current] as CompletionResult;
-        });
+        return result
+          .then((candidates) => {
+            const filtered = candidates.filter((v) => v.startsWith(current));
+            return [filtered, current] as CompletionResult;
+          })
+          .catch(() => [[], current] as CompletionResult);
       }
       const filtered = result.filter((v) => v.startsWith(current));
       return [filtered, current];
@@ -314,5 +340,20 @@ export class ShellCompleter {
     }
 
     return [[], current];
+  }
+
+  /** Tokenizes a line under active editing by synthetically closing its quote. */
+  private tokenizeIncomplete(line: string): string[] {
+    try {
+      return tokenize(line);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("Unclosed ")) return [];
+      const closer = error.message.includes("single") ? "'" : '"';
+      try {
+        return tokenize(`${line}${closer}`);
+      } catch {
+        return [];
+      }
+    }
   }
 }

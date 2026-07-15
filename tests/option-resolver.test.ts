@@ -95,6 +95,39 @@ describe("resolveOptions", () => {
     expect(resolveOptions({ token: "abcde" }, defs, dummyCtx).token).toBe("abcde");
   });
 
+  it("provides the complete canonical option set to cross-option validation", () => {
+    const defs = new Map([
+      [
+        "start",
+        makeDef("start", {
+          type: "number",
+          validate(value, ctx) {
+            if ((value as number) >= (ctx.options.end as number)) throw new Error("invalid range");
+          },
+        }),
+      ],
+      ["end", makeDef("end", { type: "number", default: 10 })],
+    ]);
+    const ctx = { options: {} } as CommandContext;
+    expect(resolveOptions({ start: "2" }, defs, ctx)).toMatchObject({ start: 2, end: 10 });
+    expect(() => resolveOptions({ start: "20", end: "30" }, defs, ctx)).not.toThrow();
+    expect(() => resolveOptions({ start: "20", end: "10" }, defs, ctx)).toThrow("invalid range");
+  });
+
+  it("normalizes non-Error custom validate failures", () => {
+    const defs = new Map([
+      [
+        "token",
+        makeDef("token", {
+          validate() {
+            throw "invalid token";
+          },
+        }),
+      ],
+    ]);
+    expect(() => resolveOptions({ token: "x" }, defs, dummyCtx)).toThrow(ValidationError);
+  });
+
   it("runs custom parse", () => {
     const defs = new Map([
       [

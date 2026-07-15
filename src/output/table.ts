@@ -1,4 +1,4 @@
-import { color as c, splitAnsi, stringWidth } from "./color.js";
+import { color as c, stringWidth, truncateAnsi } from "./color.js";
 
 /**
  * Custom border characters for table rendering.
@@ -301,12 +301,19 @@ function normalizeData(
   if (Array.isArray(data[0])) {
     const arrayData = data as unknown[][];
     const headerProvided = options.header !== false;
-    const columns = options.columns ?? (arrayData.length > 0 ? arrayData[0].map(cellToString) : []);
-    const rows = arrayData
+    const rawColumns = options.columns ?? (headerProvided ? arrayData[0].map(cellToString) : []);
+    const rawRows = arrayData
       .slice(headerProvided ? 1 : 0)
       .map((row) => (row as unknown[]).map(cellToString));
-    const cols = headerProvided ? columns : [];
-    return { rows, columns: cols, keys: cols };
+    const colCount = Math.max(rawColumns.length, ...rawRows.map((row) => row.length));
+    const keys = Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? String(index));
+    const columns = headerProvided
+      ? Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? "")
+      : [];
+    const rows = rawRows.map((row) =>
+      Array.from({ length: colCount }, (_, index) => row[index] ?? ""),
+    );
+    return { rows, columns, keys };
   }
 
   // Array of objects — derive the column set from the union of all row keys so
@@ -341,7 +348,7 @@ function calculateWidths(
   header: boolean,
   options: TableOptions,
 ): number[] {
-  const colCount = rows[0]?.length ?? Math.max(labels.length, keys.length);
+  const colCount = Math.max(labels.length, keys.length, ...rows.map((row) => row.length));
   const widths = new Array<number>(colCount).fill(0);
 
   // Header widths (from display labels)
@@ -397,35 +404,7 @@ function calculateWidths(
  * Truncates a cell string to fit within the specified width.
  */
 function truncateCell(cell: string, maxWidth: number, truncChar: string): string {
-  if (stringWidth(cell) <= maxWidth) return cell;
-
-  const truncWidth = stringWidth(truncChar);
-  let width = 0;
-  let result = "";
-  const segmenter =
-    typeof Intl !== "undefined" && "Segmenter" in Intl
-      ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-      : undefined;
-
-  const graphemes = (text: string): string[] =>
-    segmenter ? [...segmenter.segment(text)].map((segment) => segment.segment) : [...text];
-
-  for (const segment of splitAnsi(cell)) {
-    if (segment.ansi) {
-      result += segment.text;
-      continue;
-    }
-    for (const char of graphemes(segment.text)) {
-      const charWidth = stringWidth(char);
-      if (width + charWidth + truncWidth > maxWidth) {
-        return result + truncChar;
-      }
-      result += char;
-      width += charWidth;
-    }
-  }
-
-  return result;
+  return truncateAnsi(cell, maxWidth, truncChar);
 }
 
 /**

@@ -25,6 +25,7 @@ new CLI(options?: CLIOptions)
 | `options.banner` | `string` | Auto-generated | Banner text shown when the interactive shell starts. Set to `""` to suppress |
 | `options.historyFile` | `string` | `~/.{name}_history` | History file path |
 | `options.historySize` | `number` | `1000` | Max history entries |
+| `options.historyFilter` | `(line: string) => string \| null` | — | Redact a history line, or return `null` to omit it |
 
 ### Methods
 
@@ -55,6 +56,10 @@ Every command supports `--help` and `-h` unless those flags are explicitly decla
 #### `history(filePath: string): this`
 
 Set the history file path.
+
+#### `historyFilter(filter: (line: string) => string | null): this`
+
+Redact or reject commands before they are written to the private history file. Return `null` for commands containing credentials or other secrets.
 
 #### `on<K>(event: K, handler: CLIEventMap[K]): this`
 
@@ -95,12 +100,14 @@ Execute a command programmatically.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input` | `string` | — | Command string |
+| `options.stdin` | `Readable \| null` | `null` | Input stream exposed as `ctx.stdin` |
 | `options.stdout` | `Writable` | `process.stdout` | Output stream |
 | `options.stderr` | `Writable` | `process.stderr` | Error stream |
+| `options.signal` | `AbortSignal` | — | External cancellation signal linked to `ctx.signal` and `.cancel()` |
 
 #### `start(argv?: string[]): Promise<void>`
 
-Start the CLI. If `argv` is provided (or `process.argv` has args), runs in direct mode. Otherwise starts the interactive shell.
+Start the CLI. If `argv` is provided (or `process.argv` has args), runs in direct mode. With no arguments it starts the interactive shell only when both stdin and stdout are TTYs; otherwise it prints the help index.
 
 ---
 
@@ -171,7 +178,8 @@ Set a custom tab-completion provider. The `CompletionContext` includes an `itera
 type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>
 
 interface CompletionContext {
-  line: string;           // Full input line
+  line: string;           // Active pipeline segment
+  fullLine: string;       // Complete input line, including earlier segments
   current: string;        // Current word being completed
   commandPath: string[];  // Resolved command path
   args: Record<string, unknown>;
@@ -219,6 +227,7 @@ interface CommandContext {
   args: Record<string, unknown>;
   options: Record<string, unknown>;
   rawInput: string;
+  rawArgv?: string[];
   commandPath: string[];
   shell: Shell | null;
   stdin: Readable | null;
@@ -233,12 +242,24 @@ interface CommandContext {
 | `args` | Parsed positional arguments keyed by name |
 | `options` | Parsed options keyed by long name |
 | `rawInput` | Original input string |
+| `rawArgv` | Exact argv elements for array/direct execution, including empty and whitespace-bearing arguments; absent for string input |
 | `commandPath` | Resolved command path (e.g., `["db", "migrate"]`) |
 | `shell` | Shell instance in interactive mode, `null` in direct mode |
-| `stdin` | Readable stream (available in piped commands) |
+| `stdin` | Input stream selected by the execution surface, or `null` |
 | `stdout` | Writable stream for output |
 | `stderr` | Writable stream for errors |
 | `signal` | `AbortSignal` aborted when the command is cancelled (SIGINT); pair with abort-aware APIs or `cancel()` |
+
+`rawInput` is the original command string for string execution. For array/direct execution it is a display-oriented reconstruction; use `rawArgv` when exact argument boundaries matter.
+
+### Standard input by execution surface
+
+| Surface | `ctx.stdin` |
+|---------|-------------|
+| `start(argv)` direct command | `process.stdin` |
+| Pipeline | First stage: input supplied by the calling surface; later stages: previous stage output |
+| Interactive REPL | `null` |
+| `exec(input)` | `options.stdin`, default `null` |
 
 ---
 
@@ -320,10 +341,14 @@ Configuration for mode sub-REPLs.
 ```typescript
 interface ModeConfig {
   prompt: string;
-  action: (input: string, ctx: { stdout: WritableStream; stderr: WritableStream }) => void | Promise<void>;
+  action: (input: string, ctx: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream }) => void | Promise<void>;
   message?: string;
+  completer?: (line: string) => [string[], string] | Promise<[string[], string]>;
+  history?: "session" | "none";
 }
 ```
+
+Mode completion is disabled unless `completer` is provided. Mode history is isolated from parent and on-disk command history; it defaults to in-memory `"session"` history, while `"none"` disables it.
 
 ---
 
@@ -580,7 +605,7 @@ function prompt.multiselect<T>(
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `default` | `T[]` | — | Pre-selected values |
-| `min` | `number` | — | Minimum selections |
+| `min` | `number` | `0` | Minimum selections; Enter may return an empty array when omitted |
 | `max` | `number` | — | Maximum selections |
 | `validate` | `(v: unknown) => void` | — | Throw on invalid |
 | `prefix` | `string` | `"?"` | Prompt prefix |
@@ -593,7 +618,7 @@ function prompt.multiselect<T>(
 function prompt.password(message: string, options?: PromptBaseOptions): Promise<string>
 ```
 
-Input is masked with asterisks.
+Input is masked with asterisks. Leading and trailing whitespace is preserved.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -621,6 +646,7 @@ function logger(options?: LoggerOptions): Logger
 | `prefix` | `string` | — | Prefix in brackets |
 | `timestamp` | `boolean` | `false` | Show `HH:MM:SS` |
 | `stream` | `Writable` | `process.stderr` | Output stream |
+| `bufferLimit` | `number` | `1000` | Maximum queued lines while the stream is backpressured; oldest queued lines are dropped when full |
 
 ### Logger
 
@@ -638,6 +664,7 @@ Additional methods:
 |--------|-------------|
 | `setLevel(level: LogLevel)` | Change minimum level at runtime |
 | `child(prefix: string): Logger` | Create child logger with nested prefix |
+| `flush(): Promise<void>` | Wait until logger-managed queued lines have been handed to the stream |
 
 ### LogLevel
 

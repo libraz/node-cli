@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { splitPipes } from "../src/command/parser.js";
@@ -57,6 +58,25 @@ describe("piped execution", () => {
     expect(stream.getOutput()).toContain("consumed: hello from produce");
   });
 
+  it("passes injected stdin to the first pipeline stage", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "source").action(async (ctx) => {
+      for await (const chunk of ctx.stdin ?? []) ctx.stdout.write(chunk);
+    });
+    new CommandBuilder(registry, "consume").action(async (ctx) => {
+      for await (const chunk of ctx.stdin ?? []) ctx.stdout.write(chunk.toString().toUpperCase());
+    });
+    const router = new CommandRouter(registry);
+    const stream = createMockStdout();
+
+    await router.execute("source | consume", {
+      stdin: Readable.from(["hello"]),
+      stdout: stream,
+      stderr: stream,
+    });
+    expect(stream.getOutput()).toBe("HELLO");
+  });
+
   it("single command without pipe works normally", async () => {
     const registry = new CommandRegistry();
     new CommandBuilder(registry, "hello").action((ctx) => {
@@ -102,5 +122,57 @@ describe("piped execution", () => {
     await Promise.race([execution, timeout]);
     expect(producerReleased).toBe(true);
     expect(stream.getOutput()).toBe("done");
+  });
+
+  it("aborts an external-I/O upstream when a downstream stage finishes early", async () => {
+    const registry = new CommandRegistry();
+    let upstreamAborted = false;
+    new CommandBuilder(registry, "external").action(
+      (ctx) =>
+        new Promise<void>((resolve) => {
+          ctx.signal.addEventListener("abort", () => {
+            upstreamAborted = true;
+            resolve();
+          });
+        }),
+    );
+    new CommandBuilder(registry, "take").action(() => {});
+    const router = new CommandRouter(registry);
+    await expect(router.execute("external | take")).resolves.toBeUndefined();
+    expect(upstreamAborted).toBe(true);
+  });
+
+  it("aborts sibling stages when any pipeline stage fails", async () => {
+    const registry = new CommandRegistry();
+    const aborted: string[] = [];
+    const waitForAbort = (name: string) =>
+      new CommandBuilder(registry, name).action(
+        (ctx) =>
+          new Promise<void>((resolve) => {
+            ctx.signal.addEventListener(
+              "abort",
+              () => {
+                aborted.push(name);
+                resolve();
+              },
+              { once: true },
+            );
+          }),
+      );
+    waitForAbort("source");
+    waitForAbort("middle");
+    new CommandBuilder(registry, "fail").action(() => {
+      throw new Error("stage failed");
+    });
+
+    const router = new CommandRouter(registry);
+    const stream = createMockStdout();
+    await expect(
+      Promise.race([
+        router.execute("source | middle | fail", { stdout: stream, stderr: stream }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("pipeline hung")), 500)),
+      ]),
+    ).rejects.toThrow("stage failed");
+    expect(aborted.sort()).toEqual(["middle", "source"]);
   });
 });

@@ -36,6 +36,7 @@ export class CommandRegistry {
     // Walk to parent, auto-creating group commands as needed
     let current: CommandDefinition | undefined = this.root.get(parentPath[0]);
     if (!current) {
+      this.assertNoAliasCollision(parentPath[0], []);
       current = createGroupCommand(parentPath[0]);
       this.root.set(parentPath[0], current);
     }
@@ -43,6 +44,7 @@ export class CommandRegistry {
     for (let i = 1; i < parentPath.length; i++) {
       let next: CommandDefinition | undefined = current.subcommands.get(parentPath[i]);
       if (!next) {
+        this.assertNoAliasCollision(parentPath[i], parentPath.slice(0, i));
         next = createGroupCommand(parentPath[i]);
         next.parent = current;
         current.subcommands.set(parentPath[i], next);
@@ -201,12 +203,7 @@ export class CommandRegistry {
       const def = this.root.get(name);
       if (!def) return false;
 
-      // Remove aliases from root map
-      if (def.aliases) {
-        for (const alias of def.aliases) {
-          this.aliasMap.delete(`:${alias}`);
-        }
-      }
+      this.removeSubtreeAliases(def, []);
       this.root.delete(name);
       return true;
     }
@@ -220,15 +217,18 @@ export class CommandRegistry {
     const def = parent.subcommands.get(name);
     if (!def) return false;
 
-    // Remove aliases from parent's subcommands
-    if (def.aliases) {
-      const aliasPrefix = parentPath.join("/");
-      for (const alias of def.aliases) {
-        this.aliasMap.delete(`${aliasPrefix}:${alias}`);
-      }
-    }
+    this.removeSubtreeAliases(def, parentPath);
     parent.subcommands.delete(name);
     return true;
+  }
+
+  private removeSubtreeAliases(def: CommandDefinition, parentPath: string[]): void {
+    const prefix = parentPath.join("/");
+    for (const alias of def.aliases ?? []) this.aliasMap.delete(`${prefix}:${alias}`);
+    const childParentPath = [...parentPath, def.name];
+    for (const child of def.subcommands.values()) {
+      this.removeSubtreeAliases(child, childParentPath);
+    }
   }
 
   /**

@@ -1,4 +1,4 @@
-export type { PluginContext } from "./cli.js";
+export type { ExecOptions, PluginContext } from "./cli.js";
 export { CLI } from "./cli.js";
 export { CommandBuilder } from "./command/builder.js";
 export { activePipeSegment } from "./command/parser.js";
@@ -25,6 +25,7 @@ export {
   splitAnsi,
   stringWidth,
   stripAnsi,
+  truncateAnsi,
 } from "./output/color.js";
 export type { Logger, LoggerOptions, LogLevel } from "./output/logger.js";
 export { logger } from "./output/logger.js";

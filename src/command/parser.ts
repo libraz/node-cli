@@ -24,11 +24,13 @@ function splitRespectingQuotes(
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let tokenStarted = false;
 
   const flush = () => {
     const seg = preserveSyntax ? current.trim() : current;
-    if (seg.length > 0) segments.push(seg);
+    if (seg.length > 0 || (!preserveSyntax && tokenStarted)) segments.push(seg);
     current = "";
+    tokenStarted = false;
   };
 
   for (let i = 0; i < input.length; i++) {
@@ -36,11 +38,13 @@ function splitRespectingQuotes(
 
     if (escaped) {
       current += ch;
+      tokenStarted = true;
       escaped = false;
       continue;
     }
 
     if (ch === "\\") {
+      tokenStarted = true;
       if (inSingle && !preserveSyntax) {
         current += ch;
         continue;
@@ -61,12 +65,14 @@ function splitRespectingQuotes(
 
     if (ch === "'" && !inDouble) {
       inSingle = !inSingle;
+      tokenStarted = true;
       if (preserveSyntax) current += ch;
       continue;
     }
 
     if (ch === '"' && !inSingle) {
       inDouble = !inDouble;
+      tokenStarted = true;
       if (preserveSyntax) current += ch;
       continue;
     }
@@ -77,6 +83,7 @@ function splitRespectingQuotes(
     }
 
     current += ch;
+    tokenStarted = true;
   }
 
   if (escaped && !preserveSyntax) {
@@ -100,7 +107,7 @@ function splitRespectingQuotes(
  * @returns An array of parsed tokens.
  */
 export function tokenize(input: string): string[] {
-  return splitRespectingQuotes(input, (ch) => ch === " ", false);
+  return splitRespectingQuotes(input, (ch) => /\s/.test(ch), false);
 }
 
 /**
@@ -223,15 +230,28 @@ export function parseOptionFlags(flags: string): {
 export function parse(input: string | string[], registry: CommandRegistry): ParseResult {
   const rawInput = Array.isArray(input) ? input.join(" ") : input;
   const tokens = Array.isArray(input) ? input : tokenize(input);
+  const rawArgv = Array.isArray(input) ? [...input] : undefined;
 
   if (tokens.length === 0) {
-    return { commandPath: [], args: {}, options: {}, rawInput };
+    return {
+      commandPath: [],
+      args: Object.create(null),
+      options: Object.create(null),
+      rawInput,
+      rawArgv,
+    };
   }
 
   // Resolve command path
   const match = registry.matchCommandPath(tokens);
   if (!match) {
-    return { commandPath: [], args: {}, options: {}, rawInput };
+    return {
+      commandPath: [],
+      args: Object.create(null),
+      options: Object.create(null),
+      rawInput,
+      rawArgv,
+    };
   }
 
   const { command, consumed } = match;
@@ -239,12 +259,12 @@ export function parse(input: string | string[], registry: CommandRegistry): Pars
   const remaining = tokens.slice(consumed);
 
   // Separate options and positional args
-  const { positional, options } = extractOptionsAndArgs(remaining, command);
+  const { positional, options, builtInHelp } = extractOptionsAndArgs(remaining, command);
 
   // Map positional args
   const { args, extraArgs } = mapPositionalArgs(positional, command.argDefs);
 
-  return { commandPath, args, options, extraArgs, rawInput, command };
+  return { commandPath, args, options, extraArgs, rawInput, rawArgv, command, builtInHelp };
 }
 
 /**
@@ -260,10 +280,11 @@ export function parse(input: string | string[], registry: CommandRegistry): Pars
 function extractOptionsAndArgs(
   tokens: string[],
   command: CommandDefinition,
-): { positional: string[]; options: Record<string, unknown> } {
+): { positional: string[]; options: Record<string, unknown>; builtInHelp: boolean } {
   const positional: string[] = [];
-  const options: Record<string, unknown> = {};
+  const options: Record<string, unknown> = Object.create(null);
   let pastDoubleDash = false;
+  let builtInHelp = false;
 
   // Build alias map
   const aliasMap = new Map<string, string>();
@@ -324,6 +345,7 @@ function extractOptionsAndArgs(
       const def = optionDefs.get(name);
       if (!def) {
         if (name === "help") {
+          builtInHelp = true;
           options.help = true;
           i++;
           continue;
@@ -368,6 +390,7 @@ function extractOptionsAndArgs(
           // Mirror the long `--help` fallback so `-h` works on every command
           // unless the user has explicitly bound `-h` to another option.
           if (chars === "h") {
+            builtInHelp = true;
             options.help = true;
             i++;
             continue;
@@ -413,7 +436,7 @@ function extractOptionsAndArgs(
     i++;
   }
 
-  return { positional, options };
+  return { positional, options, builtInHelp };
 }
 
 function looksLikeOption(token: string, currentDef: { schema: { type?: string } }): boolean {
@@ -469,7 +492,7 @@ function mapPositionalArgs(
   positional: string[],
   argDefs: ArgDef[],
 ): { args: Record<string, unknown>; extraArgs: string[] } {
-  const args: Record<string, unknown> = {};
+  const args: Record<string, unknown> = Object.create(null);
 
   for (let i = 0; i < argDefs.length; i++) {
     const def = argDefs[i];

@@ -6,6 +6,7 @@ import {
   setColorEnabled,
   stringWidth,
   stripAnsi,
+  truncateAnsi,
 } from "../src/output/color.js";
 
 describe("color", () => {
@@ -92,6 +93,26 @@ describe("c (template tag)", () => {
   it("leaves unknown brace patterns as plain text", () => {
     expect(c`value: {not-a-style text}`).toBe("value: {not-a-style text}");
   });
+
+  it("treats interpolated markup-looking values as literal text", () => {
+    const value = "{red untrusted}";
+    const result = c`value: ${value}`;
+    expect(result).toBe(`value: ${value}`);
+    expect(result).not.toContain("\x1b[31m");
+  });
+
+  it("round-trips interpolation marker code points without parsing their braces", () => {
+    const value = "\u{f0000}{red literal}";
+    expect(stripAnsi(c`{green ${value}}`)).toBe(value);
+  });
+
+  it("bounds inline markup nesting", () => {
+    const deeplyNested = `${"{red ".repeat(66)}value${"}".repeat(66)}`;
+    const strings = Object.assign([deeplyNested], {
+      raw: [deeplyNested],
+    }) as unknown as TemplateStringsArray;
+    expect(() => c(strings)).toThrow(/nesting exceeds/);
+  });
 });
 
 describe("stripAnsi", () => {
@@ -101,6 +122,11 @@ describe("stripAnsi", () => {
 
   it("returns plain text unchanged", () => {
     expect(stripAnsi("hello")).toBe("hello");
+  });
+
+  it("strips OSC sequences terminated by ST", () => {
+    const hyperlink = "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\";
+    expect(stripAnsi(hyperlink)).toBe("link");
   });
 });
 
@@ -139,6 +165,24 @@ describe("stringWidth", () => {
 
   it("counts a ZWJ emoji sequence with variation selectors as a single wide grapheme", () => {
     expect(stringWidth("❤️‍🔥")).toBe(2);
+  });
+
+  it("counts an emoji with a skin-tone modifier as one wide grapheme", () => {
+    expect(stringWidth("👍🏽")).toBe(2);
+  });
+});
+
+describe("truncateAnsi", () => {
+  it("closes active SGR styles after truncation", () => {
+    const result = truncateAnsi("\x1b[31malexander", 5);
+    expect(stripAnsi(result)).toBe("alex…");
+    expect(result.endsWith("\x1b[0m")).toBe(true);
+  });
+
+  it("fits an oversized marker within the requested display width", () => {
+    const result = truncateAnsi("abcdef", 1, "...");
+    expect(result).toBe(".");
+    expect(stringWidth(result)).toBe(1);
   });
 });
 

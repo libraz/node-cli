@@ -70,6 +70,18 @@ describe("ShellCompleter", () => {
     expect(shortCandidates).toContain("-h");
   });
 
+  it("includes top-level built-ins and version only when configured", () => {
+    const versioned = new ShellCompleter(registry, { hasVersion: true });
+    const [candidates] = versioned.complete("") as [string[], string];
+    expect(candidates).toEqual(expect.arrayContaining(["--help", "-h", "--version", "-V"]));
+  });
+
+  it("includes negated boolean flags", () => {
+    const [candidates] = completer.complete("deploy prod --no-") as [string[], string];
+    expect(candidates).toContain("--no-force");
+    expect(candidates).not.toContain("--no-tag");
+  });
+
   it("does not complete option flags after the double-dash separator", () => {
     const [candidates, current] = completer.complete("deploy prod -- -") as [string[], string];
     expect(candidates).toEqual([]);
@@ -144,6 +156,27 @@ describe("ShellCompleter", () => {
       expect(result).toBeInstanceOf(Promise);
       const [candidates] = (await result) as [string[], string];
       expect(candidates).toEqual(["us-east-1", "us-west-2"]);
+    });
+
+    it("isolates sync and async autocomplete failures", async () => {
+      const syncRegistry = new CommandRegistry();
+      new CommandBuilder(syncRegistry, "sync").option("--value <value>", {
+        autocomplete: () => {
+          throw new Error("provider failed");
+        },
+      });
+      expect(new ShellCompleter(syncRegistry).complete("sync --value ")).toEqual([[], ""]);
+
+      const asyncRegistry = new CommandRegistry();
+      new CommandBuilder(asyncRegistry, "async").option("--value <value>", {
+        autocomplete: async () => {
+          throw new Error("provider failed");
+        },
+      });
+      await expect(new ShellCompleter(asyncRegistry).complete("async --value ")).resolves.toEqual([
+        [],
+        "",
+      ]);
     });
 
     it("completes option values using short alias", () => {
@@ -222,6 +255,24 @@ describe("ShellCompleter", () => {
       expect(lastIteration).toBe(1);
     });
 
+    it("resets iteration when a new prompt is opened", () => {
+      const reg = new CommandRegistry();
+      let iteration = 0;
+      new CommandBuilder(reg, "test")
+        .complete((ctx) => {
+          iteration = ctx.iteration;
+          return [];
+        })
+        .action(() => {});
+      const comp = new ShellCompleter(reg);
+      comp.complete("test ");
+      comp.complete("test ");
+      expect(iteration).toBe(2);
+      comp.reset();
+      comp.complete("test ");
+      expect(iteration).toBe(1);
+    });
+
     it("allows iteration-based progressive completions", () => {
       const reg = new CommandRegistry();
       new CommandBuilder(reg, "color")
@@ -263,6 +314,25 @@ describe("ShellCompleter", () => {
       expect(result).toBeInstanceOf(Promise);
       const [candidates] = (await result) as [string[], string];
       expect(candidates).toEqual(["localhost", "example.com"]);
+    });
+
+    it("tolerates incomplete quotes and isolates custom provider failures", async () => {
+      const reg = new CommandRegistry();
+      new CommandBuilder(reg, "connect <host>")
+        .complete(() => {
+          throw new Error("provider failed");
+        })
+        .action(() => {});
+      expect(() => new ShellCompleter(reg).complete('connect "local')).not.toThrow();
+      expect(new ShellCompleter(reg).complete('connect "local')).toEqual([[], "local"]);
+
+      const asyncReg = new CommandRegistry();
+      new CommandBuilder(asyncReg, "connect <host>")
+        .complete(async () => {
+          throw new Error("provider failed");
+        })
+        .action(() => {});
+      await expect(new ShellCompleter(asyncReg).complete("connect ")).resolves.toEqual([[], ""]);
     });
 
     it("scopes the custom completer line to the active pipe segment", () => {

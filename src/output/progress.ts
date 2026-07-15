@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { createColorizer, stringWidth } from "./color.js";
+import { createColorizer, splitAnsi, stringWidth } from "./color.js";
 
 // ── Progress Bar ──
 
@@ -124,12 +124,84 @@ function isTTY(stream: Writable): boolean {
   return "isTTY" in stream && (stream as NodeJS.WriteStream).isTTY === true;
 }
 
-function hideCursor(stream: Writable): void {
-  if (isTTY(stream)) stream.write("\x1b[?25l");
+function singleLine(text: string): string {
+  return splitAnsi(text)
+    .map((segment) => {
+      if (segment.ansi) return segment.text;
+      return [...segment.text]
+        .map((character) => {
+          const code = character.codePointAt(0) as number;
+          return code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? " " : character;
+        })
+        .join("");
+    })
+    .join("");
 }
 
-function showCursor(stream: Writable): void {
-  if (isTTY(stream)) stream.write("\x1b[?25h");
+function createFrameWriter(stream: Writable): {
+  write: (frame: string) => void;
+  final: (frame: string) => void;
+  clear: () => void;
+} {
+  let waitingForDrain = false;
+  let pending: string | null = null;
+
+  const write = (frame: string) => {
+    if (waitingForDrain) {
+      pending = frame;
+      return;
+    }
+    if (!stream.write(frame)) {
+      waitingForDrain = true;
+      stream.once("drain", () => {
+        waitingForDrain = false;
+        const next = pending;
+        pending = null;
+        if (next !== null) write(next);
+      });
+    }
+  };
+
+  return {
+    write,
+    final(frame) {
+      pending = null;
+      stream.write(frame);
+    },
+    clear() {
+      pending = null;
+    },
+  };
+}
+
+type TerminalSession = { users: number };
+
+const terminalSessions = new WeakMap<Writable, TerminalSession>();
+
+/** Shares cursor ownership between every indicator writing to the same stream. */
+function acquireTerminal(stream: Writable): () => void {
+  if (!isTTY(stream)) return () => {};
+
+  let session = terminalSessions.get(stream);
+  if (!session) {
+    session = { users: 0 };
+    terminalSessions.set(stream, session);
+  }
+  session.users++;
+  if (session.users === 1) stream.write("\x1b[?25l");
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const current = terminalSessions.get(stream);
+    if (!current) return;
+    current.users = Math.max(0, current.users - 1);
+    if (current.users === 0) {
+      stream.write("\x1b[?25h");
+      terminalSessions.delete(stream);
+    }
+  };
 }
 
 // ── Bar Implementation ──
@@ -153,10 +225,11 @@ function createBar(options: BarOptions): Bar {
   let finished = false;
   let started = false;
   let renderedRows = 0;
-  let sigintHandler: (() => void) | null = null;
+  let releaseTerminal: (() => void) | null = null;
   const startTime = Date.now();
   const tty = isTTY(stream);
   const col = createColorizer(stream);
+  const frameWriter = createFrameWriter(stream);
 
   function getState(): BarState {
     const elapsed = Date.now() - startTime;
@@ -166,24 +239,20 @@ function createBar(options: BarOptions): Bar {
     return { current, total, percent, elapsed, eta, rate };
   }
 
-  function render(): void {
+  function render(final = false): void {
     if (!tty) return;
     if (!started) {
       started = true;
-      hideCursor(stream);
-      sigintHandler = () => {
-        cleanup();
-        process.kill(process.pid, "SIGINT");
-      };
-      process.once("SIGINT", sigintHandler);
+      releaseTerminal = acquireTerminal(stream);
     }
 
     const state = getState();
 
     if (customFormat) {
-      const line = customFormat(state);
-      if (renderedRows > 0) stream.write(`\x1b[${renderedRows}A`);
-      stream.write(`\r\x1b[K${line}`);
+      const line = singleLine(customFormat(state));
+      const frame = `${renderedRows > 0 ? `\x1b[${renderedRows}A` : ""}\r\x1b[K${line}`;
+      if (final) frameWriter.final(frame);
+      else frameWriter.write(frame);
       renderedRows = Math.max(
         1,
         Math.ceil(stringWidth(line) / ((stream as NodeJS.WriteStream).columns || 80)),
@@ -204,14 +273,15 @@ function createBar(options: BarOptions): Bar {
     }
 
     const parts: string[] = [];
-    if (label) parts.push(label);
+    if (label) parts.push(singleLine(label));
     parts.push(`[${bar}]`);
     parts.push(`${state.percent}%`);
     parts.push(`${state.current}/${state.total}`);
 
     const line = parts.join("  ");
-    if (renderedRows > 0) stream.write(`\x1b[${renderedRows}A`);
-    stream.write(`\r\x1b[K${line}`);
+    const frame = `${renderedRows > 0 ? `\x1b[${renderedRows}A` : ""}\r\x1b[K${line}`;
+    if (final) frameWriter.final(frame);
+    else frameWriter.write(frame);
     renderedRows = Math.max(
       1,
       Math.ceil(stringWidth(line) / ((stream as NodeJS.WriteStream).columns || 80)),
@@ -219,19 +289,19 @@ function createBar(options: BarOptions): Bar {
   }
 
   function cleanup(): void {
-    if (sigintHandler) {
-      process.removeListener("SIGINT", sigintHandler);
-      sigintHandler = null;
-    }
-    showCursor(stream);
+    releaseTerminal?.();
+    releaseTerminal = null;
+    frameWriter.clear();
   }
 
   return {
     update(value: number) {
+      if (finished) return;
       current = Math.max(0, Math.min(value, total));
       render();
     },
     tick(delta = 1) {
+      if (finished) return;
       current = Math.max(0, Math.min(current + delta, total));
       render();
     },
@@ -239,7 +309,7 @@ function createBar(options: BarOptions): Bar {
       if (finished) return;
       finished = true;
       current = total;
-      render();
+      render(true);
       cleanup();
       if (tty) stream.write("\n");
     },
@@ -270,9 +340,10 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let done = false;
-  let sigintHandler: (() => void) | null = null;
+  let releaseTerminal: (() => void) | null = null;
   const tty = isTTY(stream);
   const col = createColorizer(stream);
+  const frameWriter = createFrameWriter(stream);
 
   function render(): void {
     if (!tty) return;
@@ -284,7 +355,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
         // ignore
       }
     }
-    stream.write(`\r\x1b[K${frame} ${label}`);
+    frameWriter.write(`\r\x1b[K${frame} ${singleLine(label)}`);
     frameIndex++;
   }
 
@@ -297,25 +368,15 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       clearInterval(timer);
       timer = null;
     }
-    if (sigintHandler) {
-      process.removeListener("SIGINT", sigintHandler);
-      sigintHandler = null;
-    }
+    releaseTerminal?.();
+    releaseTerminal = null;
+    frameWriter.clear();
   }
 
   return {
     start() {
       if (timer || done) return;
-      // Restore the terminal and re-raise SIGINT so the default exit behavior
-      // (and any other handlers) still apply after we tidy up the animation.
-      sigintHandler = () => {
-        cleanup();
-        clearLine();
-        showCursor(stream);
-        process.kill(process.pid, "SIGINT");
-      };
-      process.once("SIGINT", sigintHandler);
-      hideCursor(stream);
+      releaseTerminal = acquireTerminal(stream);
       render();
       // Keep the interval from holding the event loop open on its own.
       timer = setInterval(render, interval);
@@ -331,8 +392,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      showCursor(stream);
-      const msg = message ?? label;
+      const msg = singleLine(message ?? label);
       stream.write(`${col.green("✔")} ${msg}\n`);
     },
 
@@ -341,8 +401,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      showCursor(stream);
-      const msg = message ?? label;
+      const msg = singleLine(message ?? label);
       stream.write(`${col.red("✖")} ${msg}\n`);
     },
 
@@ -351,8 +410,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      showCursor(stream);
-      const msg = message ?? label;
+      const msg = singleLine(message ?? label);
       stream.write(`${col.yellow("⚠")} ${msg}\n`);
     },
 
@@ -361,7 +419,6 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      showCursor(stream);
     },
   };
 }
@@ -372,7 +429,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
  * Creates a multi-bar manager that renders multiple progress bars simultaneously.
  */
 function createMultiBar(): MultiBar {
-  const bars: { options: BarOptions; current: number; startTime: number }[] = [];
+  const bars: { options: BarOptions; current: number; startTime: number; finished: boolean }[] = [];
   // The whole group renders to a single stream, fixed by the first bar that
   // actually provides one (a later add() can supply it if the first omits it).
   let stream: Writable = process.stderr;
@@ -381,29 +438,18 @@ function createMultiBar(): MultiBar {
   // cursor up. Wrapped lines occupy multiple rows, so this is not bars.length.
   let renderedRows = 0;
   let closed = false;
-  let cursorHidden = false;
-  let sigintHandler: (() => void) | null = null;
+  let releaseTerminal: (() => void) | null = null;
+  let frameWriter = createFrameWriter(stream);
 
   function startTerminalSession(): void {
-    if (cursorHidden || !isTTY(stream)) return;
-    cursorHidden = true;
-    hideCursor(stream);
-    sigintHandler = () => {
-      cleanup();
-      process.kill(process.pid, "SIGINT");
-    };
-    process.once("SIGINT", sigintHandler);
+    if (releaseTerminal || !isTTY(stream)) return;
+    releaseTerminal = acquireTerminal(stream);
   }
 
   function cleanup(): void {
-    if (sigintHandler) {
-      process.removeListener("SIGINT", sigintHandler);
-      sigintHandler = null;
-    }
-    if (cursorHidden) {
-      showCursor(stream);
-      cursorHidden = false;
-    }
+    releaseTerminal?.();
+    releaseTerminal = null;
+    frameWriter.clear();
   }
 
   return {
@@ -413,32 +459,34 @@ function createMultiBar(): MultiBar {
       }
       if (!streamSet && options.stream) {
         stream = options.stream;
+        frameWriter = createFrameWriter(stream);
         streamSet = true;
       }
-      const entry = { options, current: 0, startTime: Date.now() };
+      const entry = { options, current: 0, startTime: Date.now(), finished: false };
       bars.push(entry);
 
       const total = options.total;
 
       const wrapper: Bar = {
         update(value: number) {
-          if (closed) return;
+          if (closed || entry.finished) return;
           entry.current = Math.max(0, Math.min(value, total));
           if (isTTY(stream)) renderAll();
         },
         tick(delta = 1) {
-          if (closed) return;
+          if (closed || entry.finished) return;
           entry.current = Math.max(0, Math.min(entry.current + delta, total));
           if (isTTY(stream)) renderAll();
         },
         finish() {
-          if (closed) return;
+          if (closed || entry.finished) return;
           entry.current = total;
+          entry.finished = true;
           if (isTTY(stream)) renderAll();
         },
         stop() {
-          if (closed) return;
-          entry.current = total;
+          if (closed || entry.finished) return;
+          entry.finished = true;
           if (isTTY(stream)) renderAll();
         },
       };
@@ -448,12 +496,16 @@ function createMultiBar(): MultiBar {
 
     finish() {
       if (closed) return;
-      closed = true;
+      for (const entry of bars) {
+        entry.current = entry.options.total;
+        entry.finished = true;
+      }
       if (isTTY(stream)) {
-        renderAll();
+        renderAll(true);
         cleanup();
         stream.write("\n");
       }
+      closed = true;
     },
 
     stop() {
@@ -464,7 +516,7 @@ function createMultiBar(): MultiBar {
     },
   };
 
-  function renderAll(): void {
+  function renderAll(final = false): void {
     startTerminalSession();
     const col = createColorizer(stream);
     // Terminal width used to estimate how many physical rows each logical line
@@ -473,9 +525,7 @@ function createMultiBar(): MultiBar {
 
     // Move the cursor up over exactly the physical rows we last wrote so wrapped
     // lines do not leave orphaned fragments in the scrollback.
-    if (renderedRows > 0) {
-      stream.write(`\x1b[${renderedRows}A`);
-    }
+    let frame = renderedRows > 0 ? `\x1b[${renderedRows}A` : "";
 
     let rows = 0;
     for (const entry of bars) {
@@ -484,7 +534,7 @@ function createMultiBar(): MultiBar {
       const width = opts.width ?? 30;
       const filled = opts.filled ?? "█";
       const empty = opts.empty ?? "░";
-      const label = opts.label ?? "";
+      const label = singleLine(opts.label ?? "");
 
       const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
       const elapsed = Date.now() - startTime;
@@ -493,7 +543,7 @@ function createMultiBar(): MultiBar {
 
       let line: string;
       if (opts.format) {
-        line = opts.format({ current, total, percent, elapsed, eta, rate });
+        line = singleLine(opts.format({ current, total, percent, elapsed, eta, rate }));
       } else {
         const filledCount = Math.round((percent / 100) * width);
         const emptyCount = width - filledCount;
@@ -515,11 +565,13 @@ function createMultiBar(): MultiBar {
         line = parts.join("  ");
       }
 
-      stream.write(`\r\x1b[K${line}\n`);
+      frame += `\r\x1b[K${line}\n`;
       rows += Math.max(1, Math.ceil(stringWidth(line) / columns));
     }
 
     renderedRows = rows;
+    if (final) frameWriter.final(frame);
+    else frameWriter.write(frame);
   }
 }
 

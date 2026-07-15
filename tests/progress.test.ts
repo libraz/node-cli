@@ -1,3 +1,4 @@
+import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetColorEnabled, setColorEnabled, stripAnsi } from "../src/output/color.js";
 import { progress } from "../src/output/progress.js";
@@ -95,6 +96,43 @@ describe("progress.bar", () => {
     expect(stream.getOutput()).toContain("\x1b[?25l");
     bar.finish();
     expect(stream.getOutput()).toContain("\x1b[?25h");
+  });
+
+  it("coalesces redraw frames while a stream is backpressured", () => {
+    let output = "";
+    let frameWrites = 0;
+    let onDrain: (() => void) | undefined;
+    const stream = {
+      isTTY: true,
+      columns: 80,
+      write(chunk: string) {
+        output += chunk;
+        if (chunk.includes("\x1b[K")) frameWrites++;
+        return frameWrites !== 1;
+      },
+      once(event: string, handler: () => void) {
+        if (event === "drain") onDrain = handler;
+        return stream;
+      },
+    } as unknown as Writable;
+    const bar = progress.bar({ total: 10, stream });
+    bar.update(1);
+    bar.update(2);
+    bar.update(3);
+    expect(output).toContain("1/10");
+    expect(output).not.toContain("2/10");
+    onDrain?.();
+    expect(output).toContain("3/10");
+    bar.stop();
+  });
+
+  it("normalizes labels and custom formats to one terminal line", () => {
+    const stream = createMockTTY();
+    const bar = progress.bar({ total: 10, label: "line1\nline2\t", stream });
+    bar.update(1);
+    expect(stripAnsi(stream.getOutput())).toContain("line1 line2 ");
+    expect(stripAnsi(stream.getOutput()).split("\n")).toHaveLength(1);
+    bar.stop();
   });
 });
 
@@ -205,9 +243,17 @@ describe("progress.spinner", () => {
     spinner.succeed("Done");
     expect(stripAnsi(stream.getOutput())).toContain("✔ Done");
   });
+
+  it("keeps final status messages on a single line", () => {
+    const stream = createMockStdout();
+    const spinner = progress.spinner({ stream, label: "unsafe\tlabel" });
+    spinner.succeed("done\nnext");
+    expect(stream.getOutput()).toContain("done next\n");
+    expect(stream.getOutput()).not.toContain("done\nnext");
+  });
 });
 
-describe("progress.spinner SIGINT cleanup", () => {
+describe("progress.spinner signal ownership", () => {
   let baseline: number;
 
   beforeEach(() => {
@@ -219,11 +265,11 @@ describe("progress.spinner SIGINT cleanup", () => {
     resetColorEnabled();
   });
 
-  it("registers a SIGINT handler while running and removes it on stop", () => {
+  it("does not take ownership of SIGINT", () => {
     const stream = createMockTTY();
     const spinner = progress.spinner({ stream });
     spinner.start();
-    expect(process.listenerCount("SIGINT")).toBe(baseline + 1);
+    expect(process.listenerCount("SIGINT")).toBe(baseline);
     spinner.stop();
     expect(process.listenerCount("SIGINT")).toBe(baseline);
   });
@@ -259,6 +305,23 @@ describe("progress.spinner SIGINT cleanup", () => {
     spinner.stop();
     expect(() => spinner.succeed("Done")).not.toThrow();
     expect(process.listenerCount("SIGINT")).toBe(baseline);
+  });
+
+  it("shares cursor ownership between two spinners and a bar", () => {
+    const stream = createMockTTY();
+    const first = progress.spinner({ stream });
+    const second = progress.spinner({ stream });
+    const bar = progress.bar({ total: 2, stream });
+    first.start();
+    second.start();
+    bar.tick();
+    expect(stream.getOutput().split("\x1b[?25l")).toHaveLength(2);
+
+    second.stop();
+    bar.finish();
+    expect(stream.getOutput()).not.toContain("\x1b[?25h");
+    first.stop();
+    expect(stream.getOutput().split("\x1b[?25h")).toHaveLength(2);
   });
 });
 
@@ -305,6 +368,35 @@ describe("progress.multi", () => {
     const bar = multi.add({ total: 10, stream });
     bar.finish();
     expect(stream.getOutput()).toContain("100%");
+    multi.stop();
+  });
+
+  it("finishes every bar and ignores late updates", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    const first = multi.add({ total: 10, label: "first", stream });
+    const second = multi.add({ total: 20, label: "second", stream });
+    first.update(2);
+    second.update(3);
+    multi.finish();
+    const before = stream.getOutput();
+    first.update(1);
+    second.tick();
+    expect(stream.getOutput()).toBe(before);
+    expect(before).toContain("10/10");
+    expect(before).toContain("20/20");
+  });
+
+  it("keeps a stopped multi bar at its current value", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    const bar = multi.add({ total: 10, stream });
+    bar.update(4);
+    bar.stop();
+    const before = stream.getOutput();
+    bar.update(9);
+    expect(stream.getOutput()).toBe(before);
+    expect(before).toContain("4/10");
     multi.stop();
   });
 

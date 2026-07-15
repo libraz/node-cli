@@ -10,8 +10,6 @@ export default defineConfig({
         "src/index.ts",
         "src/types.ts",
         "src/option/schema.ts",
-        "src/shell/repl.ts",
-        "src/output/prompt.ts",
       ],
       thresholds: {
         statements: 80,

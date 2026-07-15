@@ -133,6 +133,21 @@ describe("prompt", () => {
     await expect(explicitNo).resolves.toBe(false);
   });
 
+  it("applies confirm validation and re-prompts", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.confirm("Continue?", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      validate(value) {
+        if (!value) throw new Error("confirmation required");
+      },
+    });
+    feedLines(streams.stdin, ["no", "yes"]);
+    await expect(promise).resolves.toBe(true);
+    expect(streams.getOutput()).toContain("confirmation required");
+  });
+
   it("select accepts labels after rejecting invalid input", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
@@ -182,6 +197,18 @@ describe("prompt", () => {
     expect(streams.getOutput()).toContain("Please enter valid numbers");
   });
 
+  it("multiselect allows zero selections when min is unset", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.multiselect("Pick", ["a", "b"], {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      default: [],
+    });
+    streams.stdin.end("\n");
+    await expect(promise).resolves.toEqual([]);
+  });
+
   it("password resolves input and does not write the password in clear text", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
@@ -194,6 +221,17 @@ describe("prompt", () => {
 
     await expect(promise).resolves.toBe("secret");
     expect(streams.getOutput()).not.toContain("secret");
+  });
+
+  it("password preserves leading and trailing whitespace", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.password("Password", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    streams.stdin.end("  secret  \n");
+    await expect(promise).resolves.toBe("  secret  ");
   });
 
   it("password renders the prompt as readline query while masking typed input", async () => {
@@ -211,9 +249,12 @@ describe("prompt", () => {
     expect(streams.getOutput()).not.toContain("s\n");
   });
 
-  it("password masks wide characters with one asterisk per character", async () => {
+  it("password masks wide and multi-code-point graphemes with one asterisk", async () => {
     const { maskInput } = await import("../src/output/prompt.js");
     expect(maskInput("界")).toBe("*");
+    expect(maskInput("👍🏽")).toBe("*");
+    expect(maskInput("e\u0301")).toBe("*");
+    expect(maskInput("👨‍👩‍👧‍👦")).toBe("*");
   });
 
   it("password does not replace the output stream's write reference", async () => {

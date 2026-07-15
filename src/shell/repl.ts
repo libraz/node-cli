@@ -2,6 +2,7 @@ import { createInterface, type Interface } from "node:readline/promises";
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
 import { formatErrorMessage, PromptCancelError } from "../errors.js";
+import type { CompletionResult } from "./completion.js";
 import { ShellCompleter } from "./completion.js";
 import { History } from "./history.js";
 
@@ -23,6 +24,10 @@ export interface ModeConfig {
   ) => void | Promise<void>;
   /** Message displayed when entering the mode. */
   message?: string;
+  /** Optional mode-specific tab completer. Top-level command completion is disabled by default. */
+  completer?: (line: string) => CompletionResult | Promise<CompletionResult>;
+  /** In-memory mode history policy. Mode input is never persisted to disk. Defaults to `session`. */
+  history?: "session" | "none";
 }
 
 export class Shell {
@@ -35,6 +40,7 @@ export class Shell {
   private running = false;
   private reopeningReadline = false;
   private mode: ModeConfig | null = null;
+  private modeHistory: string[] = [];
 
   /**
    * Creates a new Shell instance.
@@ -53,6 +59,8 @@ export class Shell {
     banner?: string;
     historyFile: string;
     historySize?: number;
+    historyFilter?: (line: string) => string | null;
+    version?: string;
   }) {
     this.router = options.router;
     this.promptStr = options.prompt;
@@ -60,22 +68,36 @@ export class Shell {
     this.history = new History({
       filePath: options.historyFile,
       maxSize: options.historySize,
+      filter: options.historyFilter,
     });
-    this.completer = new ShellCompleter(options.registry);
+    this.completer = new ShellCompleter(options.registry, {
+      hasVersion: options.version !== undefined,
+    });
   }
 
   /**
    * Creates (or recreates) the readline interface with current history.
    */
   private openReadline(history: string[]): void {
+    this.completer.reset();
+    const mode = this.mode;
+    const activeHistory = mode
+      ? mode.history === "none"
+        ? []
+        : [...this.modeHistory].reverse()
+      : [...history].reverse();
     this.rl = createInterface({
       input: process.stdin,
       output: process.stdout,
       prompt: this.mode ? this.mode.prompt : this.promptStr,
       // readline expects most-recent-first; our history is stored oldest-first.
-      history: [...history].reverse(),
-      completer: (line: string) => this.completer.complete(line),
-      terminal: true,
+      history: activeHistory,
+      completer: mode
+        ? mode.completer
+          ? (line: string) => mode.completer?.(line) ?? [[], line]
+          : undefined
+        : (line: string) => this.completer.complete(line),
+      terminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
     });
     this.rl.on("close", () => {
       if (!this.reopeningReadline && !this.mode) {
@@ -84,6 +106,7 @@ export class Shell {
     });
     // Ctrl+C at the prompt cancels the current line instead of exiting the shell.
     this.rl.on("SIGINT", () => {
+      this.rl?.write(null, { ctrl: true, name: "u" });
       process.stdout.write("\n");
       this.rl?.prompt();
     });
@@ -154,6 +177,11 @@ export class Shell {
       if (trimmed === "exit" || trimmed === "quit") {
         if (this.mode) {
           this.exitMode();
+          this.reopeningReadline = true;
+          this.rl?.close();
+          this.reopeningReadline = false;
+          this.rl = undefined;
+          this.openReadline(this.history.entries());
           continue;
         }
         break;
@@ -163,6 +191,10 @@ export class Shell {
       // sensitive) must not leak into the shared, on-disk history.
       if (!this.mode) {
         this.history.add(trimmed);
+      } else if (this.mode.history !== "none") {
+        if (this.modeHistory[this.modeHistory.length - 1] !== trimmed) {
+          this.modeHistory.push(trimmed);
+        }
       }
 
       // Close readline to fully release stdin before command execution.
@@ -255,6 +287,7 @@ export class Shell {
    */
   enterMode(config: ModeConfig): void {
     this.mode = config;
+    this.modeHistory = [];
     if (config.message) {
       process.stdout.write(`${config.message}\n`);
     }
@@ -266,6 +299,7 @@ export class Shell {
    */
   exitMode(): void {
     this.mode = null;
+    this.modeHistory = [];
     this.rl?.setPrompt(this.promptStr);
   }
 }

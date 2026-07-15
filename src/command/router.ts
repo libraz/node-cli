@@ -12,6 +12,14 @@ type EventListeners = {
   [K in keyof CLIEventMap]: CLIEventMap[K][];
 };
 
+type CancellationEntry = {
+  command: CommandDefinition;
+  ctx: CommandContext;
+  controller: AbortController;
+};
+
+type CancellationScope = Set<CancellationEntry>;
+
 /**
  * Routes parsed CLI input to the appropriate command action.
  *
@@ -35,11 +43,7 @@ export class CommandRouter {
    * (not a single slot) so concurrent pipeline stages are each tracked and can
    * all receive a cancel signal.
    */
-  private readonly active = new Set<{
-    command: CommandDefinition;
-    ctx: CommandContext;
-    controller: AbortController;
-  }>();
+  private readonly active: CancellationScope = new Set();
 
   /**
    * Creates a new CommandRouter.
@@ -134,21 +138,39 @@ export class CommandRouter {
   }
 
   /**
-   * Invokes the cancel handler of the currently executing command, if any.
+   * Aborts currently executing commands and invokes each cancel handler, if any.
    * Used by the interactive shell to honour SIGINT during a long-running command.
    *
-   * @returns True if a cancel handler was invoked, false otherwise.
+   * @returns True if at least one command was newly cancelled, false otherwise.
    */
   triggerCancel(): boolean {
-    let cancelled = false;
-    for (const entry of this.active) {
-      // Abort the context signal first so signal-based actions stop even when no
-      // cancel handler is registered, then invoke the optional handler.
-      entry.controller.abort();
-      entry.command.cancelHandler?.(entry.ctx);
-      cancelled = true;
+    return this.cancelEntries(this.active);
+  }
+
+  /**
+   * Aborts every entry before invoking user cancellation callbacks. This ordering
+   * guarantees that one faulty callback cannot keep sibling commands alive.
+   */
+  private cancelEntries(entries: Iterable<CancellationEntry>, reason?: unknown): boolean {
+    const snapshot = [...entries].filter((entry) => !entry.controller.signal.aborted);
+    if (snapshot.length === 0) return false;
+
+    for (const entry of snapshot) {
+      entry.controller.abort(reason);
     }
-    return cancelled;
+
+    for (const entry of snapshot) {
+      try {
+        entry.command.cancelHandler?.(entry.ctx);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        // Signal callbacks cannot await. The event machinery already isolates
+        // listener failures, and attaching a rejection handler prevents an
+        // unhandled rejection if an async error listener itself fails.
+        void this.emit("error", error).catch(() => {});
+      }
+    }
+    return true;
   }
 
   /**
@@ -158,7 +180,11 @@ export class CommandRouter {
     const onSigint = () => {
       this.triggerCancel();
     };
-    process.once("SIGINT", onSigint);
+    // Keep the listener installed until the execution boundary closes. A `once`
+    // signal listener removes itself before invoking the callback, which can
+    // restore Node's default SIGINT termination while cooperative cleanup is
+    // still running.
+    process.on("SIGINT", onSigint);
     try {
       await action();
     } finally {
@@ -185,6 +211,21 @@ export class CommandRouter {
       stdin?: Readable | null;
       stdout?: Writable;
       stderr?: Writable;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<void> {
+    await this.executeInternal(input, options);
+  }
+
+  private async executeInternal(
+    input: string | string[],
+    options: {
+      shell?: Shell | null;
+      stdin?: Readable | null;
+      stdout?: Writable;
+      stderr?: Writable;
+      signal?: AbortSignal;
+      cancellationScope?: CancellationScope;
     } = {},
   ): Promise<void> {
     const {
@@ -192,13 +233,22 @@ export class CommandRouter {
       stdin = null,
       stdout = process.stdout,
       stderr = process.stderr,
+      signal,
+      cancellationScope,
     } = options;
 
     // Check for pipe chains (only for string input)
     if (typeof input === "string") {
-      const segments = splitPipes(input);
+      let segments: string[];
+      try {
+        segments = splitPipes(input);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        await this.emit("error", error);
+        throw err;
+      }
       if (segments.length > 1) {
-        await this.executePiped(segments, { shell, stderr, stdout });
+        await this.executePiped(segments, { shell, stdin, stderr, stdout, signal });
         return;
       }
     }
@@ -258,7 +308,7 @@ export class CommandRouter {
     const command = result.command as CommandDefinition;
 
     // Check --help flag
-    if (result.options.help === true) {
+    if (result.builtInHelp) {
       if (this.helpGenerator) {
         const helpText = this.helpGenerator.generateCommand(result.commandPath);
         stdout.write(`${helpText}\n`);
@@ -267,7 +317,7 @@ export class CommandRouter {
     }
 
     // Group command with no action → show help
-    if (!command.action) {
+    if (!command.action && (!result.extraArgs || result.extraArgs.length === 0)) {
       if (this.helpGenerator) {
         const helpText = this.helpGenerator.generateCommand(result.commandPath);
         stdout.write(`${helpText}\n`);
@@ -283,13 +333,25 @@ export class CommandRouter {
       args: result.args,
       options: {},
       rawInput: result.rawInput,
-      commandPath: result.commandPath,
+      rawArgv: result.rawArgv,
+      commandPath: this.registry.getCommandPath(command),
       shell,
       stdin,
       stdout,
       stderr,
       signal: controller.signal,
     };
+
+    const activeEntry = { command, ctx, controller };
+    this.active.add(activeEntry);
+    cancellationScope?.add(activeEntry);
+
+    const abortFromExternalSignal = () => this.cancelEntries([activeEntry], signal?.reason);
+    if (signal?.aborted) {
+      abortFromExternalSignal();
+    } else {
+      signal?.addEventListener("abort", abortFromExternalSignal, { once: true });
+    }
 
     try {
       // Validate required arguments
@@ -310,6 +372,10 @@ export class CommandRouter {
         throw new ExtraArgumentError(result.extraArgs[0]);
       }
 
+      // An actionless group with extra input reaches this point only to report
+      // the unknown child above; the guard keeps the invariant explicit.
+      if (!command.action) return;
+
       // Resolve options
       ctx.options = resolveOptions(result.options, command.options, ctx);
 
@@ -321,20 +387,17 @@ export class CommandRouter {
       // Emit beforeExecute
       await this.emit("beforeExecute", ctx);
 
-      // Run the action, tracking it as active so SIGINT can cancel it.
-      const activeEntry = { command, ctx, controller };
-      this.active.add(activeEntry);
-      try {
-        await command.action(ctx);
-      } finally {
-        this.active.delete(activeEntry);
-      }
+      await command.action(ctx);
       await this.emit("afterExecute", ctx);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       await this.emit("commandError", error, ctx);
       await this.emit("error", error);
       throw err;
+    } finally {
+      signal?.removeEventListener("abort", abortFromExternalSignal);
+      cancellationScope?.delete(activeEntry);
+      this.active.delete(activeEntry);
     }
   }
 
@@ -348,9 +411,17 @@ export class CommandRouter {
    */
   private async executePiped(
     segments: string[],
-    options: { shell?: Shell | null; stdout: Writable; stderr: Writable },
+    options: {
+      shell?: Shell | null;
+      stdin?: Readable | null;
+      stdout: Writable;
+      stderr: Writable;
+      signal?: AbortSignal;
+    },
   ): Promise<void> {
     const { shell = null, stderr } = options;
+    const stageScopes: CancellationScope[] = segments.map(() => new Set());
+    let pipelineFailed = false;
 
     // Wire stage[i].stdout → stage[i+1].stdin via PassThrough pipes.
     const pipes: PassThrough[] = [];
@@ -374,16 +445,29 @@ export class CommandRouter {
 
     const runs = segments.map((segment, i) => {
       const isLast = i === segments.length - 1;
-      const stdin: Readable | null = i === 0 ? null : pipes[i - 1];
+      const stdin: Readable | null = i === 0 ? (options.stdin ?? null) : pipes[i - 1];
       const stdout: Writable = isLast ? options.stdout : pipes[i];
 
-      return this.execute(segment, { shell, stdin, stdout, stderr })
+      return this.executeInternal(segment, {
+        shell,
+        stdin,
+        stdout,
+        stderr,
+        signal: options.signal,
+        cancellationScope: stageScopes[i],
+      })
         .then(() => {
           // Once this stage has completed successfully, close its upstream input
           // as well. This lets producers observe teardown when a downstream
           // stage intentionally stops early after consuming enough data.
           if (i > 0 && !pipes[i - 1].destroyed) {
             destroyPipe(pipes[i - 1]);
+          }
+          // A downstream stage may intentionally stop after consuming enough
+          // input. Abort every still-running upstream action, including actions
+          // waiting on external I/O rather than on the pipe itself.
+          if (i > 0) {
+            this.cancelEntries(stageScopes.slice(0, i).flatMap((scope) => [...scope]));
           }
           // Signal end-of-input to the downstream stage.
           if (!isLast) pipes[i].end();
@@ -393,6 +477,13 @@ export class CommandRouter {
           // any upstream pipes — so a backpressured upstream stage cannot hang
           // forever waiting on a consumer that has already failed.
           const error = err instanceof Error ? err : new Error(String(err));
+          if (!pipelineFailed) {
+            pipelineFailed = true;
+            this.cancelEntries(
+              stageScopes.flatMap((scope) => [...scope]),
+              error,
+            );
+          }
           for (const pipe of pipes) {
             destroyPipe(pipe, error);
           }

@@ -21,6 +21,8 @@ export interface LoggerOptions {
   timestamp?: boolean;
   /** Output stream for log messages. Defaults to process.stderr. */
   stream?: Writable;
+  /** Maximum log lines queued while the stream is backpressured. Defaults to 1000. */
+  bufferLimit?: number;
 }
 
 /**
@@ -41,6 +43,8 @@ export interface Logger {
   setLevel(level: LogLevel): void;
   /** Creates a child logger with an additional prefix segment. */
   child(prefix: string): Logger;
+  /** Resolves when all logger-managed buffered lines have been handed to the stream. */
+  flush(): Promise<void>;
 }
 
 // ── Level ordering ──
@@ -110,8 +114,47 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
   const prefix = options.prefix;
   const timestamp = options.timestamp ?? false;
   const stream = options.stream ?? process.stderr;
+  const bufferLimit = options.bufferLimit ?? 1000;
+  if (!Number.isSafeInteger(bufferLimit) || bufferLimit < 0) {
+    throw new RangeError("Logger bufferLimit must be a non-negative safe integer");
+  }
   const col = createColorizer(stream);
   const colorOn = () => isColorEnabled(stream);
+  const bufferedLines: string[] = [];
+  const flushWaiters = new Set<() => void>();
+  let backpressured = false;
+
+  const resolveFlushWaiters = () => {
+    if (backpressured || bufferedLines.length > 0) return;
+    for (const resolve of flushWaiters) resolve();
+    flushWaiters.clear();
+  };
+
+  const flushBuffered = () => {
+    backpressured = false;
+    while (bufferedLines.length > 0) {
+      const line = bufferedLines.shift() as string;
+      if (!stream.write(line)) {
+        backpressured = true;
+        stream.once("drain", flushBuffered);
+        return;
+      }
+    }
+    resolveFlushWaiters();
+  };
+
+  const writeLine = (line: string) => {
+    if (backpressured) {
+      if (bufferLimit === 0) return;
+      if (bufferedLines.length >= bufferLimit) bufferedLines.shift();
+      bufferedLines.push(line);
+      return;
+    }
+    if (!stream.write(line)) {
+      backpressured = true;
+      stream.once("drain", flushBuffered);
+    }
+  };
 
   function effectiveLevel(): LogLevel {
     return ownLevel ?? inheritLevel?.() ?? "info";
@@ -155,7 +198,7 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
     // Message
     parts.push(formatted);
 
-    stream.write(`${parts.join(" ")}\n`);
+    writeLine(`${parts.join(" ")}\n`);
   }
 
   const instance: Logger = {
@@ -181,7 +224,11 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
       // No explicit level → the child inherits this logger's effective level
       // dynamically (so later parent.setLevel calls still reach it).
-      return logger({ prefix: fullPrefix, timestamp, stream }, effectiveLevel);
+      return logger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
+    },
+    flush() {
+      if (!backpressured && bufferedLines.length === 0) return Promise.resolve();
+      return new Promise<void>((resolve) => flushWaiters.add(resolve));
     },
   };
 

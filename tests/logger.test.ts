@@ -1,3 +1,4 @@
+import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetColorEnabled, setColorEnabled } from "../src/output/color.js";
 import { logger } from "../src/output/logger.js";
@@ -135,5 +136,36 @@ describe("logger", () => {
 
     child.warn("shown");
     expect(stream.getOutput()).not.toContain("shown");
+  });
+
+  it("bounds queued lines during backpressure and exposes flush", async () => {
+    let output = "";
+    let writes = 0;
+    let onDrain: (() => void) | undefined;
+    const stream = {
+      write(chunk: string) {
+        output += chunk;
+        writes++;
+        return writes !== 1;
+      },
+      once(event: string, handler: () => void) {
+        if (event === "drain") onDrain = handler;
+        return stream;
+      },
+    } as unknown as Writable;
+    const log = logger({ stream, bufferLimit: 1 });
+    log.info("first");
+    log.info("dropped");
+    log.info("latest");
+    const flushed = log.flush();
+    onDrain?.();
+    await flushed;
+    expect(output).toContain("first");
+    expect(output).toContain("latest");
+    expect(output).not.toContain("dropped");
+  });
+
+  it("validates bufferLimit", () => {
+    expect(() => logger({ bufferLimit: -1 })).toThrow(RangeError);
   });
 });

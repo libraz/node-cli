@@ -138,4 +138,18 @@ describe("CommandRegistry", () => {
 
     expect(() => new CommandBuilder(registry, "bar")).toThrow(/conflicts with alias/);
   });
+
+  it("rejects an implicit parent group that conflicts with an alias", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "account").alias("user");
+    expect(() => new CommandBuilder(registry, "user create")).toThrow(/conflicts with alias/);
+  });
+
+  it("removes aliases for every descendant in an unregistered subtree", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "group child leaf").alias("l");
+    expect(registry.unregister(["group"])).toBe(true);
+    expect(() => new CommandBuilder(registry, "group child l")).not.toThrow();
+    expect(registry.resolve(["group", "child", "l"])?.name).toBe("l");
+  });
 });

@@ -22,7 +22,7 @@ export function resolveOptions(
   defs: Map<string, OptionDef>,
   ctx: CommandContext,
 ): Record<string, unknown> {
-  const resolved: Record<string, unknown> = {};
+  const resolved: Record<string, unknown> = Object.create(null);
 
   // Build alias → long mapping
   const aliasMap = new Map<string, string>();
@@ -33,12 +33,18 @@ export function resolveOptions(
   }
 
   // Normalize aliases in raw
-  const normalized: Record<string, unknown> = {};
+  const normalized: Record<string, unknown> = Object.create(null);
   for (const [key, value] of Object.entries(raw)) {
     const long = aliasMap.get(key) ?? key;
     normalized[long] = value;
   }
 
+  // Make raw cross-option values visible during custom parsing. Each canonical
+  // value replaces its raw counterpart as the first pass progresses.
+  Object.assign(resolved, normalized);
+  ctx.options = resolved;
+
+  // First pass: parse/coerce/default/required for every option.
   for (const [, def] of defs) {
     const { long, schema } = def;
     let value = normalized[long];
@@ -70,6 +76,15 @@ export function resolveOptions(
       throw new MissingOptionError(long);
     }
 
+    if (value !== undefined) resolved[long] = value;
+    else delete resolved[long];
+  }
+
+  // Second pass: every validator sees the complete, canonical option set.
+  for (const [, def] of defs) {
+    const { long, schema } = def;
+    const value = resolved[long];
+
     // Choices check (compare leniently so declared string choices match
     // coerced numeric values and vice versa). For array-typed options each
     // element is validated individually rather than the joined array.
@@ -96,18 +111,14 @@ export function resolveOptions(
         if (err instanceof Error) {
           throw new ValidationError(err.message, err);
         }
-        throw err;
+        throw new ValidationError(String(err), err);
       }
-    }
-
-    if (value !== undefined) {
-      resolved[long] = value;
     }
   }
 
   // Pass through unknown options (not defined in schema)
   for (const [key, value] of Object.entries(normalized)) {
-    if (!defs.has(key) && !(key in resolved)) {
+    if (!defs.has(key) && !Object.hasOwn(resolved, key)) {
       resolved[key] = value;
     }
   }

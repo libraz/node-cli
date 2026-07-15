@@ -42,6 +42,19 @@ describe("parse-phase errors emit the error event", () => {
     await expect(router.execute("deploy prod --tag")).rejects.toThrow();
     expect(onError).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    'deploy "',
+    "deploy |",
+  ])("emits error exactly once for syntax input %j", async (input) => {
+    const { registry, router } = setup();
+    new CommandBuilder(registry, "deploy").action(() => {});
+    const onError = vi.fn();
+    router.on("error", onError);
+
+    await expect(router.execute(input)).rejects.toThrow();
+    expect(onError).toHaveBeenCalledOnce();
+  });
 });
 
 describe("fallback catch handler errors", () => {
@@ -361,6 +374,19 @@ describe("canonical command path in custom completer", () => {
   });
 });
 
+describe("canonical command path in actions", () => {
+  it("passes canonical names when the command is invoked through aliases", async () => {
+    const { registry, router } = setup();
+    const paths: string[][] = [];
+    new CommandBuilder(registry, "deploy run")
+      .alias("r")
+      .action((ctx) => paths.push(ctx.commandPath));
+
+    await router.execute("deploy r");
+    expect(paths).toEqual([["deploy", "run"]]);
+  });
+});
+
 describe("usage string consistency", () => {
   it("includes [options] in the missing-argument usage", async () => {
     const { registry, router } = setup();
@@ -420,6 +446,38 @@ describe("non-interactive start with no arguments", () => {
     }
 
     expect(captured).toContain("Available commands");
+  });
+
+  it("prints plain help when stdin is a TTY but stdout is redirected", async () => {
+    const cli = createCLI({ name: "demo" });
+    const originalStdinIsTTY = process.stdin.isTTY;
+    const originalStdoutIsTTY = process.stdout.isTTY;
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    let captured = "";
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      captured += chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      await cli.start([]);
+    } finally {
+      process.stdout.write = originalWrite;
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: originalStdinIsTTY,
+        configurable: true,
+      });
+      Object.defineProperty(process.stdout, "isTTY", {
+        value: originalStdoutIsTTY,
+        configurable: true,
+      });
+    }
+
+    expect(captured).toContain("Available commands");
+    expect(captured).not.toContain("\x1b[");
+    expect(captured).not.toContain("demo> ");
   });
 });
 

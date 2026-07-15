@@ -109,6 +109,8 @@ const data = [
 console.log(table(data, { header: true }));
 ```
 
+Array rows are normalized to the widest row and missing cells are padded as empty strings. Empty and header-only data arrays return an empty string.
+
 ### Options
 
 ```typescript
@@ -352,7 +354,9 @@ multi.stop();    // Stop all bars
 
 ### TTY Detection
 
-Progress bars and spinners only render on TTY streams. On non-TTY (piped output, CI), all operations are silently no-ops.
+Animated progress bars and spinner frames render only on TTY streams. On non-TTY streams (piped output or CI), bars remain silent; spinner `succeed()`, `fail()`, and `warn()` emit one final plain status line, while `start()`, `update()`, and `stop()` remain silent.
+
+Labels and custom progress formats are single-line: newline, tab, and other control characters are replaced with spaces. While a slow stream is backpressured, intermediate redraws are coalesced so only the latest pending frame is retained.
 
 ## Prompt
 
@@ -410,12 +414,16 @@ const features = await prompt.multiselect("Enable features:", [
 });
 ```
 
+When `min` is omitted, pressing Enter may select zero items. Set `min: 1` when at least one selection is required.
+
 ### Password
 
 ```typescript
 const password = await prompt.password("Enter password:");
 // Input is masked with asterisks
 ```
+
+Password values preserve leading and trailing whitespace; only the exact empty string fails the default `required: true` check.
 
 ### Prompt Options
 
@@ -463,8 +471,11 @@ const log = logger({
   prefix: "server",       // [server] prefix
   timestamp: true,        // HH:MM:SS prefix
   stream: process.stderr, // Output stream (default: stderr)
+  bufferLimit: 1000,      // Maximum queued lines during backpressure
 });
 ```
+
+When the stream applies backpressure, the logger queues at most `bufferLimit` lines and drops the oldest queued line when full. Use `await log.flush()` to wait until logger-managed queued lines have been handed to the stream. A limit of `0` drops every line logged while backpressured.
 
 ### Printf-Style Formatting
 
