@@ -11,7 +11,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "license": "MIT",
   "author": "libraz <libraz@libraz.net>",
@@ -22,29 +23,42 @@
   "homepage": "https://github.com/libraz/node-cli",
   "bugs": "https://github.com/libraz/node-cli/issues",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest",
     "test:coverage": "vitest --coverage",
-    "lint": "biome check src tests",
-    "lint:fix": "biome check --write src tests",
-    "format": "biome format --write src tests",
-    "check": "biome check --write src tests",
-    "prepack": "cp README.md .readme-backup && cp README.npm.md .npm-readme-backup && cp README.npm.md README.md && rm README.npm.md",
-    "postpack": "mv .readme-backup README.md && mv .npm-readme-backup README.npm.md"
+    "test:examples": "node scripts/examples-smoke.mjs",
+    "test:git-install": "node scripts/git-install-smoke.mjs",
+    "test:pack": "node scripts/pack-smoke.mjs",
+    "typecheck:examples": "tsc -p tsconfig.examples.json",
+    "lint": "biome check src tests examples scripts",
+    "lint:fix": "biome check --write src tests examples scripts",
+    "format": "biome format --write src tests examples scripts",
+    "check": "biome check --write src tests examples scripts",
+    "prepare": "tsc",
+    "prepack": "yarn build && node scripts/pack-readme.mjs prepare",
+    "postpack": "node scripts/pack-readme.mjs restore"
   },
   "volta": {
     "node": "24.18.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.2",
-    "@types/node": "^26.1.0",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@biomejs/biome": "^2.5.4",
+    "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "@types/node": ">=22"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    }
   },
   "packageManager": "yarn@4.17.0"
 }

@@ -23,4 +23,4 @@ cli
     ctx.stdout.write(`Hello, ${ctx.args.name}!\n`);
   });
 
-cli.start();
+await cli.start();

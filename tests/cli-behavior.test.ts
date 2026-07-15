@@ -43,18 +43,18 @@ describe("parse-phase errors emit the error event", () => {
     expect(onError).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    'deploy "',
-    "deploy |",
-  ])("emits error exactly once for syntax input %j", async (input) => {
-    const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy").action(() => {});
-    const onError = vi.fn();
-    router.on("error", onError);
+  it.each(['deploy "', "deploy |"])(
+    "emits error exactly once for syntax input %j",
+    async (input) => {
+      const { registry, router } = setup();
+      new CommandBuilder(registry, "deploy").action(() => {});
+      const onError = vi.fn();
+      router.on("error", onError);
 
-    await expect(router.execute(input)).rejects.toThrow();
-    expect(onError).toHaveBeenCalledOnce();
-  });
+      await expect(router.execute(input)).rejects.toThrow();
+      expect(onError).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("fallback catch handler errors", () => {

@@ -10,7 +10,7 @@
  *   npx tsx examples/09-database-admin.ts db query "SELECT * FROM users"
  *   npx tsx examples/09-database-admin.ts      # interactive shell with sql mode
  */
-import { createCLI, color, c, table, prompt, PromptCancelError } from "../src/index.js";
+import { c, color, createCLI, PromptCancelError, prompt, table } from "../src/index.js";
 
 // Simulated database
 const mockDb = {
@@ -43,7 +43,9 @@ db.command("status")
   .description("Show database connection status")
   .action((ctx) => {
     ctx.stdout.write(c`{bold Database Status}\n\n`);
-    ctx.stdout.write(c`  Connection: ${mockDb.connected ? "{green Connected}" : "{red Disconnected}"}\n`);
+    ctx.stdout.write(
+      c`  Connection: ${mockDb.connected ? "{green Connected}" : "{red Disconnected}"}\n`,
+    );
     ctx.stdout.write(c`  Tables:     {cyan ${String(Object.keys(mockDb.tables).length)}}\n`);
     ctx.stdout.write(c`  Host:       {dim localhost:5432}\n`);
     ctx.stdout.write(c`  Database:   {dim myapp_dev}\n\n`);
@@ -55,7 +57,11 @@ db.command("status")
     }));
 
     ctx.stdout.write(
-      table(tableData, { border: "rounded", headerStyle: "bold", align: { rows: "right", columns: "right" } }),
+      table(tableData, {
+        border: "rounded",
+        headerStyle: "bold",
+        align: { rows: "right", columns: "right" },
+      }),
     );
     ctx.stdout.write("\n");
   });
@@ -92,7 +98,9 @@ dbTable
     const limit = ctx.options.limit as number;
     const rows = mockDb.tables[name].slice(0, limit);
 
-    ctx.stdout.write(c`\n{bold Table: ${name}} {dim (${String(mockDb.tables[name].length)} rows)}\n\n`);
+    ctx.stdout.write(
+      c`\n{bold Table: ${name}} {dim (${String(mockDb.tables[name].length)} rows)}\n\n`,
+    );
     ctx.stdout.write(table(rows, { border: "rounded", headerStyle: "bold" }));
     ctx.stdout.write("\n");
   });
@@ -186,7 +194,7 @@ function executeQuery(sql: string, stdout: NodeJS.WritableStream) {
     const tableName = match[1];
     const rows = mockDb.tables[tableName];
     if (rows) {
-      stdout.write(table(rows, { border: "simple", headerStyle: "bold" }) + "\n");
+      stdout.write(`${table(rows, { border: "simple", headerStyle: "bold" })}\n`);
       stdout.write(c`{dim ${String(rows.length)} row(s)}\n`);
     } else {
       stdout.write(c`{red Error}: Table "${tableName}" does not exist\n`);
@@ -197,4 +205,4 @@ function executeQuery(sql: string, stdout: NodeJS.WritableStream) {
   }
 }
 
-cli.start();
+await cli.start();

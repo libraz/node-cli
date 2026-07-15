@@ -180,4 +180,4 @@ const removed = cli
   });
 removed.remove();
 
-cli.start();
+await cli.start();

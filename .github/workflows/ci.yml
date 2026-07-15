@@ -8,50 +8,81 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      - 'examples/**'
+      - 'scripts/**'
+      - 'docs/**'
+      - 'README*.md'
+      - 'CHANGELOG.md'
       - 'package.json'
       - 'yarn.lock'
-      - 'tsconfig.json'
+      - 'tsconfig*.json'
       - 'vitest.config.ts'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
     paths:
       - 'src/**'
       - 'tests/**'
+      - 'examples/**'
+      - 'scripts/**'
+      - 'docs/**'
+      - 'README*.md'
+      - 'CHANGELOG.md'
       - 'package.json'
       - 'yarn.lock'
-      - 'tsconfig.json'
+      - 'tsconfig*.json'
       - 'vitest.config.ts'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
 
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v6
+      # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          node-version: '24'
+          persist-credentials: false
+
+      # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ matrix.node }}
 
       - run: corepack enable
       - run: corepack prepare yarn@4.17.0 --activate
 
-      - uses: actions/cache@v6
+      # v6.1.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             .yarn/cache
             node_modules
-          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          key: ${{ runner.os }}-node-${{ matrix.node }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
-            ${{ runner.os }}-yarn-
+            ${{ runner.os }}-node-${{ matrix.node }}-yarn-
 
       - run: yarn install --immutable
       - run: yarn lint
       - run: yarn build
-      - run: yarn test --run --coverage
+      - run: yarn typecheck:examples
+      - run: yarn test:examples
+      - if: matrix.node == 24
+        run: yarn test --run --coverage
+      - if: matrix.node != 24
+        run: yarn test --run
+      - run: yarn test:pack
+      - if: matrix.node == 24
+        run: yarn test:git-install
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
+      # v7.0.0
+      - if: matrix.node == 24
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

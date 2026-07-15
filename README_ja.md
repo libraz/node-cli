@@ -44,6 +44,7 @@ pnpm add @libraz/node-cli
 ## クイックスタート
 
 ```typescript
+#!/usr/bin/env node
 import { createCLI } from "@libraz/node-cli";
 
 const cli = createCLI({ name: "myapp", version: "1.0.0" });
@@ -58,8 +59,22 @@ cli
     ctx.stdout.write(`Hello, ${msg}!\n`);
   });
 
-cli.start();
+await cli.start();
 ```
+
+この内容を `src/cli.ts` として保存し、最小の ESM package 設定を追加します。
+
+```json
+{
+  "type": "module",
+  "bin": { "myapp": "dist/cli.js" },
+  "scripts": { "build": "tsc", "start": "node dist/cli.js" },
+  "dependencies": { "@libraz/node-cli": "^1.3.2" },
+  "devDependencies": { "@types/node": "^22", "typescript": "^6" }
+}
+```
+
+`npx tsc --module Node16 --moduleResolution Node16 --target ES2023 --outDir dist src/cli.ts` でコンパイルし、POSIXでは `chmod +x dist/cli.js` を実行します。`npm link`（またはパッケージのインストール）後に `$ myapp` として起動できます。
 
 **ダイレクトモード:**
 

@@ -20,6 +20,7 @@ pnpm add @libraz/node-cli
 ## 基本的な使い方
 
 ```typescript
+#!/usr/bin/env node
 import { createCLI } from "@libraz/node-cli";
 
 const cli = createCLI({ name: "myapp", version: "1.0.0" });
@@ -34,8 +35,22 @@ cli
     ctx.stdout.write(`Hello, ${msg}!\n`);
   });
 
-cli.start();
+await cli.start();
 ```
+
+このファイルを `src/cli.ts` として保存し、`package.json` に ESM・ビルド出力・実行名を設定します。
+
+```json
+{
+  "type": "module",
+  "bin": { "myapp": "dist/cli.js" },
+  "scripts": { "build": "tsc", "start": "node dist/cli.js" },
+  "dependencies": { "@libraz/node-cli": "^1.3.2" },
+  "devDependencies": { "@types/node": "^22", "typescript": "^6" }
+}
+```
+
+`npm run build` を実行し、POSIXでは `chmod +x dist/cli.js` を実行します。`npm link` によりローカルで `myapp` コマンドを確認できます。公開Node stream型を利用するアプリケーションは互換性のある `@types/node`（22以上）も導入してください。
 
 ## デュアル実行モード
 

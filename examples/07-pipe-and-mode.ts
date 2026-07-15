@@ -11,7 +11,7 @@
  *   calc> 2 + 3
  *   calc> exit
  */
-import { createCLI, c } from "../src/index.js";
+import { c, createCLI } from "../src/index.js";
 
 const cli = createCLI({ name: "pipes", prompt: "pipes> " });
 
@@ -32,7 +32,7 @@ cli
       "test.spec.ts",
     ];
     for (const f of files) {
-      ctx.stdout.write(f + "\n");
+      ctx.stdout.write(`${f}\n`);
     }
   });
 
@@ -50,7 +50,7 @@ cli
       const lines = Buffer.concat(chunks).toString().split("\n").filter(Boolean);
       for (const line of lines) {
         if (line.includes(pattern)) {
-          ctx.stdout.write(line + "\n");
+          ctx.stdout.write(`${line}\n`);
         }
       }
     } else {
@@ -150,4 +150,4 @@ cli
     });
   });
 
-cli.start();
+await cli.start();

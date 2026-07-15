@@ -102,4 +102,4 @@ issue
     ctx.stdout.write("  #3  Update dependencies     [chore]\n");
   });
 
-cli.start();
+await cli.start();

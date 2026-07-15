@@ -10,7 +10,7 @@
  *   npx tsx examples/03-deploy-tool.ts rollback prod
  *   npx tsx examples/03-deploy-tool.ts status
  */
-import { createCLI, c } from "../src/index.js";
+import { c, createCLI } from "../src/index.js";
 
 const cli = createCLI({ name: "deploy-tool" });
 
@@ -49,7 +49,9 @@ cli
   .validate((ctx) => {
     const validEnvs = ["prod", "staging", "dev"];
     if (!validEnvs.includes(ctx.args.env as string)) {
-      throw new Error(`Invalid environment "${ctx.args.env}". Must be one of: ${validEnvs.join(", ")}`);
+      throw new Error(
+        `Invalid environment "${ctx.args.env}". Must be one of: ${validEnvs.join(", ")}`,
+      );
     }
     if (ctx.args.env === "prod" && !ctx.options.tag) {
       throw new Error("Production deployments require a --tag");
@@ -74,7 +76,11 @@ cli
 cli
   .command("rollback <env>")
   .description("Rollback to previous deployment")
-  .option("-n, --steps <n>", { type: "number", default: 1, description: "Number of versions to rollback" })
+  .option("-n, --steps <n>", {
+    type: "number",
+    default: 1,
+    description: "Number of versions to rollback",
+  })
   .action((ctx) => {
     const env = ctx.args.env as string;
     const steps = ctx.options.steps as number;
@@ -95,4 +101,4 @@ cli
     ctx.stdout.write(c`  dev:     {cyan v1.3.0-dev.42}  (deployed 5m ago)\n`);
   });
 
-cli.start();
+await cli.start();

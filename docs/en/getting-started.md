@@ -20,6 +20,7 @@ pnpm add @libraz/node-cli
 ## Basic Usage
 
 ```typescript
+#!/usr/bin/env node
 import { createCLI } from "@libraz/node-cli";
 
 const cli = createCLI({ name: "myapp", version: "1.0.0" });
@@ -34,8 +35,22 @@ cli
     ctx.stdout.write(`Hello, ${msg}!\n`);
   });
 
-cli.start();
+await cli.start();
 ```
+
+Save the file as `src/cli.ts`. Configure ESM, build output, and the executable name in `package.json`:
+
+```json
+{
+  "type": "module",
+  "bin": { "myapp": "dist/cli.js" },
+  "scripts": { "build": "tsc", "start": "node dist/cli.js" },
+  "dependencies": { "@libraz/node-cli": "^1.3.2" },
+  "devDependencies": { "@types/node": "^22", "typescript": "^6" }
+}
+```
+
+Run `npm run build`, then `chmod +x dist/cli.js` on POSIX. `npm link` exposes the configured `myapp` command for local testing. Applications using the public Node stream types should install a compatible `@types/node` (22 or newer).
 
 ## Dual Execution Modes
 

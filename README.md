@@ -44,6 +44,7 @@ pnpm add @libraz/node-cli
 ## Quick Start
 
 ```typescript
+#!/usr/bin/env node
 import { createCLI } from "@libraz/node-cli";
 
 const cli = createCLI({ name: "myapp", version: "1.0.0" });
@@ -58,8 +59,22 @@ cli
     ctx.stdout.write(`Hello, ${msg}!\n`);
   });
 
-cli.start();
+await cli.start();
 ```
+
+Save this as `src/cli.ts`, then use a minimal ESM package setup:
+
+```json
+{
+  "type": "module",
+  "bin": { "myapp": "dist/cli.js" },
+  "scripts": { "build": "tsc", "start": "node dist/cli.js" },
+  "dependencies": { "@libraz/node-cli": "^1.3.2" },
+  "devDependencies": { "@types/node": "^22", "typescript": "^6" }
+}
+```
+
+Compile with `npx tsc --module Node16 --moduleResolution Node16 --target ES2023 --outDir dist src/cli.ts`, run `chmod +x dist/cli.js` on POSIX, and use `npm link` (or install the package) to make `$ myapp` available.
 
 **Direct mode:**
 

@@ -12,7 +12,7 @@
  *   npx tsx examples/08-task-runner.ts list
  */
 import type { Writable } from "node:stream";
-import { createCLI, color, c, table, progress, logger } from "../src/index.js";
+import { c, color, createCLI, logger, progress, table } from "../src/index.js";
 
 const log = logger({ prefix: "runner", timestamp: true });
 
@@ -51,11 +51,12 @@ cli
     const data = tasks.map((t) => ({
       name: t.name,
       description: t.description,
-      status: t.status === "done"
-        ? color.green(t.status)
-        : t.status === "failed"
-          ? color.red(t.status)
-          : t.status,
+      status:
+        t.status === "done"
+          ? color.green(t.status)
+          : t.status === "failed"
+            ? color.red(t.status)
+            : t.status,
     }));
 
     ctx.stdout.write(c`{bold Available Tasks}\n\n`);
@@ -84,7 +85,8 @@ cli
     if (taskName === "all") {
       await runAll(ctx, verbose);
     } else {
-      const task = tasks.find((t) => t.name === taskName)!;
+      const task = tasks.find((candidate) => candidate.name === taskName);
+      if (!task) throw new Error(`Unknown task: ${taskName}`);
       await runSingle(task, ctx, verbose);
     }
   });
@@ -162,4 +164,4 @@ cli
     ctx.stdout.write(c`{green All tasks reset.}\n`);
   });
 
-cli.start();
+await cli.start();

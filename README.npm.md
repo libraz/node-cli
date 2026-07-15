@@ -19,6 +19,7 @@ Zero-dependency, batteries-included CLI framework for Node.js / TypeScript.
 ## Quick Start
 
 ```typescript
+#!/usr/bin/env node
 import { createCLI } from "@libraz/node-cli";
 
 const cli = createCLI({ name: "myapp" });
@@ -33,7 +34,7 @@ cli
     ctx.stdout.write(`Hello, ${msg}!\n`);
   });
 
-cli.start();
+await cli.start();
 ```
 
 ## Built-in Utilities

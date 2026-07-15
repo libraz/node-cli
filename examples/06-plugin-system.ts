@@ -10,7 +10,7 @@
  *   npx tsx examples/06-plugin-system.ts greet World
  */
 import type { PluginContext } from "../src/index.js";
-import { createCLI, c } from "../src/index.js";
+import { c, createCLI } from "../src/index.js";
 
 // ── Plugin: Timing ──
 // Adds execution timing to all commands
@@ -37,7 +37,8 @@ function timingPlugin(ctx: PluginContext) {
 
 function versionPlugin(version: string) {
   return (ctx: PluginContext) => {
-    ctx.command("version")
+    ctx
+      .command("version")
       .alias("v")
       .description("Show application version")
       .action((cmdCtx) => {
@@ -50,7 +51,8 @@ function versionPlugin(version: string) {
 // Adds a "ping" command and logs errors
 
 function healthPlugin(ctx: PluginContext) {
-  ctx.command("ping")
+  ctx
+    .command("ping")
     .description("Check if the application is alive")
     .action((cmdCtx) => {
       cmdCtx.stdout.write(c`{green pong} — all systems operational\n`);
@@ -69,7 +71,8 @@ function greetingPlugin() {
     // Simulate async initialization (e.g., loading config)
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    ctx.command("greet <name>")
+    ctx
+      .command("greet <name>")
       .description("Greet someone warmly")
       .option("--style <style>", {
         type: "string",
@@ -86,7 +89,7 @@ function greetingPlugin() {
           pirate: `Ahoy, ${name}! Shiver me timbers!`,
         };
 
-        cmdCtx.stdout.write(greetings[style] + "\n");
+        cmdCtx.stdout.write(`${greetings[style]}\n`);
       });
   };
 }
@@ -100,4 +103,4 @@ cli.use(versionPlugin("1.0.0"));
 cli.use(healthPlugin);
 cli.use(greetingPlugin());
 
-cli.start();
+await cli.start();

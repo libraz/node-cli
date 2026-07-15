@@ -11,7 +11,7 @@
  *   npx tsx examples/04-output-showcase.ts spinner
  *   npx tsx examples/04-output-showcase.ts logger
  */
-import { createCLI, color, c, table, progress, logger } from "../src/index.js";
+import { c, color, createCLI, logger, progress, table } from "../src/index.js";
 
 const cli = createCLI({ name: "showcase" });
 
@@ -22,11 +22,11 @@ cli
   .description("Demonstrate color output")
   .action((ctx) => {
     ctx.stdout.write("=== Proxy-based API ===\n");
-    ctx.stdout.write(color.red("Red text") + "\n");
-    ctx.stdout.write(color.bold.green("Bold green") + "\n");
-    ctx.stdout.write(color.bgYellow.black("Black on yellow") + "\n");
-    ctx.stdout.write(color.dim.italic("Dim italic") + "\n");
-    ctx.stdout.write(color.underline.cyan("Underlined cyan") + "\n\n");
+    ctx.stdout.write(`${color.red("Red text")}\n`);
+    ctx.stdout.write(`${color.bold.green("Bold green")}\n`);
+    ctx.stdout.write(`${color.bgYellow.black("Black on yellow")}\n`);
+    ctx.stdout.write(`${color.dim.italic("Dim italic")}\n`);
+    ctx.stdout.write(`${color.underline.cyan("Underlined cyan")}\n\n`);
 
     ctx.stdout.write("=== Template literal tag ===\n");
     ctx.stdout.write(c`Status: {green OK}\n`);
@@ -187,7 +187,7 @@ cli
     http.warn("Rate limit approaching: %d/100 requests", 89);
   });
 
-cli.start();
+await cli.start();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

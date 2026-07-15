@@ -8,7 +8,7 @@
  *   npx tsx examples/05-interactive-prompts.ts init
  *   npx tsx examples/05-interactive-prompts.ts login
  */
-import { createCLI, prompt, color, c, PromptCancelError } from "../src/index.js";
+import { c, color, createCLI, PromptCancelError, prompt } from "../src/index.js";
 
 const cli = createCLI({ name: "setup" });
 
@@ -62,12 +62,16 @@ cli
       ctx.stdout.write(`  Name:        ${color.cyan(name)}\n`);
       ctx.stdout.write(c`  Description: ${description || color.dim("(none)")}\n`);
       ctx.stdout.write(`  Template:    ${color.yellow(template)}\n`);
-      ctx.stdout.write(c`  Features:    ${(features as string[]).join(", ") || color.dim("(none)")}\n`);
+      ctx.stdout.write(
+        c`  Features:    ${(features as string[]).join(", ") || color.dim("(none)")}\n`,
+      );
       ctx.stdout.write(`  Git:         ${git ? color.green("Yes") : color.red("No")}\n`);
 
       const proceed = await prompt.confirm("\nProceed with setup?");
       if (proceed) {
-        ctx.stdout.write(`\n${color.green.bold("Done!")} Project "${name}" created successfully.\n`);
+        ctx.stdout.write(
+          `\n${color.green.bold("Done!")} Project "${name}" created successfully.\n`,
+        );
       } else {
         ctx.stdout.write(c`\n{yellow Cancelled.}\n`);
       }
@@ -90,7 +94,7 @@ cli
       ctx.stdout.write(c`{bold Login}\n\n`);
 
       const username = await prompt.text("Username:");
-      const password = await prompt.password("Password:");
+      const _password = await prompt.password("Password:");
 
       ctx.stdout.write(c`\n{dim Authenticating...}\n`);
       ctx.stdout.write(c`{green.bold Logged in} as {bold ${username}}.\n`);
@@ -103,4 +107,4 @@ cli
     }
   });
 
-cli.start();
+await cli.start();

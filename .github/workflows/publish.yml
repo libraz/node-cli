@@ -12,40 +12,68 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm
     steps:
-      - uses: actions/checkout@v7
+      # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       - run: npm install -g npm@11.18.0
       - run: corepack enable
       - run: corepack prepare yarn@4.17.0 --activate
 
-      - uses: actions/cache@v6
+      # v6.1.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             .yarn/cache
             node_modules
-          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          key: ${{ runner.os }}-node-24-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
-            ${{ runner.os }}-yarn-
+            ${{ runner.os }}-node-24-yarn-
 
       - run: yarn install --immutable
       - run: yarn lint
       - run: yarn build
-      - run: yarn test --run
+      - run: yarn typecheck:examples
+      - run: yarn test:examples
+      - run: yarn test --run --coverage
+      - run: yarn test:git-install
 
-      - name: Publish to npm
-        run: npm publish --access public
+      - name: Validate release metadata
+        id: metadata
+        run: >-
+          node scripts/release-metadata.mjs
+          --tag "$GITHUB_REF_NAME"
+          --github-output "$GITHUB_OUTPUT"
+          --notes release-notes.md
 
+      - name: Build and verify publish artifact
+        id: artifact
+        run: |
+          node scripts/pack-smoke.mjs --keep --manifest pack-artifact.json
+          echo "tarball=$(node -p "require('./pack-artifact.json').filename")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish verified tarball to npm
+        run: npm publish "${{ steps.artifact.outputs.tarball }}" --access public --tag "${{ steps.metadata.outputs.dist_tag }}"
+
+      # v3.0.2
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           name: Release ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          body: |
-            Automated release for ${{ github.ref_name }}.
+          prerelease: ${{ steps.metadata.outputs.prerelease }}
+          body_path: release-notes.md
+          files: |
+            ${{ steps.artifact.outputs.tarball }}
+            pack-artifact.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
