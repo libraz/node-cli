@@ -55,7 +55,7 @@ try {
 
   run(
     npm,
-    ["install", "--save-dev", "@types/node@20", "--ignore-scripts", "--no-audit", "--no-fund"],
+    ["install", "--save-dev", "@types/node@22", "--ignore-scripts", "--no-audit", "--no-fund"],
     { cwd: fixture },
   );
   const fixturePackagePath = resolve(fixture, "package.json");

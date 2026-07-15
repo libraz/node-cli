@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-07-15
+
+### Added
+
+- Programmatic `exec()` now accepts `stdin` and an external `AbortSignal`;
+  command contexts expose exact `rawArgv` values for array/direct execution.
+- Mode sub-REPLs support isolated completion and in-memory/disabled history
+  policies. Logger instances expose bounded backpressure buffering and
+  `flush()`.
+- Release gates now cover Node 22 and 24 on Linux, typecheck the real
+  examples, install and execute the packed tarball, and validate tag/version,
+  dist-tag, changelog, source maps, and consumer declarations before publish.
+
+### Changed
+
+- Progress indicators share cursor ownership per stream, coalesce redraws on
+  slow streams, sanitize control characters, and use consistent terminal
+  `finish()`/`stop()` behavior. Non-TTY spinners emit only final status lines.
+- History is written as a private `0600` file using lock/merge, fsync, and atomic
+  replacement; applications can redact or omit sensitive history entries.
+- Completion tolerates unfinished quotes, isolates provider failures, resets
+  progressive state per prompt, and includes built-in and negated flags.
+
+### Fixed
+
+- Cancellation now covers validation and lifecycle hooks, aborts all pipeline
+  stages before user cleanup callbacks, isolates callback failures, and keeps
+  SIGINT interception active until cooperative cleanup completes.
+- Parsing preserves empty quoted arguments and all whitespace boundaries,
+  distinguishes implicit help from command-defined `--help`, reports syntax
+  failures through `error`, rejects unknown group children, and uses canonical
+  command paths for aliases.
+- Option resolution uses collision-checked aliases, null-prototype records, and
+  two-phase cross-option validation. Registry subtree removal now clears every
+  descendant alias.
+- ANSI parsing, grapheme width, and truncation handle OSC/ST hyperlinks,
+  emoji modifiers, nested styles, narrow markers, and style closure. Ragged
+  tables are normalized before layout.
+- Confirm validation is honored; multiselect permits zero selections by default;
+  passwords preserve surrounding whitespace; REPL Ctrl-C clears partial input
+  and interactive mode requires both stdin and stdout TTYs.
+
+### Security
+
+- Published GitHub Actions are pinned to audited commit SHAs. Publish uses the
+  exact smoke-tested tarball and extracts release notes from the matching
+  changelog section.
+
 ## [1.3.1] - 2026-07-04
 
 A correctness release hardening the parser, registry, router, and output
