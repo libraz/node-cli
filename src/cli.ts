@@ -4,7 +4,12 @@ import type { Readable, Writable } from "node:stream";
 import { CommandBuilder } from "./command/builder.js";
 import { CommandRegistry } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
-import { CLIError, CommandNotFoundError, formatErrorMessage } from "./errors.js";
+import {
+  CLIError,
+  CommandNotFoundError,
+  formatErrorMessage,
+  isCancellationError,
+} from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
 import { Shell } from "./shell/repl.js";
 import type { CatchContext, CLIEventMap, CLIOptions } from "./types.js";
@@ -51,6 +56,10 @@ export class CLI {
   private readonly pendingPlugins: Promise<void>[] = [];
   private pluginInitialization?: Promise<void>;
   private pluginInitializationError?: unknown;
+  // A separate flag rather than testing `pluginInitializationError !== undefined`:
+  // a plugin can reject with `undefined`, which is indistinguishable from "no
+  // error" and would otherwise let a failure vanish on the second call.
+  private pluginInitializationFailed = false;
 
   /**
    * Creates a new CLI instance.
@@ -182,7 +191,7 @@ export class CLI {
    * @returns The CLI instance for method chaining.
    */
   use(plugin: (ctx: PluginContext) => void | Promise<void>): this {
-    if (this.pluginInitializationError !== undefined) throw this.pluginInitializationError;
+    if (this.pluginInitializationFailed) throw this.pluginInitializationError;
     const context: PluginContext = {
       command: (definition: string) => this.command(definition),
       on: <K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]) => {
@@ -214,7 +223,7 @@ export class CLI {
    * async plugin registration completes before any command runs.
    */
   private async drainPendingPlugins(): Promise<void> {
-    if (this.pluginInitializationError !== undefined) throw this.pluginInitializationError;
+    if (this.pluginInitializationFailed) throw this.pluginInitializationError;
     if (!this.pluginInitialization) {
       this.pluginInitialization = (async () => {
         while (this.pendingPlugins.length > 0) {
@@ -226,10 +235,14 @@ export class CLI {
       })()
         .catch((error) => {
           this.pluginInitializationError = error;
+          this.pluginInitializationFailed = true;
           throw error;
         })
         .finally(() => {
-          if (this.pluginInitializationError === undefined) this.pluginInitialization = undefined;
+          // Keep the (rejected) promise cached on failure so the sticky error is
+          // re-surfaced; only clear it after a clean drain so a later use()+drain
+          // can retry.
+          if (!this.pluginInitializationFailed) this.pluginInitialization = undefined;
         });
     }
     await this.pluginInitialization;
@@ -262,9 +275,7 @@ export class CLI {
     try {
       await this.drainPendingPlugins();
     } catch (err) {
-      const message = formatErrorMessage(err);
-      process.stderr.write(`Error: ${message}\n`);
-      process.exitCode = err instanceof CLIError ? err.exitCode : 1;
+      this.reportFatal(err);
       return;
     }
 
@@ -282,9 +293,7 @@ export class CLI {
           });
         });
       } catch (err) {
-        const message = formatErrorMessage(err);
-        process.stderr.write(`Error: ${message}\n`);
-        process.exitCode = err instanceof CLIError ? err.exitCode : 1;
+        this.reportFatal(err);
       }
     } else if (process.stdin.isTTY && process.stdout.isTTY) {
       // Interactive shell mode
@@ -306,6 +315,7 @@ export class CLI {
         historySize: this.historySize,
         historyFilter: this.historyFilterFn,
         version: this.version,
+        beforeExecute: () => this.drainPendingPlugins(),
       });
 
       await shell.start();
@@ -314,6 +324,23 @@ export class CLI {
       // input or redirected output): avoid an interactive REPL and print help.
       process.stdout.write(`${this.helpGenerator.generateIndex()}\n`);
     }
+  }
+
+  /**
+   * Reports a fatal error to stderr and sets the process exit code. A
+   * user-initiated cancellation (Ctrl-C / prompt cancel) is presented as a clean
+   * `Cancelled` line with the conventional 130 exit code — consistent with how
+   * the interactive shell reports the same event — rather than an `Error:` line
+   * and exit 1.
+   */
+  private reportFatal(err: unknown): void {
+    if (isCancellationError(err)) {
+      process.stderr.write(`${formatErrorMessage(err)}\n`);
+      process.exitCode = 130;
+      return;
+    }
+    process.stderr.write(`Error: ${formatErrorMessage(err)}\n`);
+    process.exitCode = err instanceof CLIError ? err.exitCode : 1;
   }
 
   private registerHelpCommand(): void {

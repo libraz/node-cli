@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
+import { resolveOptions } from "../src/option/resolver.js";
+import type { CommandContext } from "../src/types.js";
+
+const dummyCtx = {} as CommandContext;
 
 describe("option definition invariants", () => {
   it("rejects collisions across canonical names and aliases", () => {
@@ -17,5 +21,24 @@ describe("option definition invariants", () => {
     expect(() => command.option("--listen <n>", { alias: "port" })).toThrow(
       /exactly one character/,
     );
+  });
+});
+
+describe("boolean flag default injection", () => {
+  it("injects false for an omitted optional boolean flag", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "run").option("--verbose");
+    const def = registry.resolve(["run"]);
+    if (!def) throw new Error("command not registered");
+    const result = resolveOptions({}, def.options, dummyCtx);
+    expect(result.verbose).toBe(false);
+  });
+
+  it("does not inject a default for a required boolean flag", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "run").option("--verbose", { required: true });
+    const def = registry.resolve(["run"]);
+    if (!def) throw new Error("command not registered");
+    expect(def.options.get("verbose")?.schema.default).toBeUndefined();
   });
 });

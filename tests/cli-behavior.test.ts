@@ -119,7 +119,9 @@ describe("direct mode prompt cancellation display", () => {
       process.exitCode = 0;
     }
 
-    expect(stderr.getOutput()).toBe("Error: Cancelled\n");
+    // A user cancellation is presented as a clean "Cancelled" line without the
+    // "Error:" prefix, matching how the interactive shell reports the same event.
+    expect(stderr.getOutput()).toBe("Cancelled\n");
   });
 });
 

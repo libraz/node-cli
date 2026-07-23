@@ -1,5 +1,11 @@
-import { activePipeSegment, parse, tokenize } from "../command/parser.js";
-import type { CommandRegistry } from "../command/registry.js";
+import {
+  activePipeSegment,
+  helpFlagBindings,
+  parse,
+  stripOptionPrefix,
+  tokenize,
+} from "../command/parser.js";
+import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
 import type { CommandDefinition, OptionDef } from "../types.js";
 
 /**
@@ -79,7 +85,11 @@ export class ShellCompleter {
     if (tokens.length > 1 && !endsWithSpace) {
       const parentMatch = this.registry.matchCommandPath(tokens.slice(0, -1));
       const partial = tokens[tokens.length - 1];
-      if (parentMatch?.command.subcommands.size && !partial.startsWith("-")) {
+      if (
+        parentMatch?.command.subcommands.size &&
+        !hasUnreachableSubcommands(parentMatch.command) &&
+        !partial.startsWith("-")
+      ) {
         const candidates = this.subcommandNames(parentMatch.command).filter((name) =>
           name.startsWith(partial),
         );
@@ -111,7 +121,9 @@ export class ShellCompleter {
 
     // If we're at a command boundary and expecting subcommand (but not when the
     // user is clearly typing an option flag, which should list options instead).
-    if (command.subcommands.size > 0 && !typingOption) {
+    // Unreachable subcommands (a runnable arg-taking command shadows them) are
+    // never offered, matching what the parser would actually dispatch.
+    if (command.subcommands.size > 0 && !typingOption && !hasUnreachableSubcommands(command)) {
       if (remaining.length === 0 && endsWithSpace) {
         // Show subcommands plus the command's own option flags, so a group that
         // also declares options offers both at the boundary.
@@ -133,7 +145,7 @@ export class ShellCompleter {
     if (typingOption) {
       const eq = lastToken.indexOf("=");
       if (eq !== -1) {
-        const optName = lastToken.slice(0, eq).replace(/^-+/, "");
+        const optName = stripOptionPrefix(lastToken.slice(0, eq));
         const optDef = command.options.get(optName) ?? findOptionByAlias(optName, command.options);
         if (optDef?.takesValue) {
           const valuePrefix = lastToken.slice(eq + 1);
@@ -157,7 +169,12 @@ export class ShellCompleter {
 
     // Show option flags when the user is typing one, or at a fresh token position
     // on a leaf command — including after positional arguments have been entered.
-    if (isTypingOption || (endsWithSpace && command.subcommands.size === 0 && !command.completer)) {
+    // Never past `--`: everything after it is a literal positional the parser
+    // would not accept as an option, so offering flags there is misleading.
+    if (
+      isTypingOption ||
+      (endsWithSpace && !pastDoubleDash && command.subcommands.size === 0 && !command.completer)
+    ) {
       const candidates = this.optionFlags(command, current);
       if (candidates.length > 0) {
         return [candidates, current];
@@ -251,8 +268,13 @@ export class ShellCompleter {
    */
   private optionFlags(command: CommandDefinition, prefix: string): string[] {
     const candidates: string[] = [];
-    if ("--help".startsWith(prefix)) candidates.push("--help");
-    if ("-h".startsWith(prefix)) candidates.push("-h");
+    // Only offer the built-in help flags in the forms the parser actually treats
+    // as help — i.e. when the command has not bound `--help` / `-h` to one of its
+    // own options. This keeps completion in step with help output and the parser,
+    // and avoids a duplicate `-h` when an option already uses that alias.
+    const bindsHelp = helpFlagBindings(command.options);
+    if (!bindsHelp.long && "--help".startsWith(prefix)) candidates.push("--help");
+    if (!bindsHelp.short && "-h".startsWith(prefix)) candidates.push("-h");
     for (const [, opt] of command.options) {
       if (opt.schema.hidden) continue;
       const flag = `--${opt.long}`;

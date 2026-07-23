@@ -7,13 +7,16 @@ import {
   CLIError,
   CommandNotFoundError,
   ExtraArgumentError,
+  formatErrorMessage,
   InvalidOptionError,
+  isCancellationError,
   MissingArgumentError,
   MissingOptionError,
   UnknownOptionError,
   ValidationError,
 } from "../src/errors.js";
 import { HelpGenerator } from "../src/help/generator.js";
+import { createCLI } from "../src/index.js";
 import { resolveOptions } from "../src/option/resolver.js";
 import {
   color,
@@ -481,5 +484,183 @@ describe("custom completer context", () => {
     const [candidates] = completer.complete("run --env prod a") as [string[], string];
     expect(received?.options.env).toBe("prod");
     expect(candidates).toEqual(["alpha"]);
+  });
+});
+
+// ── Pipeline early termination ──
+
+describe("pipeline early termination", () => {
+  it("does not fail when a downstream stage stops early and the producer is signal-aware", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "produce").action(
+      (ctx) =>
+        new Promise<void>((_resolve, reject) => {
+          const timer = setInterval(() => ctx.stdout.write("data\n"), 5);
+          // The documented idiom: reject when cancellation is signalled, as fetch/timers do.
+          ctx.signal.addEventListener("abort", () => {
+            clearInterval(timer);
+            reject(ctx.signal.reason ?? new Error("aborted"));
+          });
+        }),
+    );
+    new CommandBuilder(registry, "head1").action(async (ctx) => {
+      if (ctx.stdin) await new Promise<void>((resolve) => ctx.stdin?.once("data", () => resolve()));
+      ctx.stdout.write("ok");
+    });
+
+    const router = new CommandRouter(registry);
+    const stream = createMockStdout();
+    await expect(
+      router.execute("produce | head1", { stdout: stream, stderr: stream }),
+    ).resolves.toBeUndefined();
+    expect(stream.getOutput()).toContain("ok");
+  });
+});
+
+// ── Subcommands shadowed by a positional argument ──
+
+describe("subcommands shadowed by a positional argument", () => {
+  const build = () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "deploy <env>").action(() => {});
+    new CommandBuilder(registry, "deploy status").action(() => {});
+    return registry;
+  };
+
+  it("are omitted from help", () => {
+    const help = new HelpGenerator(build()).generateCommand(["deploy"]);
+    expect(help).not.toContain("status");
+  });
+
+  it("are not offered by completion", () => {
+    const [candidates] = new ShellCompleter(build()).complete("deploy ") as [string[], string];
+    expect(candidates).not.toContain("status");
+  });
+
+  it("still dispatch to the argument-taking command", () => {
+    const result = parse(["deploy", "status"], build());
+    expect(result.command?.name).toBe("deploy");
+    expect(result.args.env).toBe("status");
+  });
+});
+
+// ── Quote handling in pipe splitting ──
+
+describe("quote handling in pipe splitting", () => {
+  it("treats a backslash inside single quotes as literal, matching tokenize", () => {
+    expect(() => splitPipes("echo 'a\\'")).not.toThrow();
+    expect(splitPipes("echo 'a\\'")).toEqual(["echo 'a\\'"]);
+    expect(tokenize("echo 'a\\'")).toEqual(["echo", "a\\"]);
+  });
+});
+
+// ── Negative-number arguments ──
+
+describe("negative-number arguments", () => {
+  it("parses a bare negative number as a positional value, not an unknown option", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "calc <n>").action(() => {});
+    expect(parse(["calc", "-5"], registry).args.n).toBe("-5");
+    expect(parse(["calc", "-3.14"], registry).args.n).toBe("-3.14");
+  });
+});
+
+// ── Built-in help flag ──
+
+describe("built-in help flag", () => {
+  it("still triggers help inside a short-flag cluster", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "x").option("-v, --verbose");
+    const result = parse(["x", "-vh"], registry);
+    expect(result.builtInHelp).toBe(true);
+    expect(result.options.verbose).toBe(true);
+  });
+
+  const withBoundShort = () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "srv").option("-h, --host <host>");
+    return registry;
+  };
+
+  it("is advertised as --help alone when -h is bound to another option", () => {
+    const help = new HelpGenerator(withBoundShort()).generateCommand(["srv"]);
+    expect(help).toContain("Show help for this command");
+    expect(help).not.toContain("-h, --help");
+  });
+
+  it("is not duplicated in completion when -h is bound to another option", () => {
+    const [candidates] = new ShellCompleter(withBoundShort()).complete("srv -") as [
+      string[],
+      string,
+    ];
+    expect(candidates).toContain("--help");
+    expect(candidates.filter((c) => c === "-h")).toHaveLength(1);
+  });
+
+  it("still resolves --help via the parser fallback when -h is bound", () => {
+    expect(parse(["srv", "--help"], withBoundShort()).builtInHelp).toBe(true);
+  });
+});
+
+// ── Definition parsing: name after an argument ──
+
+describe("definition parsing: name after an argument", () => {
+  it("rejects a command name that follows an argument token", () => {
+    expect(() => parseDefinitionString("deploy <env> prod")).toThrow(/cannot follow an argument/);
+  });
+});
+
+// ── Completion after the -- terminator ──
+
+describe("completion after the -- terminator", () => {
+  it("offers no option flags", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "srv").option("--host <host>");
+    const [candidates] = new ShellCompleter(registry).complete("srv -- ") as [string[], string];
+    expect(candidates).not.toContain("--help");
+    expect(candidates).not.toContain("--host");
+  });
+});
+
+// ── Help discoverability ──
+
+describe("help discoverability", () => {
+  it("notes command aliases in the top-level index", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "list").alias("ls").description("List things");
+    expect(new HelpGenerator(registry).generateIndex()).toContain("alias: ls");
+  });
+
+  it("advertises the --no- negation of a boolean option", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "build").option("--minify", { type: "boolean" });
+    expect(new HelpGenerator(registry).generateCommand(["build"])).toContain("--no-minify");
+  });
+});
+
+// ── Async plugin failures ──
+
+describe("async plugin failures", () => {
+  it("stay a sticky failure even when the plugin rejects with undefined", async () => {
+    const cli = createCLI();
+    cli.command("foo").action(() => {});
+    cli.use(() => Promise.reject(undefined));
+
+    await expect(cli.exec("foo")).rejects.toBeUndefined();
+    // The failure must persist rather than degrade into a silent command-not-found.
+    await expect(cli.exec("foo")).rejects.toBeUndefined();
+  });
+});
+
+// ── Cancellation classification ──
+
+describe("cancellation classification", () => {
+  it("treats an AbortError as a cancellation and formats it cleanly", () => {
+    const abortError = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    expect(isCancellationError(abortError)).toBe(true);
+    expect(formatErrorMessage(abortError)).toBe("Cancelled");
+    expect(isCancellationError(new Error("boom"))).toBe(false);
   });
 });

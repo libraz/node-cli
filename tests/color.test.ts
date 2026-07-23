@@ -106,6 +106,17 @@ describe("c (template tag)", () => {
     expect(stripAnsi(c`{green ${value}}`)).toBe(value);
   });
 
+  it("handles a large adversarial run of marker code points promptly and correctly", () => {
+    // A big run of the U+F0000 marker code point must not trigger quadratic
+    // marker-collision scanning. Assert the value round-trips and completes fast.
+    const value = "\u{f0000}".repeat(200_000);
+    const start = performance.now();
+    const result = c`prefix ${value} suffix`;
+    const elapsed = performance.now() - start;
+    expect(result).toBe(`prefix ${value} suffix`);
+    expect(elapsed).toBeLessThan(1000);
+  });
+
   it("bounds inline markup nesting", () => {
     const deeplyNested = `${"{red ".repeat(66)}value${"}".repeat(66)}`;
     const strings = Object.assign([deeplyNested], {
@@ -169,6 +180,16 @@ describe("stringWidth", () => {
 
   it("counts an emoji with a skin-tone modifier as one wide grapheme", () => {
     expect(stringWidth("👍🏽")).toBe(2);
+  });
+
+  it("measures a transport emoji as width 2", () => {
+    // U+1F680 rocket sits in the transport & map symbols range.
+    expect(stringWidth("🚀")).toBe(2);
+  });
+
+  it("measures a flag emoji (regional indicator pair) as width 2", () => {
+    // Two regional indicators form one displayed flag grapheme.
+    expect(stringWidth("🇯🇵")).toBe(2);
   });
 });
 

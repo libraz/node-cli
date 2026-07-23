@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
-import { formatErrorMessage, PromptCancelError } from "../errors.js";
+import { formatErrorMessage, isCancellationError } from "../errors.js";
 import type { CompletionResult } from "./completion.js";
 import { ShellCompleter } from "./completion.js";
 import { History } from "./history.js";
@@ -17,10 +17,19 @@ import { History } from "./history.js";
 export interface ModeConfig {
   /** The prompt string displayed in mode. */
   prompt: string;
-  /** Handler for each line of input within the mode. */
+  /**
+   * Handler for each line of input within the mode. The context carries a
+   * `signal` that is aborted when the user presses Ctrl-C during the action, so a
+   * long-running mode action (e.g. a slow query) can cancel cooperatively. A
+   * second Ctrl-C force-quits the process.
+   */
   action: (
     input: string,
-    ctx: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream },
+    ctx: {
+      stdout: NodeJS.WritableStream;
+      stderr: NodeJS.WritableStream;
+      signal: AbortSignal;
+    },
   ) => void | Promise<void>;
   /** Message displayed when entering the mode. */
   message?: string;
@@ -41,6 +50,7 @@ export class Shell {
   private reopeningReadline = false;
   private mode: ModeConfig | null = null;
   private modeHistory: string[] = [];
+  private readonly beforeExecute?: () => Promise<void>;
 
   /**
    * Creates a new Shell instance.
@@ -61,10 +71,12 @@ export class Shell {
     historySize?: number;
     historyFilter?: (line: string) => string | null;
     version?: string;
+    beforeExecute?: () => Promise<void>;
   }) {
     this.router = options.router;
     this.promptStr = options.prompt;
     this.banner = options.banner ?? "";
+    this.beforeExecute = options.beforeExecute;
     this.history = new History({
       filePath: options.historyFile,
       maxSize: options.historySize,
@@ -106,9 +118,17 @@ export class Shell {
     });
     // Ctrl+C at the prompt cancels the current line instead of exiting the shell.
     this.rl.on("SIGINT", () => {
-      this.rl?.write(null, { ctrl: true, name: "u" });
+      const rl = this.rl;
+      if (!rl) return;
+      // Clear the WHOLE line — both sides of the cursor — so no buffered text
+      // survives to be executed by a following Enter. Ctrl+U erases left of the
+      // cursor and Ctrl+K erases right of it; together they abandon the entire
+      // line regardless of cursor position, matching the universal shell
+      // convention that Ctrl-C discards the current line.
+      rl.write(null, { ctrl: true, name: "u" });
+      rl.write(null, { ctrl: true, name: "k" });
       process.stdout.write("\n");
-      this.rl?.prompt();
+      rl.prompt();
     });
   }
 
@@ -146,6 +166,16 @@ export class Shell {
     const historyEntries = await this.history.load();
 
     this.running = true;
+
+    // Persist history on SIGTERM (e.g. a process manager stopping the app) so a
+    // session terminated between the end-of-loop saves does not lose its history.
+    // The normal exit path still saves below; this only covers abnormal teardown.
+    const onSigterm = () => {
+      void this.history.save().finally(() => {
+        process.exit(143); // 128 + SIGTERM
+      });
+    };
+    process.on("SIGTERM", onSigterm);
 
     if (this.banner) {
       process.stdout.write(`${this.banner}\n`);
@@ -187,6 +217,16 @@ export class Shell {
         break;
       }
 
+      // Close readline to fully release stdin before command execution AND before
+      // any async persistence below. This prevents input contention: while an
+      // `await` runs, an open readline would consume the next buffered line and
+      // drop it. It also frees stdin for commands that use prompt.* or create
+      // their own readline interface.
+      this.reopeningReadline = true;
+      this.rl?.close();
+      this.reopeningReadline = false;
+      this.rl = undefined;
+
       // Only persist top-level commands; mode sub-REPL input (which may be
       // sensitive) must not leak into the shared, on-disk history.
       if (!this.mode) {
@@ -197,27 +237,38 @@ export class Shell {
         }
       }
 
-      // Close readline to fully release stdin before command execution.
-      // This prevents input contention when commands use prompt.* or
-      // create their own readline interface on process.stdin.
-      this.reopeningReadline = true;
-      this.rl?.close();
-      this.reopeningReadline = false;
-      this.rl = undefined;
-
       if (this.mode) {
+        // Mode actions bypass the router's command execution, so cancellation is
+        // driven by a dedicated controller: the first Ctrl-C aborts this signal
+        // (cooperative), a second force-quits the process.
+        const controller = new AbortController();
         try {
-          await this.router.runWithSigintCancel(async () => {
-            await this.mode?.action(trimmed, {
-              stdout: process.stdout,
+          await this.router.runWithSigintCancel(
+            async () => {
+              await this.mode?.action(trimmed, {
+                stdout: process.stdout,
+                stderr: process.stderr,
+                signal: controller.signal,
+              });
+            },
+            {
               stderr: process.stderr,
-            });
-          });
+              onInterrupt: () => {
+                if (controller.signal.aborted) return false;
+                controller.abort();
+                return true;
+              },
+            },
+          );
         } catch (err) {
           this.reportError(err);
         }
       } else {
         try {
+          // Drain any pending async plugins (registered but not yet initialized)
+          // before running, so a late plugin failure surfaces instead of showing
+          // up only as a missing command.
+          if (this.beforeExecute) await this.beforeExecute();
           await this.router.runWithSigintCancel(async () => {
             await this.router.execute(trimmed, {
               shell: this,
@@ -236,6 +287,7 @@ export class Shell {
       }
     }
 
+    process.removeListener("SIGTERM", onSigterm);
     await this.history.save();
     await this.router.emit("exit");
     if (this.rl) {
@@ -248,7 +300,9 @@ export class Shell {
    * rather than a raw `Error: Prompt cancelled` line.
    */
   private reportError(err: unknown): void {
-    if (err instanceof PromptCancelError) {
+    // A user-initiated cancellation (prompt cancel or a SIGINT-aborted signal)
+    // is presented as a clean "Cancelled" line, without the "Error:" prefix.
+    if (isCancellationError(err)) {
       process.stderr.write(`${formatErrorMessage(err)}\n`);
       return;
     }

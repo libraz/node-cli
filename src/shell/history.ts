@@ -1,12 +1,50 @@
-import { chmod, lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const PRIVATE_FILE_MODE = 0o600;
 const LOCK_RETRIES = 50;
 
+/**
+ * Milliseconds after which an orphaned lock file is considered stale and may be
+ * broken. Comfortably beyond the retry budget ({@link LOCK_RETRIES} * 10ms) so a
+ * lock held by a live, contending session is never mistaken for a stale one.
+ */
+const STALE_LOCK_MS = 10_000;
+
+/**
+ * Flags for reading the history file. `O_NOFOLLOW` makes the open fail with
+ * `ELOOP` if the path is a symbolic link, so the symlink/uid/mode guard and the
+ * subsequent read operate on a single inode with no path re-resolution in
+ * between (TOCTOU-safe). `O_NOFOLLOW` is absent on some platforms (e.g. Windows),
+ * where it degrades to a plain read.
+ */
+const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+
+/**
+ * Matches C0 control characters (including `\n`, `\r`, and DEL) and C1 control
+ * characters. Such bytes would either break the one-entry-per-line file format
+ * or, as OSC/CSI escape sequences replayed on history recall, allow terminal
+ * state spoofing.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: sanitizing history entries requires matching C0/C1 control characters
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g;
+
 function isNodeError(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
+}
+
+/**
+ * Strips control characters from a single logical history entry so it stays one
+ * physical line and is safe to replay to the terminal on recall. Applied at both
+ * trust boundaries: on {@link History.add} (raw or filter-produced input) and on
+ * load (untrusted on-disk content).
+ * @param line - The raw entry.
+ * @returns The entry with all C0/C1 control characters removed.
+ */
+function sanitizeEntry(line: string): string {
+  return line.replace(CONTROL_CHARS, "");
 }
 
 /**
@@ -46,29 +84,37 @@ export class History {
     return lines.length > this.maxSize ? lines.slice(-this.maxSize) : lines;
   }
 
-  private async assertSafeExistingFile(): Promise<boolean> {
+  private async readSafeLines(): Promise<string[]> {
+    let handle: Awaited<ReturnType<typeof open>>;
     try {
-      const stats = await lstat(this.filePath);
-      if (stats.isSymbolicLink()) throw new Error("refusing to use a symbolic link");
+      // Open once with O_NOFOLLOW, then validate and read through the same file
+      // descriptor. Re-resolving the path (lstat then open-by-path) would leave a
+      // window for an attacker with write access to the directory to swap in a
+      // symlink between the check and the read.
+      handle = await open(this.filePath, READ_FLAGS);
+    } catch (error) {
+      // Missing file: start empty. A symlink surfaces as ELOOP via O_NOFOLLOW and
+      // is propagated so load() reports it and refuses to follow the link.
+      if (isNodeError(error, "ENOENT")) return [];
+      throw error;
+    }
+    try {
+      const stats = await handle.stat();
       if (!stats.isFile()) throw new Error("history path is not a regular file");
       if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
         throw new Error("history file is owned by another user");
       }
       if ((stats.mode & 0o777) !== PRIVATE_FILE_MODE) {
-        await chmod(this.filePath, PRIVATE_FILE_MODE);
+        await handle.chmod(PRIVATE_FILE_MODE);
       }
-      return true;
-    } catch (error) {
-      if (isNodeError(error, "ENOENT")) return false;
-      throw error;
+      const content = await handle.readFile("utf-8");
+      return content
+        .split("\n")
+        .map(sanitizeEntry)
+        .filter((line) => line.length > 0);
+    } finally {
+      await handle.close();
     }
-  }
-
-  private async readSafeLines(): Promise<string[]> {
-    const exists = await this.assertSafeExistingFile();
-    if (!exists) return [];
-    const content = await readFile(this.filePath, "utf-8");
-    return content.split("\n").filter((line) => line.length > 0);
   }
 
   /**
@@ -99,7 +145,10 @@ export class History {
   add(line: string): void {
     const filtered = this.filter ? this.filter(line) : line;
     if (filtered === null) return;
-    const trimmed = filtered.trim();
+    // Sanitize after filtering so a filter that emits control characters (or a
+    // raw line containing them) cannot corrupt the one-entry-per-line format or
+    // inject terminal escapes that replay on recall.
+    const trimmed = sanitizeEntry(filtered).trim();
     if (trimmed.length === 0 || this.maxSize === 0) return;
 
     // Skip if same as last entry
@@ -118,13 +167,72 @@ export class History {
     const lockPath = `${this.filePath}.lock`;
     for (let attempt = 0; attempt < LOCK_RETRIES; attempt++) {
       try {
-        return await open(lockPath, "wx", PRIVATE_FILE_MODE);
+        const handle = await open(lockPath, "wx", PRIVATE_FILE_MODE);
+        // Record the owning PID so a later session can confirm the holder is dead
+        // before breaking a suspected-stale lock. Best effort: an empty lock file
+        // (e.g. crash between open and write) falls back to mtime-based staleness.
+        await handle.writeFile(String(process.pid), "utf-8").catch(() => {});
+        return handle;
       } catch (error) {
         if (!isNodeError(error, "EEXIST")) throw error;
+        // A stale lock orphaned by a killed/power-lost session would otherwise
+        // disable persistence indefinitely. Break it and retry immediately;
+        // otherwise back off for the normal contended case.
+        if (await this.breakStaleLock(lockPath)) continue;
         await delay(10);
       }
     }
     throw new Error(`timed out waiting for history lock ${lockPath}`);
+  }
+
+  /**
+   * Removes a lock file only when it is safe to conclude no live session holds
+   * it: its mtime is older than {@link STALE_LOCK_MS} and, if a PID is recorded,
+   * that process is no longer running.
+   * @param lockPath - Path to the `.lock` file.
+   * @returns `true` if a stale lock was removed and acquisition should be retried.
+   */
+  private async breakStaleLock(lockPath: string): Promise<boolean> {
+    try {
+      const stats = await lstat(lockPath);
+      if (Date.now() - stats.mtimeMs < STALE_LOCK_MS) return false;
+      const owner = await this.readLockOwner(lockPath);
+      if (owner !== undefined && this.isProcessAlive(owner)) return false;
+      await rm(lockPath, { force: true });
+      return true;
+    } catch {
+      // Lock vanished or could not be inspected/removed: let the loop retry.
+      return false;
+    }
+  }
+
+  /**
+   * Reads the owning PID recorded in a lock file, if any.
+   * @param lockPath - Path to the `.lock` file.
+   * @returns The recorded PID, or `undefined` when absent or unparseable.
+   */
+  private async readLockOwner(lockPath: string): Promise<number | undefined> {
+    try {
+      const pid = Number.parseInt((await readFile(lockPath, "utf-8")).trim(), 10);
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Checks whether a process is still running via a null signal.
+   * @param pid - The process id to probe.
+   * @returns `true` if the process exists (including when signalling is denied).
+   */
+  private isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      // ESRCH means no such process; EPERM means it exists but we may not signal it.
+      return isNodeError(error, "EPERM");
+    }
   }
 
   /**

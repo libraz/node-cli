@@ -585,20 +585,28 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
   // stdout. The shared stdout's own `write` is never replaced, so concurrent
   // spinner/logger output is untouched and re-entrant prompts cannot corrupt it.
   let masking = false;
-  let pendingPromptQuery = "";
-  let pendingPromptOutput = "";
+  // The exact (colored) prompt string readline echoes. Kept for the whole prompt
+  // lifetime — not just the first render — so that when readline redraws the line
+  // on backspace/arrow keys (rewriting the prompt label plus the input in one
+  // chunk), the label is passed through unmasked and only the typed value after
+  // it is masked. Previously the label was masked into asterisks on every redraw.
+  let promptQuery = "";
   const maskingOutput = new Writable({
     write(chunk: string | Buffer, _encoding, callback) {
       const text = typeof chunk === "string" ? chunk : chunk.toString();
-      if (masking && pendingPromptQuery !== "") {
+      if (!masking) {
         stdout.write(text);
-        pendingPromptOutput += text;
-        if (pendingPromptOutput.includes(pendingPromptQuery)) {
-          pendingPromptQuery = "";
-          pendingPromptOutput = "";
-        }
+        callback();
+        return;
+      }
+      // If this chunk carries the prompt label, everything up to and including it
+      // is passed through verbatim; only the user's input after it is masked.
+      const idx = promptQuery ? text.lastIndexOf(promptQuery) : -1;
+      if (idx !== -1) {
+        const boundary = idx + promptQuery.length;
+        stdout.write(text.slice(0, boundary) + maskInput(text.slice(boundary)));
       } else {
-        stdout.write(masking ? maskInput(text) : text);
+        stdout.write(maskInput(text));
       }
       callback();
     },
@@ -615,16 +623,14 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
     while (true) {
       const query = `${col.green(prefix)} ${col.bold(message)} `;
       masking = true;
-      pendingPromptQuery = query;
-      pendingPromptOutput = "";
+      promptQuery = query;
 
       let answer: string;
       try {
         answer = await ask(rl, query, signal, isClosed);
       } finally {
         masking = false;
-        pendingPromptQuery = "";
-        pendingPromptOutput = "";
+        promptQuery = "";
       }
 
       const value = answer;

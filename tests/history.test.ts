@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -164,6 +164,57 @@ describe("History", () => {
     expect(await readFile(filePath, "utf8")).toBe("");
     expect(() => new History({ filePath, maxSize: -1 })).toThrow(RangeError);
     expect(() => new History({ filePath, maxSize: Number.NaN })).toThrow(RangeError);
+  });
+
+  it("breaks a stale lock left by a killed session and saves", async () => {
+    // Simulate an orphaned lock: a .lock file whose owner recorded no PID and
+    // whose mtime is far older than the retry budget.
+    const lockPath = `${filePath}.lock`;
+    await writeFile(lockPath, "", { mode: 0o600 });
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lockPath, old, old);
+
+    const history = new History({ filePath });
+    history.add("after-stale-lock");
+    await history.save();
+
+    expect(existsSync(lockPath)).toBe(false);
+    const loaded = await new History({ filePath }).load();
+    expect(loaded).toEqual(["after-stale-lock"]);
+  });
+
+  it("strips embedded newlines so one entry stays one line", async () => {
+    const history = new History({ filePath });
+    history.add("line1\nline2\r\nline3");
+    expect(history.entries()).toEqual(["line1line2line3"]);
+
+    await history.save();
+    const loaded = await new History({ filePath }).load();
+    expect(loaded).toEqual(["line1line2line3"]);
+  });
+
+  it("strips newlines injected by a filter's output", () => {
+    const history = new History({
+      filePath,
+      filter: (line) => `${line}\ninjected-entry`,
+    });
+    history.add("real");
+    expect(history.entries()).toEqual(["realinjected-entry"]);
+  });
+
+  it("sanitizes C0/C1 control and escape sequences on add", () => {
+    const history = new History({ filePath });
+    // ESC (C0), CSI colour + BEL (OSC terminator) and a C1 byte.
+    history.add("ls\u001b[31mdanger\u0007\u0090");
+    expect(history.entries()).toEqual(["ls[31mdanger"]);
+  });
+
+  it("sanitizes control characters found in the on-disk history on load", async () => {
+    // A synced dotfile or a filter could seed the file with terminal escapes;
+    // they must not be replayed verbatim on recall.
+    await writeFile(filePath, "safe\u001b]0;spoof\u0007cmd\nplain\n", { mode: 0o600 });
+    const loaded = await new History({ filePath }).load();
+    expect(loaded).toEqual(["safe]0;spoofcmd", "plain"]);
   });
 
   it("can redact or omit secret-bearing commands", () => {

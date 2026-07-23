@@ -92,6 +92,21 @@ describe("table", () => {
     expect(table([["Name", "Role"]], { border: "single" })).toBe("");
   });
 
+  it("keeps every array row as data when explicit columns are supplied", () => {
+    const result = table(
+      [
+        ["alice", "admin"],
+        ["bob", "user"],
+      ],
+      { columns: ["Name", "Role"] },
+    );
+    // Columns act as the header; no data row is consumed as the header.
+    expect(result).toContain("Name");
+    expect(result).toContain("Role");
+    expect(result).toContain("alice");
+    expect(result).toContain("bob");
+  });
+
   it("handles header: false for array data", () => {
     const result = table(
       [
@@ -310,6 +325,22 @@ describe("table", () => {
     const withoutCtrl = table([{ v: "ab" }, { v: "xy" }], { columns: ["v"], border: "single" });
     const stripCtrl = (s: string) => s.replaceAll(String.fromCharCode(7), "");
     expect(stripCtrl(withCtrl)).toBe(withoutCtrl);
+  });
+
+  it("strips non-SGR escapes and C0 controls from cell content", () => {
+    // A standalone BEL and a clear-screen CSI must not reach the rendered output.
+    const result = table([{ v: "\x07x\x1b[2Jy" }], { columns: ["v"], border: "single" });
+    expect(result).not.toContain("\x1b[2J");
+    expect(result).not.toContain("\x07");
+    expect(result).toContain("xy");
+  });
+
+  it("preserves SGR color sequences in cell content while sanitizing controls", () => {
+    setColorEnabled(true);
+    const result = table([{ v: `${color.red("hi")}\x07` }], { columns: ["v"], border: "single" });
+    expect(result).toContain("\x1b[31m"); // SGR color kept
+    expect(result).not.toContain("\x07"); // BEL stripped
+    expect(stripAnsi(result)).toContain("hi");
   });
 
   it("handles maxWidth of 0 without throwing or overflowing", () => {

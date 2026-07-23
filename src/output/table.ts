@@ -1,4 +1,4 @@
-import { color as c, stringWidth, truncateAnsi } from "./color.js";
+import { color as c, splitAnsi, stringWidth, truncateAnsi } from "./color.js";
 
 /**
  * Custom border characters for table rendering.
@@ -276,13 +276,55 @@ export function table(
 }
 
 /**
+ * Sanitizes the visible text of a cell: collapses embedded line breaks / tabs
+ * to spaces so they cannot break the rendered table frame, and drops all other
+ * C0 control characters, DEL, and C1 controls (e.g. `\b`, NUL, BEL) that would
+ * otherwise reach the terminal and corrupt the frame or hijack the cursor.
+ */
+function sanitizeCellText(text: string): string {
+  let result = "";
+  for (const char of text) {
+    const code = char.codePointAt(0) as number;
+    if (code === 0x09 || code === 0x0a || code === 0x0b || code === 0x0c || code === 0x0d) {
+      result += " ";
+    } else if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      // Drop remaining C0 controls, DEL, and C1 controls.
+    } else {
+      result += char;
+    }
+  }
+  return result;
+}
+
+/**
+ * Decides whether an ANSI escape sequence from cell content is safe to keep.
+ * SGR color/style sequences and OSC 8 hyperlinks are preserved so colored and
+ * linked content renders intact; all other escapes (cursor moves, screen
+ * clears, etc.) are dropped to protect the table frame.
+ */
+function isSafeCellEscape(seq: string): boolean {
+  if (seq.startsWith("\x1b[") && seq.endsWith("m")) return true;
+  if (seq.startsWith("\x1b]8;;")) return true;
+  return false;
+}
+
+/**
  * Converts a cell value to a display string, mapping null/undefined to an empty
- * string and collapsing embedded line breaks / tabs to spaces so they cannot
- * break the rendered table frame.
+ * string. Visible text is sanitized of control characters while SGR color
+ * sequences and OSC 8 hyperlinks are preserved; other escape sequences are
+ * dropped so cell content cannot corrupt the rendered frame.
  */
 function cellToString(value: unknown): string {
   if (value === null || value === undefined) return "";
-  return String(value).replace(/[\n\r\t\v\f]/g, " ");
+  return splitAnsi(String(value))
+    .map((segment) =>
+      segment.ansi
+        ? isSafeCellEscape(segment.text)
+          ? segment.text
+          : ""
+        : sanitizeCellText(segment.text),
+    )
+    .join("");
 }
 
 /**
@@ -301,9 +343,15 @@ function normalizeData(
   if (Array.isArray(data[0])) {
     const arrayData = data as unknown[][];
     const headerProvided = options.header !== false;
-    const rawColumns = options.columns ?? (headerProvided ? arrayData[0].map(cellToString) : []);
+    const explicitColumns = options.columns;
+    // When explicit columns are supplied they serve as the header and every
+    // array row is data; only auto-consume row 0 as the header when no columns
+    // are given (matching the object-array branch, which never drops a row).
+    const consumeFirstRowAsHeader = headerProvided && explicitColumns === undefined;
+    const rawColumns =
+      explicitColumns ?? (consumeFirstRowAsHeader ? arrayData[0].map(cellToString) : []);
     const rawRows = arrayData
-      .slice(headerProvided ? 1 : 0)
+      .slice(consumeFirstRowAsHeader ? 1 : 0)
       .map((row) => (row as unknown[]).map(cellToString));
     const colCount = Math.max(rawColumns.length, ...rawRows.map((row) => row.length));
     const keys = Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? String(index));

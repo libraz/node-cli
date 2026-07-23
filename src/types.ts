@@ -30,9 +30,11 @@ export interface OptionSchema {
   /** Whether the option must be provided. */
   required?: boolean;
   /**
-   * Default value used when the option is not specified. It is used as-is and is
-   * not run through type coercion or a custom `parse`, so provide it already in
-   * the option's final value type (e.g. a `number` for `type: "number"`).
+   * Default value used when the option is not specified. It is run through the
+   * same built-in type coercion as an explicit value (so a string `"8080"` on a
+   * `type: "number"` option resolves to the number `8080`), but a custom `parse`
+   * is not applied to it — a default is treated as an already-resolved value, not
+   * raw input. A default already in the option's final type is left unchanged.
    */
   default?: unknown;
   /** Restricts the option value to one of the given choices. */

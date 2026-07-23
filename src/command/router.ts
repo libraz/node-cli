@@ -2,10 +2,28 @@ import { PassThrough, type Readable, type Writable } from "node:stream";
 import { CommandNotFoundError, ExtraArgumentError, MissingArgumentError } from "../errors.js";
 import { formatUsage, type HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
+import { restoreCursor } from "../output/progress.js";
 import type { Shell } from "../shell/repl.js";
 import type { CatchContext, CLIEventMap, CommandContext, CommandDefinition } from "../types.js";
 import { parse, splitPipes, tokenize } from "./parser.js";
 import type { CommandRegistry } from "./registry.js";
+
+/**
+ * Sentinel abort reason used when a downstream pipeline stage finishes early and
+ * no longer needs its upstream producers. It marks a *graceful* stop, not a
+ * failure, so the pipeline does not surface a spurious `AbortError`.
+ */
+class PipelineStopSignal extends Error {
+  constructor() {
+    super("pipeline stage stopped early");
+    this.name = "PipelineStopSignal";
+  }
+}
+
+/** True when a value is a {@link PipelineStopSignal} (the graceful-stop marker). */
+function isPipelineStop(value: unknown): boolean {
+  return value instanceof PipelineStopSignal;
+}
 
 /** Typed event listener store. */
 type EventListeners = {
@@ -44,6 +62,14 @@ export class CommandRouter {
    * all receive a cancel signal.
    */
   private readonly active: CancellationScope = new Set();
+
+  /**
+   * The stderr stream of the execution currently in flight. A best-effort target
+   * for internal diagnostics (e.g. an error handler that itself throws) so they
+   * reach a captured stream when an embedder supplied one, rather than always
+   * going to the real `process.stderr`.
+   */
+  private currentStderr: Writable = process.stderr;
 
   /**
    * Creates a new CommandRouter.
@@ -97,7 +123,7 @@ export class CommandRouter {
         // A listener should never break command flow. Surface error-event
         // failures to stderr; route others to the error event when possible.
         if (event === "error") {
-          process.stderr.write(
+          this.currentStderr.write(
             `Error in error handler: ${err instanceof Error ? err.message : String(err)}\n`,
           );
         } else {
@@ -174,11 +200,71 @@ export class CommandRouter {
   }
 
   /**
-   * Runs an async operation while routing SIGINT to active command cancellation.
+   * Runs an async operation while routing SIGINT to active command cancellation,
+   * with a force-quit escalation.
+   *
+   * The first Ctrl-C requests cooperative cancellation (aborting `ctx.signal` and
+   * invoking cancel handlers). A cooperative command stops and the promise
+   * resolves normally. A command that ignores cancellation cannot otherwise be
+   * interrupted, so a second Ctrl-C — or a Ctrl-C that finds nothing left to
+   * cancel — restores the terminal cursor and force-terminates the process with
+   * the conventional 130 (128 + SIGINT) status. `onForceQuit` runs synchronously
+   * before termination so callers (e.g. the shell) can persist state.
    */
-  async runWithSigintCancel(action: () => Promise<void>): Promise<void> {
+  async runWithSigintCancel(
+    action: () => Promise<void>,
+    options: {
+      onForceQuit?: () => void;
+      onInterrupt?: () => boolean;
+      stderr?: Writable;
+    } = {},
+  ): Promise<void> {
+    // Where the "press Ctrl-C again" hint is written. For command execution the
+    // router already tracks the in-flight stderr; a mode action supplies its own.
+    const hintStream = options.stderr ?? this.currentStderr;
+    // How a first interrupt is delivered. Defaults to cancelling the router's
+    // active commands; callers running work outside the router (e.g. a mode
+    // sub-REPL action) supply their own so cooperative cancellation still works.
+    const interrupt = options.onInterrupt ?? (() => this.triggerCancel());
+    // A later Ctrl-C escalates to a hard exit only after the cooperative cancel
+    // has had time to take effect. A rapid repeat press within this window (part
+    // of the same frustrated burst, while a command may still be mid-cleanup) is
+    // coalesced so a command cancelling in good faith is not killed; a press after
+    // it means the first interrupt clearly did not stop the command.
+    const FORCE_QUIT_GRACE_MS = 250;
+    let interruptRequested = false;
+    let firstInterruptAt = 0;
+    let forced = false;
+
+    const forceQuit = () => {
+      if (forced) return;
+      forced = true;
+      process.removeListener("SIGINT", onSigint);
+      restoreCursor();
+      try {
+        options.onForceQuit?.();
+      } catch {
+        // Never let cleanup failure block termination.
+      }
+      process.exit(130);
+    };
+
     const onSigint = () => {
-      this.triggerCancel();
+      if (interruptRequested) {
+        // A cancellation was already requested. If enough time has passed that the
+        // command clearly ignored it, escalate to a hard exit; otherwise coalesce.
+        if (Date.now() - firstInterruptAt >= FORCE_QUIT_GRACE_MS) forceQuit();
+        return;
+      }
+      const newlyCancelled = interrupt();
+      if (newlyCancelled) {
+        interruptRequested = true;
+        firstInterruptAt = Date.now();
+        hintStream.write("\nInterrupted. Press Ctrl-C again to force quit.\n");
+      } else {
+        // Nothing was running to cancel; fall back to default termination.
+        forceQuit();
+      }
     };
     // Keep the listener installed until the execution boundary closes. A `once`
     // signal listener removes itself before invoking the callback, which can
@@ -236,6 +322,7 @@ export class CommandRouter {
       signal,
       cancellationScope,
     } = options;
+    this.currentStderr = stderr;
 
     // Check for pipe chains (only for string input)
     if (typeof input === "string") {
@@ -422,6 +509,11 @@ export class CommandRouter {
     const { shell = null, stderr } = options;
     const stageScopes: CancellationScope[] = segments.map(() => new Set());
     let pipelineFailed = false;
+    // Marks stages that were aborted purely because a downstream stage finished
+    // early (a graceful stop), so their resulting rejection is not treated as a
+    // pipeline failure — even if the action surfaces a generic abort error rather
+    // than the {@link PipelineStopSignal} reason.
+    const gracefullyStopped = segments.map(() => false);
 
     // Wire stage[i].stdout → stage[i+1].stdin via PassThrough pipes.
     const pipes: PassThrough[] = [];
@@ -465,18 +557,35 @@ export class CommandRouter {
           }
           // A downstream stage may intentionally stop after consuming enough
           // input. Abort every still-running upstream action, including actions
-          // waiting on external I/O rather than on the pipe itself.
+          // waiting on external I/O rather than on the pipe itself. This is a
+          // graceful stop — mark those stages and abort with a sentinel reason so
+          // the resulting rejection is not mistaken for a pipeline failure.
           if (i > 0) {
-            this.cancelEntries(stageScopes.slice(0, i).flatMap((scope) => [...scope]));
+            for (let j = 0; j < i; j++) gracefullyStopped[j] = true;
+            this.cancelEntries(
+              stageScopes.slice(0, i).flatMap((scope) => [...scope]),
+              new PipelineStopSignal(),
+            );
           }
           // Signal end-of-input to the downstream stage.
           if (!isLast) pipes[i].end();
         })
         .catch((err) => {
+          const error = err instanceof Error ? err : new Error(String(err));
+
+          // Graceful early-stop: this upstream stage was aborted only because a
+          // downstream stage finished and no longer needs its output. Close its
+          // pipes but do NOT fail the pipeline (mirrors a `producer | head` where
+          // the producer's SIGPIPE/abort is expected, not an error).
+          if (isPipelineStop(error) || gracefullyStopped[i]) {
+            if (i > 0 && !pipes[i - 1].destroyed) destroyPipe(pipes[i - 1]);
+            if (!isLast && !pipes[i].destroyed) destroyPipe(pipes[i]);
+            return;
+          }
+
           // Tear down the ENTIRE chain on failure — both the downstream pipe and
           // any upstream pipes — so a backpressured upstream stage cannot hang
           // forever waiting on a consumer that has already failed.
-          const error = err instanceof Error ? err : new Error(String(err));
           if (!pipelineFailed) {
             pipelineFailed = true;
             this.cancelEntries(
@@ -496,7 +605,9 @@ export class CommandRouter {
     // observed rather than surfacing as unhandled promise rejections. The first
     // failure is then re-thrown to the caller.
     const settled = await Promise.allSettled(runs);
-    const failure = settled.find((r) => r.status === "rejected");
+    const failure = settled.find(
+      (r) => r.status === "rejected" && !isPipelineStop((r as PromiseRejectedResult).reason),
+    );
     if (failure) {
       throw (failure as PromiseRejectedResult).reason;
     }

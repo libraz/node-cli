@@ -1,6 +1,57 @@
 import { InvalidOptionError, UnknownOptionError } from "../errors.js";
-import type { ArgDef, CommandDefinition, ParseResult } from "../types.js";
+import type { ArgDef, CommandDefinition, OptionDef, ParseResult } from "../types.js";
 import type { CommandRegistry } from "./registry.js";
+
+/**
+ * Strips the leading dashes from an option flag (`--name` → `name`, `-n` → `n`).
+ * The single source of truth for prefix normalization so the builder, parser,
+ * and completion cannot drift.
+ *
+ * @param flag - The flag token, with or without leading dashes.
+ * @returns The flag name without any leading dashes.
+ */
+export function stripOptionPrefix(flag: string): string {
+  return flag.replace(/^-+/, "");
+}
+
+/**
+ * Builds an alias → canonical-long-name map for a command's options. Shared by
+ * the parser and completion so both resolve short aliases identically.
+ *
+ * @param options - The command's option definitions.
+ * @returns A map from each alias to its option's long name.
+ */
+export function buildAliasMap(options: Map<string, OptionDef>): Map<string, string> {
+  const aliasMap = new Map<string, string>();
+  for (const [, def] of options) {
+    for (const alias of def.aliases) {
+      aliasMap.set(alias, def.long);
+    }
+  }
+  return aliasMap;
+}
+
+/**
+ * Reports whether a command's own options bind the built-in help flags. The
+ * parser only falls back to built-in help for `--help` / `-h` when the long name
+ * `help` / short alias `h` are unbound, so the help generator and completion
+ * consult this to advertise exactly the forms that actually trigger help.
+ *
+ * @param options - The command's option definitions.
+ * @returns Flags indicating whether `--help` (long) and `-h` (short) are bound.
+ */
+export function helpFlagBindings(options: Map<string, OptionDef>): {
+  long: boolean;
+  short: boolean;
+} {
+  let long = false;
+  let short = false;
+  for (const [, def] of options) {
+    if (def.long === "help") long = true;
+    if (def.aliases.includes("h")) short = true;
+  }
+  return { long, short };
+}
 
 /**
  * Splits an input string into segments at top-level delimiter characters,
@@ -45,7 +96,11 @@ function splitRespectingQuotes(
 
     if (ch === "\\") {
       tokenStarted = true;
-      if (inSingle && !preserveSyntax) {
+      if (inSingle) {
+        // Single quotes are fully literal in BOTH modes: a backslash inside them
+        // is an ordinary character, never an escape. Treating it as an escape
+        // (the preserveSyntax path used by pipe-splitting) made splitPipes reject
+        // inputs like `echo 'a\'` that tokenize accepts.
         current += ch;
         continue;
       }
@@ -128,10 +183,20 @@ export function parseDefinitionString(definition: string): {
   const names: string[] = [];
   const argDefs: ArgDef[] = [];
 
+  let seenArg = false;
   for (const token of tokens) {
     if (token.startsWith("<") || token.startsWith("[")) {
       argDefs.push(parseArgToken(token));
+      seenArg = true;
     } else {
+      // Once an argument token has appeared, a later bare name is not a command
+      // name but a silent ambiguity (it would become an unreachable subcommand).
+      // Reject it so the mistake surfaces at definition time.
+      if (seenArg) {
+        throw new Error(
+          `Invalid command definition: command name "${token}" cannot follow an argument in "${definition}"`,
+        );
+      }
       names.push(token);
     }
   }
@@ -286,14 +351,8 @@ function extractOptionsAndArgs(
   let pastDoubleDash = false;
   let builtInHelp = false;
 
-  // Build alias map
-  const aliasMap = new Map<string, string>();
   const optionDefs = command.options;
-  for (const [, def] of optionDefs) {
-    for (const alias of def.aliases) {
-      aliasMap.set(alias, def.long);
-    }
-  }
+  const aliasMap = buildAliasMap(optionDefs);
 
   let i = 0;
   while (i < tokens.length) {
@@ -369,6 +428,21 @@ function extractOptionsAndArgs(
       continue;
     }
 
+    // A bare negative number (e.g. "-5", "-3.14", "-1e3") is a positional value,
+    // not an option — unless an option with that exact name/alias is defined.
+    // (A negative value bound to a preceding number option is already consumed as
+    // that option's value, so reaching here means it stands on its own.)
+    if (
+      /^-\d/.test(token) &&
+      Number.isFinite(Number(token)) &&
+      !optionDefs.has(token.slice(1)) &&
+      !aliasMap.has(token.slice(1))
+    ) {
+      positional.push(token);
+      i++;
+      continue;
+    }
+
     if (token.startsWith("-") && token.length > 1 && !token.startsWith("-", 1)) {
       const eqIndex = token.indexOf("=");
       if (eqIndex !== -1) {
@@ -417,6 +491,13 @@ function extractOptionsAndArgs(
           const name = aliasMap.get(ch) ?? ch;
           const def = optionDefs.get(name);
           if (!def) {
+            // Mirror the single-flag `-h` fallback so help works inside a cluster
+            // (e.g. `-vh`) unless the user has bound `-h` to another option.
+            if (ch === "h") {
+              builtInHelp = true;
+              options.help = true;
+              continue;
+            }
             throw new UnknownOptionError(`-${ch}`);
           }
           if (def.schema.type !== "boolean") {
@@ -531,7 +612,9 @@ export function splitPipes(input: string): string[] {
       previousPipe = false;
       continue;
     }
-    if (ch === "\\") {
+    // A backslash escapes only outside single quotes; single quotes are literal
+    // (matching splitRespectingQuotes), so quote state stays balanced.
+    if (ch === "\\" && !inSingle) {
       escaped = true;
       continue;
     }
@@ -582,7 +665,8 @@ export function activePipeSegment(input: string): string {
       escaped = false;
       continue;
     }
-    if (ch === "\\") {
+    // A backslash escapes only outside single quotes (single quotes are literal).
+    if (ch === "\\" && !inSingle) {
       escaped = true;
       continue;
     }

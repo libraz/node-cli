@@ -178,6 +178,45 @@ type TerminalSession = { users: number };
 
 const terminalSessions = new WeakMap<Writable, TerminalSession>();
 
+/**
+ * Streams that currently have their cursor hidden. Tracked separately from the
+ * per-stream session map (a WeakMap is not iterable) so {@link restoreCursor}
+ * can re-show the cursor everywhere on an abrupt exit.
+ */
+const cursorHiddenStreams = new Set<Writable>();
+let exitRestoreRegistered = false;
+
+/**
+ * Re-shows the cursor on every stream that currently has it hidden and forgets
+ * those streams. Safe to call repeatedly. Registered on `process.exit` and also
+ * exposed so the command router can invoke it from its force-quit / SIGINT path,
+ * ensuring a Ctrl-C (or uncaught crash) during a spinner or progress bar never
+ * leaves the terminal cursor invisible.
+ */
+export function restoreCursor(): void {
+  for (const stream of cursorHiddenStreams) {
+    try {
+      stream.write("\x1b[?25h");
+    } catch {
+      // Best-effort: the stream may already be gone during teardown.
+    }
+  }
+  cursorHiddenStreams.clear();
+}
+
+/**
+ * Lazily installs a last-chance cursor-restore on process exit. `exit` handlers
+ * cannot do async work, but a synchronous escape-sequence write is fine. No
+ * SIGINT handler is installed here on purpose: that would suppress Node's default
+ * termination for standalone spinner use; SIGINT-time restore is driven by the
+ * router, which owns signal handling during command execution.
+ */
+function registerExitRestore(): void {
+  if (exitRestoreRegistered) return;
+  exitRestoreRegistered = true;
+  process.once("exit", restoreCursor);
+}
+
 /** Shares cursor ownership between every indicator writing to the same stream. */
 function acquireTerminal(stream: Writable): () => void {
   if (!isTTY(stream)) return () => {};
@@ -188,7 +227,11 @@ function acquireTerminal(stream: Writable): () => void {
     terminalSessions.set(stream, session);
   }
   session.users++;
-  if (session.users === 1) stream.write("\x1b[?25l");
+  if (session.users === 1) {
+    stream.write("\x1b[?25l");
+    cursorHiddenStreams.add(stream);
+    registerExitRestore();
+  }
 
   let released = false;
   return () => {
@@ -199,6 +242,7 @@ function acquireTerminal(stream: Writable): () => void {
     current.users = Math.max(0, current.users - 1);
     if (current.users === 0) {
       stream.write("\x1b[?25h");
+      cursorHiddenStreams.delete(stream);
       terminalSessions.delete(stream);
     }
   };

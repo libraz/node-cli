@@ -211,8 +211,24 @@ export function createColorizer(stream: Writable): Record<string, ColorFn> {
 export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
   const valueStrings = values.map(String);
   const allInput = [...strings, ...valueStrings];
-  let marker = "\u{f0000}";
-  while (allInput.some((part) => part.includes(marker))) marker += "\u{f0000}";
+  // Build a collision-free marker in a single pass. The marker is a run of
+  // U+F0000 (Plane-15 private use) one longer than the longest such run already
+  // present in any input part, so it cannot appear inside the literal or
+  // interpolated content. Scanning once keeps this O(n) on adversarial input.
+  const markerCode = 0xf0000;
+  let maxRun = 0;
+  for (const part of allInput) {
+    let run = 0;
+    for (const char of part) {
+      if (char.codePointAt(0) === markerCode) {
+        run++;
+        if (run > maxRun) maxRun = run;
+      } else {
+        run = 0;
+      }
+    }
+  }
+  const marker = "\u{f0000}".repeat(maxRun + 1);
   const tokens = valueStrings.map((_, index) => `${marker}${index}${marker}`);
   const raw = strings.reduce((acc, str, i) => acc + str + (i < tokens.length ? tokens[i] : ""), "");
 
@@ -334,21 +350,46 @@ export function splitAnsi(text: string): AnsiSegment[] {
  */
 export function stringWidth(text: string): number {
   const stripped = stripAnsi(text);
-  return splitGraphemes(stripped).reduce((width, grapheme) => {
-    let graphemeWidth = 0;
-    for (const char of grapheme) {
-      graphemeWidth = Math.max(graphemeWidth, getCharWidth(char.codePointAt(0) as number));
-    }
-    return width + graphemeWidth;
-  }, 0);
+  return splitGraphemes(stripped).reduce((width, grapheme) => width + graphemeWidth(grapheme), 0);
+}
+
+/**
+ * Computes the display width of a single grapheme cluster directly from its
+ * code points, taking the maximum width across the cluster so a base character
+ * combined with a wide component still counts as wide. Avoids re-segmenting an
+ * already-split grapheme via {@link stringWidth}.
+ */
+function graphemeWidth(grapheme: string): number {
+  let width = 0;
+  for (const char of grapheme) {
+    width = Math.max(width, getCharWidth(char.codePointAt(0) as number));
+  }
+  return width;
+}
+
+/**
+ * Lazily-initialized, module-level grapheme segmenter. Reusing one instance
+ * avoids reconstructing an `Intl.Segmenter` on every width/truncation call,
+ * which is the table-rendering hot path. Null when `Intl.Segmenter` is
+ * unavailable, in which case callers fall back to code-point iteration.
+ */
+let _segmenter: Intl.Segmenter | null | undefined;
+
+function getSegmenter(): Intl.Segmenter | null {
+  if (_segmenter === undefined) {
+    _segmenter =
+      typeof Intl !== "undefined" && "Segmenter" in Intl
+        ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+        : null;
+  }
+  return _segmenter;
 }
 
 /** Splits visible text into user-perceived grapheme clusters. */
 export function splitGraphemes(text: string): string[] {
-  if (typeof Intl !== "undefined" && "Segmenter" in Intl) {
-    return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)].map(
-      (segment) => segment.segment,
-    );
+  const segmenter = getSegmenter();
+  if (segmenter) {
+    return [...segmenter.segment(text)].map((segment) => segment.segment);
   }
   return [...text];
 }
@@ -362,7 +403,7 @@ export function truncateAnsi(text: string, maxWidth: number, marker = "…"): st
     let width = 0;
     let result = "";
     for (const grapheme of splitGraphemes(value)) {
-      const nextWidth = stringWidth(grapheme);
+      const nextWidth = graphemeWidth(grapheme);
       if (width + nextWidth > widthLimit) break;
       result += grapheme;
       width += nextWidth;
@@ -386,7 +427,7 @@ export function truncateAnsi(text: string, maxWidth: number, marker = "…"): st
       continue;
     }
     for (const grapheme of splitGraphemes(segment.text)) {
-      const nextWidth = stringWidth(grapheme);
+      const nextWidth = graphemeWidth(grapheme);
       if (visibleWidth + nextWidth > contentLimit) break outer;
       result += grapheme;
       visibleWidth += nextWidth;
@@ -430,22 +471,24 @@ function isZeroWidth(code: number): boolean {
  */
 function isWide(code: number): boolean {
   return (
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2329 && code <= 0x232a) ||
-    (code >= 0x2e80 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe10 && code <= 0xfe19) ||
-    (code >= 0xfe30 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1f64f) || // misc symbols & emoticons
-    (code >= 0x1f900 && code <= 0x1f9ff) || // supplemental symbols
-    (code >= 0x1fa70 && code <= 0x1faff) || // symbols extended-A
+    (code >= 0x1100 && code <= 0x115f) || // Hangul Jamo
+    (code >= 0x2329 && code <= 0x232a) || // angle brackets
     (code >= 0x2600 && code <= 0x26ff) || // misc symbols
     (code >= 0x2700 && code <= 0x27bf) || // dingbats
-    (code >= 0x20000 && code <= 0x2fffd) ||
-    (code >= 0x30000 && code <= 0x3fffd)
+    (code >= 0x2e80 && code <= 0xa4cf) || // CJK radicals … Yi
+    (code >= 0xac00 && code <= 0xd7a3) || // Hangul syllables
+    (code >= 0xf900 && code <= 0xfaff) || // CJK compatibility ideographs
+    (code >= 0xfe10 && code <= 0xfe19) || // vertical forms
+    (code >= 0xfe30 && code <= 0xfe6f) || // CJK compatibility forms
+    (code >= 0xff00 && code <= 0xff60) || // fullwidth forms
+    (code >= 0xffe0 && code <= 0xffe6) || // fullwidth signs
+    (code >= 0x1f000 && code <= 0x1f2ff) || // mahjong, dominoes, cards, enclosed (incl. regional indicators U+1F1E6–1F1FF)
+    (code >= 0x1f300 && code <= 0x1f64f) || // misc symbols & emoticons
+    (code >= 0x1f680 && code <= 0x1f6ff) || // transport & map symbols
+    (code >= 0x1f900 && code <= 0x1f9ff) || // supplemental symbols & pictographs
+    (code >= 0x1fa70 && code <= 0x1faff) || // symbols & pictographs extended-A
+    (code >= 0x20000 && code <= 0x2fffd) || // CJK unified ideographs extension B–F
+    (code >= 0x30000 && code <= 0x3fffd) // CJK unified ideographs extension G+
   );
 }
 

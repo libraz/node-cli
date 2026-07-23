@@ -1,6 +1,7 @@
-import type { CommandRegistry } from "../command/registry.js";
+import { helpFlagBindings } from "../command/parser.js";
+import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
 import { stringWidth } from "../output/color.js";
-import type { CommandDefinition, OptionDef } from "../types.js";
+import type { ArgDef, CommandDefinition, OptionDef } from "../types.js";
 
 /**
  * Generates human-readable help text for CLI commands.
@@ -66,7 +67,11 @@ export class HelpGenerator {
 
     const entries: [string, string][] = commands.map((cmd) => {
       const usage = formatCommandUsage(cmd);
-      return [usage, cmd.description ?? ""];
+      // Note aliases here too, matching the per-command subcommand listing, so a
+      // command's alternate names are discoverable at every help depth.
+      const aliasNote =
+        cmd.aliases && cmd.aliases.length > 0 ? ` (alias: ${cmd.aliases.join(", ")})` : "";
+      return [usage, `${cmd.description ?? ""}${aliasNote}`];
     });
 
     const maxWidth = Math.max(...entries.map(([usage]) => stringWidth(usage)));
@@ -121,14 +126,18 @@ export class HelpGenerator {
       }
     }
 
-    // Options — always advertise the built-in --help flag.
+    // Options — advertise exactly the built-in help forms the parser still treats
+    // as help. When `--help`/`-h` is bound to one of the command's own options
+    // (e.g. `-h, --host`), only the remaining unbound form is shown, so a working
+    // built-in flag is never hidden and a shadowed one is never falsely promised.
     const visibleOptions = [...command.options.values()].filter((o) => !o.schema.hidden);
     const optionEntries = formatOptionEntries(visibleOptions);
-    const hasHelpOption = visibleOptions.some(
-      (opt) => opt.long === "help" || opt.aliases.includes("h"),
-    );
-    if (!hasHelpOption) {
-      optionEntries.push(["-h, --help", "Show help for this command"]);
+    const bindsHelp = helpFlagBindings(command.options);
+    const helpForms: string[] = [];
+    if (!bindsHelp.short) helpForms.push("-h");
+    if (!bindsHelp.long) helpForms.push("--help");
+    if (helpForms.length > 0) {
+      optionEntries.push([helpForms.join(", "), "Show help for this command"]);
     }
     lines.push("", "Options:");
     const maxWidth = Math.max(...optionEntries.map(([flags]) => stringWidth(flags)));
@@ -137,8 +146,10 @@ export class HelpGenerator {
       lines.push(`  ${flags}${desc ? padding + desc : ""}`);
     }
 
-    // Subcommands
-    if (command.subcommands.size > 0) {
+    // Subcommands — omitted when the command itself takes positional arguments,
+    // because the parser would consume any subcommand name as an argument value,
+    // making those subcommands unreachable. Advertising them would mislead.
+    if (command.subcommands.size > 0 && !hasUnreachableSubcommands(command)) {
       lines.push("", "Commands:");
       // Deduplicate: aliases point to the same definition object
       const subEntries: [string, string][] = [...new Set(command.subcommands.values())].map(
@@ -182,14 +193,23 @@ export function formatUsage(
     parts.push("<command>");
   }
   for (const arg of command.argDefs) {
-    if (arg.variadic) {
-      parts.push(arg.required ? `<...${arg.name}>` : `[...${arg.name}]`);
-    } else {
-      parts.push(arg.required ? `<${arg.name}>` : `[${arg.name}]`);
-    }
+    parts.push(formatArgToken(arg));
   }
   parts.push("[options]");
   return parts.join(" ");
+}
+
+/**
+ * Formats a single positional argument as its usage token: `<name>` (required),
+ * `[name]` (optional), and `...name` for variadic. Shared by every usage
+ * renderer so the bracketing rules live in one place.
+ *
+ * @param arg - The argument definition.
+ * @returns The bracketed usage token.
+ */
+function formatArgToken(arg: ArgDef): string {
+  const inner = arg.variadic ? `...${arg.name}` : arg.name;
+  return arg.required ? `<${inner}>` : `[${inner}]`;
 }
 
 /**
@@ -201,11 +221,7 @@ export function formatUsage(
 function formatCommandUsage(cmd: CommandDefinition): string {
   const parts = [cmd.name];
   for (const arg of cmd.argDefs) {
-    if (arg.variadic) {
-      parts.push(arg.required ? `<...${arg.name}>` : `[...${arg.name}]`);
-    } else {
-      parts.push(arg.required ? `<${arg.name}>` : `[${arg.name}]`);
-    }
+    parts.push(formatArgToken(arg));
   }
   return parts.join(" ");
 }
@@ -254,6 +270,11 @@ function formatOptionEntries(options: OptionDef[]): [string, string][] {
     }
     if (opt.schema.choices) {
       descParts.push(`[${opt.schema.choices.join(", ")}]`);
+    }
+    // Boolean options accept an implicit negated form (`--no-<name>`) at parse
+    // time and in completion; note it here so it is discoverable in help too.
+    if (opt.schema.type === "boolean") {
+      descParts.push(`(negate with --no-${opt.long})`);
     }
 
     return [flags, descParts.join(" ")] as [string, string];

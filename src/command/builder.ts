@@ -5,7 +5,7 @@ import type {
   Completer,
   OptionSchema,
 } from "../types.js";
-import { parseDefinitionString, parseOptionFlags } from "./parser.js";
+import { parseDefinitionString, parseOptionFlags, stripOptionPrefix } from "./parser.js";
 import type { CommandRegistry } from "./registry.js";
 
 /**
@@ -97,7 +97,7 @@ export class CommandBuilder {
     if (resolved.alias) {
       const extra = Array.isArray(resolved.alias) ? resolved.alias : [resolved.alias];
       for (const a of extra) {
-        const name = a.replace(/^-+/, "");
+        const name = stripOptionPrefix(a);
         if (name && !mergedAliases.includes(name)) {
           mergedAliases.push(name);
         }

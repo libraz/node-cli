@@ -184,10 +184,22 @@ export class PromptCancelError extends CLIError {
 }
 
 /**
+ * Reports whether an error represents a user-initiated cancellation rather than
+ * a genuine failure: a {@link PromptCancelError}, or an abort surfaced through
+ * `AbortSignal` (e.g. SIGINT aborting `ctx.signal`, which makes `fetch`/timers
+ * reject with an `AbortError`). Used to present a clean "Cancelled" message and
+ * the conventional 130 exit code instead of an `Error:` line and exit 1.
+ */
+export function isCancellationError(err: unknown): boolean {
+  if (err instanceof PromptCancelError) return true;
+  return err instanceof Error && err.name === "AbortError";
+}
+
+/**
  * Formats an unknown error value for user-facing CLI output.
  */
 export function formatErrorMessage(err: unknown): string {
-  if (err instanceof PromptCancelError) {
+  if (isCancellationError(err)) {
     return "Cancelled";
   }
   return err instanceof Error ? err.message : String(err);

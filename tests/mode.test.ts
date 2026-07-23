@@ -284,15 +284,16 @@ describe("mode command", () => {
     const stderr = createMockTTY();
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const triggerCancel = vi.spyOn(router, "triggerCancel");
     let resolveModeAction: (() => void) | undefined;
+    let modeSignal: AbortSignal | undefined;
     const modeActionStarted = vi.fn();
 
     new CommandBuilder(registry, "sql").action((ctx) => {
       ctx.shell?.enterMode({
         prompt: "sql> ",
-        action: () =>
+        action: (_input, modeCtx) =>
           new Promise<void>((resolve) => {
+            modeSignal = modeCtx.signal;
             resolveModeAction = resolve;
             modeActionStarted();
           }),
@@ -317,8 +318,11 @@ describe("mode command", () => {
       stdin.write("select 1\n");
       await vi.waitFor(() => expect(modeActionStarted).toHaveBeenCalledOnce());
 
+      // A first Ctrl-C aborts the mode action's cancellation signal cooperatively.
+      // Mode actions bypass router.execute, so cancellation runs through a
+      // dedicated AbortController rather than router.triggerCancel.
       process.emit("SIGINT");
-      expect(triggerCancel).toHaveBeenCalledOnce();
+      expect(modeSignal?.aborted).toBe(true);
 
       resolveModeAction?.();
       await vi.waitFor(() => expect((shell as unknown as { rl?: unknown }).rl).toBeDefined());
@@ -329,9 +333,9 @@ describe("mode command", () => {
       Object.defineProperty(process, "stdin", { configurable: true, value: originalStdin });
       Object.defineProperty(process, "stdout", { configurable: true, value: originalStdout });
       Object.defineProperty(process, "stderr", { configurable: true, value: originalStderr });
-      triggerCancel.mockRestore();
     }
 
-    expect(stderr.getOutput()).toBe("");
+    // The first interrupt writes the force-quit hint to stderr.
+    expect(stderr.getOutput()).toContain("Press Ctrl-C again to force quit");
   });
 });

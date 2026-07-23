@@ -306,3 +306,18 @@ function mergeDefinition(target: CommandDefinition, source: CommandDefinition): 
     }
   }
 }
+
+/**
+ * Reports whether a command's subcommands are unreachable: a runnable command
+ * that also takes positional arguments consumes any following token as an
+ * argument value (see {@link CommandRegistry.matchCommandPath}), so its
+ * subcommands can never be dispatched. This intentional shadowing is honored at
+ * parse time, but help and completion consult this so they do not advertise
+ * subcommands a user could never actually invoke.
+ *
+ * @param cmd - The command definition to inspect.
+ * @returns True when the command's subcommands are unreachable.
+ */
+export function hasUnreachableSubcommands(cmd: CommandDefinition): boolean {
+  return cmd.action !== undefined && cmd.argDefs.length > 0 && cmd.subcommands.size > 0;
+}

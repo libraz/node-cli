@@ -71,6 +71,102 @@ describe("resolveOptions", () => {
     expect(() => resolveOptions({}, defs, dummyCtx)).toThrow(MissingOptionError);
   });
 
+  it("does not overwrite falsy explicit values with a default", () => {
+    const numberDefs = new Map([["port", makeDef("port", { type: "number", default: 8080 })]]);
+    expect(resolveOptions({ port: "0" }, numberDefs, dummyCtx).port).toBe(0);
+
+    const stringDefs = new Map([["name", makeDef("name", { type: "string", default: "anon" })]]);
+    expect(resolveOptions({ name: "" }, stringDefs, dummyCtx).name).toBe("");
+
+    const boolDefs = new Map([["cache", makeDef("cache", { type: "boolean", default: true })]]);
+    expect(resolveOptions({ cache: "false" }, boolDefs, dummyCtx).cache).toBe(false);
+  });
+
+  it("coerces a string default on a number option to a number", () => {
+    const defs = new Map([["port", makeDef("port", { type: "number", default: "8080" })]]);
+    const result = resolveOptions({}, defs, dummyCtx);
+    expect(result.port).toBe(8080);
+    expect(typeof result.port).toBe("number");
+  });
+
+  it("leaves a default that is already the correct type unchanged", () => {
+    const defs = new Map([["port", makeDef("port", { type: "number", default: 8080 })]]);
+    expect(resolveOptions({}, defs, dummyCtx).port).toBe(8080);
+  });
+
+  it("accepts number coercion edge cases", () => {
+    const defs = new Map([["n", makeDef("n", { type: "number" })]]);
+    expect(resolveOptions({ n: "-5" }, defs, dummyCtx).n).toBe(-5);
+    expect(resolveOptions({ n: "1e3" }, defs, dummyCtx).n).toBe(1000);
+  });
+
+  it("rejects blank and non-finite numbers", () => {
+    const defs = new Map([["n", makeDef("n", { type: "number" })]]);
+    expect(() => resolveOptions({ n: "" }, defs, dummyCtx)).toThrow(InvalidOptionError);
+    expect(() => resolveOptions({ n: "   " }, defs, dummyCtx)).toThrow(InvalidOptionError);
+    expect(() => resolveOptions({ n: "Infinity" }, defs, dummyCtx)).toThrow(InvalidOptionError);
+    expect(() => resolveOptions({ n: "NaN" }, defs, dummyCtx)).toThrow(InvalidOptionError);
+  });
+
+  it("recognizes boolean value variants", () => {
+    const defs = new Map([["flag", makeDef("flag", { type: "boolean" })]]);
+    for (const truthy of ["1", "yes", "on", "true"]) {
+      expect(resolveOptions({ flag: truthy }, defs, dummyCtx).flag).toBe(true);
+    }
+    for (const falsy of ["0", "no", "off", "false"]) {
+      expect(resolveOptions({ flag: falsy }, defs, dummyCtx).flag).toBe(false);
+    }
+  });
+
+  it("rejects an unrecognized boolean value", () => {
+    const defs = new Map([["flag", makeDef("flag", { type: "boolean" })]]);
+    expect(() => resolveOptions({ flag: "hello" }, defs, dummyCtx)).toThrow(InvalidOptionError);
+  });
+
+  it("does not inject a value for an omitted optional option", () => {
+    const defs = new Map([["flag", makeDef("flag", { type: "boolean" })]]);
+    const result = resolveOptions({}, defs, dummyCtx);
+    expect(result.flag).toBeUndefined();
+    expect(Object.hasOwn(result, "flag")).toBe(false);
+  });
+
+  it("treats a present scalar flag whose custom parse returns undefined as explicit", () => {
+    const defs = new Map([
+      [
+        "opt",
+        makeDef("opt", {
+          type: "string",
+          default: "fallback",
+          required: true,
+          parse() {
+            return undefined;
+          },
+        }),
+      ],
+    ]);
+    // Present: default is not applied and no MissingOptionError is thrown.
+    const result = resolveOptions({ opt: "x" }, defs, dummyCtx);
+    expect(result.opt).toBeUndefined();
+    expect(Object.hasOwn(result, "opt")).toBe(true);
+    // Absent: the default still applies as usual.
+    expect(resolveOptions({}, defs, dummyCtx).opt).toBe("fallback");
+  });
+
+  it("treats scalar and array custom-parse-returns-undefined consistently", () => {
+    const scalarDefs = new Map([
+      ["opt", makeDef("opt", { type: "string", required: true, parse: () => undefined })],
+    ]);
+    const arrayDefs = new Map([
+      ["opt", makeDef("opt", { type: "string[]", required: true, parse: () => undefined })],
+    ]);
+    // Neither treats a present flag as missing.
+    expect(() => resolveOptions({ opt: "x" }, scalarDefs, dummyCtx)).not.toThrow();
+    expect(() => resolveOptions({ opt: ["x"] }, arrayDefs, dummyCtx)).not.toThrow();
+    // Both still enforce required when the flag is genuinely absent.
+    expect(() => resolveOptions({}, scalarDefs, dummyCtx)).toThrow(MissingOptionError);
+    expect(() => resolveOptions({}, arrayDefs, dummyCtx)).toThrow(MissingOptionError);
+  });
+
   it("validates choices", () => {
     const defs = new Map([["env", makeDef("env", { type: "string", choices: ["prod", "dev"] })]]);
     expect(resolveOptions({ env: "prod" }, defs, dummyCtx).env).toBe("prod");

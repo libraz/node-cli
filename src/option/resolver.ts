@@ -1,3 +1,4 @@
+import { buildAliasMap } from "../command/parser.js";
 import { InvalidOptionError, MissingOptionError, ValidationError } from "../errors.js";
 import type { CommandContext, OptionDef } from "../types.js";
 
@@ -24,13 +25,9 @@ export function resolveOptions(
 ): Record<string, unknown> {
   const resolved: Record<string, unknown> = Object.create(null);
 
-  // Build alias → long mapping
-  const aliasMap = new Map<string, string>();
-  for (const [, def] of defs) {
-    for (const alias of def.aliases) {
-      aliasMap.set(alias, def.long);
-    }
-  }
+  // Build alias → long mapping (shared with the parser so both resolve aliases
+  // identically).
+  const aliasMap = buildAliasMap(defs);
 
   // Normalize aliases in raw
   const normalized: Record<string, unknown> = Object.create(null);
@@ -47,9 +44,16 @@ export function resolveOptions(
   // First pass: parse/coerce/default/required for every option.
   for (const [, def] of defs) {
     const { long, schema } = def;
-    let value = normalized[long];
+    const rawValue = normalized[long];
+    // Presence is tracked from the raw (pre-parse) value so it is decoupled from
+    // the resolved value: a flag the user explicitly passed whose custom `parse`
+    // returns `undefined` is still present. Default application and the required
+    // check are driven by presence, never by whether the resolved value happens
+    // to be `undefined`, keeping scalar and array options consistent.
+    const present = rawValue !== undefined;
+    let value = rawValue;
 
-    if (value !== undefined) {
+    if (present) {
       if (schema.parse) {
         // A custom parser is the user's escape hatch: it receives the raw
         // string(s) and fully owns coercion. Built-in coercion is skipped.
@@ -64,19 +68,21 @@ export function resolveOptions(
       } else {
         value = coerce(value, schema.type, long);
       }
-    }
-
-    // Apply default
-    if (value === undefined && schema.default !== undefined) {
-      value = schema.default;
-    }
-
-    // Required check
-    if (value === undefined && schema.required) {
+    } else if (schema.default !== undefined) {
+      // Apply the default only when the flag was absent, and run it through the
+      // same built-in coercion an explicit value receives so the runtime type
+      // matches (e.g. a string default on a `number` option becomes a number).
+      // A default already in its final type is left unchanged. Custom `parse` is
+      // not re-applied: a default is an already-resolved value, not raw input.
+      value = coerce(schema.default, schema.type, long);
+    } else if (schema.required) {
       throw new MissingOptionError(long);
     }
 
-    if (value !== undefined) resolved[long] = value;
+    // Keep the flag present whenever it was supplied — even if its resolved
+    // value is `undefined` — so an explicit parse-to-undefined is preserved
+    // rather than being dropped and re-triggering defaults downstream.
+    if (present || value !== undefined) resolved[long] = value;
     else delete resolved[long];
   }
 
