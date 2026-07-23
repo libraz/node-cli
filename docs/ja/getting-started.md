@@ -14,7 +14,7 @@ pnpm add @libraz/node-cli
 ```
 
 **動作要件:**
-- Node.js >= 20
+- Node.js >= 22
 - ESM (package.json に `"type": "module"`)
 
 ## 基本的な使い方

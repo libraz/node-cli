@@ -235,7 +235,7 @@ cli.command("sql").action((ctx) => {
 
 ## Requirements
 
-- Node.js >= 20
+- Node.js >= 22
 - ESM (type: "module")
 
 ## Documentation
