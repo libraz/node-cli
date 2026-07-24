@@ -38,7 +38,7 @@ try {
   run("git", ["config", "user.email", "smoke@example.invalid"], { cwd: repository });
   run("git", ["config", "user.name", "Git Install Smoke"], { cwd: repository });
   run("git", ["add", "."], { cwd: repository });
-  run("git", ["commit", "--quiet", "-m", "smoke fixture"], { cwd: repository });
+  run("git", ["commit", "--quiet", "-m", "test: create smoke fixture"], { cwd: repository });
 
   await mkdir(consumer);
   run(npm, ["init", "--yes"], { cwd: consumer });

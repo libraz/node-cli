@@ -34,13 +34,27 @@ try {
 
   run(npm, ["init", "--yes"], { cwd: fixture });
   run(npm, ["install", tarball, "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: fixture });
+  const installedRoot = resolve(fixture, "node_modules/@libraz/node-cli");
+  const installedPackage = JSON.parse(
+    await readFile(resolve(installedRoot, "package.json"), "utf8"),
+  );
+  if (installedPackage.description !== packageJson.description) {
+    throw new Error("Packed package description does not match package.json");
+  }
+  if (installedPackage.engines?.node !== packageJson.engines.node) {
+    throw new Error("Packed Node.js engine does not match package.json");
+  }
+  const installedReadme = await readFile(resolve(installedRoot, "README.md"), "utf8");
+  if (!installedReadme.includes("Node.js >= 22") || installedReadme.includes("Node.js >= 20")) {
+    throw new Error("Packed README Node.js requirement does not match package.json");
+  }
   await writeFile(
     resolve(fixture, "smoke.mjs"),
     'import { CLI } from "@libraz/node-cli";\nif (typeof CLI !== "function") throw new Error("CLI export missing");\n',
   );
   run(process.execPath, [resolve(fixture, "smoke.mjs")], { cwd: fixture });
 
-  const installedDist = resolve(fixture, "node_modules/@libraz/node-cli/dist");
+  const installedDist = resolve(installedRoot, "dist");
   for (const mapName of ["index.js.map", "index.d.ts.map"]) {
     const mapPath = resolve(installedDist, mapName);
     const sourceMap = JSON.parse(await readFile(mapPath, "utf8"));
