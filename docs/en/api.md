@@ -283,13 +283,18 @@ interface OptionSchema {
 | Property | Default | Description |
 |----------|---------|-------------|
 | `type` | Inferred | Value type. Inferred as `"boolean"` for flags without `<value>`, `"string"` otherwise |
-| `required` | `false` | Throw if not provided |
-| `default` | — | Default value. Boolean options default to `false` |
+| `required` | `false` | Throw if not provided. Cannot be combined with `default` |
+| `default` | — | Value used only when absent. Built-in coercion applies, custom `parse` does not. Boolean options default to `false` |
 | `choices` | — | Restrict to listed values |
 | `parse` | — | Custom parser for raw string value |
 | `validate` | — | Custom validator (throw on invalid) |
 | `hidden` | `false` | Hide from help output |
 | `autocomplete` | — | Completion candidates for option values. Array of strings or `(current: string) => string[] \| Promise<string[]>` |
+
+Explicit values use custom `parse` when present, otherwise built-in coercion for
+`type`. Defaults are treated as already-resolved values except for built-in
+coercion. Declaring both `required: true` and `default` throws while defining the
+option.
 
 ---
 
@@ -341,7 +346,11 @@ Configuration for mode sub-REPLs.
 ```typescript
 interface ModeConfig {
   prompt: string;
-  action: (input: string, ctx: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream }) => void | Promise<void>;
+  action: (input: string, ctx: {
+    stdout: NodeJS.WritableStream;
+    stderr: NodeJS.WritableStream;
+    signal: AbortSignal;
+  }) => void | Promise<void>;
   message?: string;
   completer?: (line: string) => [string[], string] | Promise<[string[], string]>;
   history?: "session" | "none";
@@ -349,6 +358,20 @@ interface ModeConfig {
 ```
 
 Mode completion is disabled unless `completer` is provided. Mode history is isolated from parent and on-disk command history; it defaults to in-memory `"session"` history, while `"none"` disables it.
+
+The first Ctrl+C during a mode action aborts `ctx.signal`; long-running work
+should observe it (for example, pass it to `fetch` or abortable timers). A second
+Ctrl+C force-quits the process.
+
+```typescript
+shell.enterMode({
+  prompt: "query> ",
+  async action(input, { stdout, signal }) {
+    const response = await fetch(`/query?q=${encodeURIComponent(input)}`, { signal });
+    stdout.write(`${await response.text()}\n`);
+  },
+});
+```
 
 ---
 
@@ -405,6 +428,17 @@ function stringWidth(text: string): number
 ```
 
 Calculate visual display width, accounting for ANSI codes and East Asian wide characters.
+
+## Additional color and parsing helpers
+
+| Export | Description |
+|--------|-------------|
+| `createColorizer(stream)` | Create a chainable colorizer bound to one output stream |
+| `isColorEnabled(stream?)` | Report whether color is enabled for a stream |
+| `resetColorEnabled()` | Restore automatic color detection after an override |
+| `truncateAnsi(text, width, suffix?)` | Truncate to display width while preserving ANSI state |
+| `activePipeSegment(input)` | Return the final unquoted pipeline segment for completion |
+| `maskInput(chunk)` | Mask visible graphemes while preserving terminal control sequences |
 
 ---
 
@@ -615,7 +649,7 @@ function prompt.multiselect<T>(
 ### prompt.password
 
 ```typescript
-function prompt.password(message: string, options?: PromptBaseOptions): Promise<string>
+function prompt.password(message: string, options?: PasswordOptions): Promise<string>
 ```
 
 Input is masked with asterisks. Leading and trailing whitespace is preserved.
@@ -664,7 +698,7 @@ Additional methods:
 |--------|-------------|
 | `setLevel(level: LogLevel)` | Change minimum level at runtime |
 | `child(prefix: string): Logger` | Create child logger with nested prefix |
-| `flush(): Promise<void>` | Wait until logger-managed queued lines have been handed to the stream |
+| `flush(): Promise<void>` | Wait until queued lines reach the stream; rejects if the stream errors or closes first |
 
 ### LogLevel
 
@@ -676,7 +710,8 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "silent"
 
 ## Error Classes
 
-All extend `CLIError` which has a `code: string` property.
+All extend `CLIError`, which exposes a machine-readable `code: CLIErrorCode` and
+a suggested `exitCode: number`.
 
 | Class | Code | Description |
 |-------|------|-------------|
@@ -689,3 +724,15 @@ All extend `CLIError` which has a `code: string` property.
 | `UnknownOptionError` | `UNKNOWN_OPTION` | Unrecognized flag |
 | `ValidationError` | `VALIDATION_ERROR` | Custom validation failed |
 | `PromptCancelError` | `PROMPT_CANCELLED` | User cancelled prompt |
+
+Additional structured fields:
+
+| Class | Fields |
+|-------|--------|
+| `CommandNotFoundError` | `input` |
+| `MissingArgumentError` | `argName`, optional `usage` |
+| `ExtraArgumentError` | `extra` |
+| `MissingOptionError` | `optionName` |
+| `InvalidOptionError` | optional `optionName`, optional `value` |
+| `UnknownOptionError` | `flag` |
+| `ValidationError` | optional `cause` |

@@ -60,13 +60,15 @@ node-cli はコマンドライン引数の有無で自動的にモードを切�
 flowchart LR
   A["cli.start()"] --> B{"process.argv<br>に引数あり?"}
   B -- Yes --> C["ダイレクト CLI モード"]
-  B -- No --> D["インタラクティブシェルモード"]
+  B -- No --> D{"stdin と stdout が<br>両方 TTY?"}
+  D -- Yes --> F["インタラクティブシェルモード"]
+  D -- No --> J["ヘルプを表示して終了"]
   C --> E["パース → 実行 → 終了"]
-  D --> F["REPL ループ"]
-  F --> G["入力読み取り"]
-  G --> H["パース → 実行"]
-  H --> F
-  F -- "exit / quit" --> I["終了"]
+  F --> G["REPL ループ"]
+  G --> H["入力読み取り"]
+  H --> I["パース → 実行"]
+  I --> G
+  G -- "exit / quit" --> K["終了"]
 ```
 
 ### ダイレクト CLI モード
@@ -80,7 +82,7 @@ Hello, WORLD!
 
 ### インタラクティブシェルモード
 
-引数なしで起動すると REPL が開始:
+引数がなく、stdin と stdout が両方 TTY の場合に REPL が開始:
 
 ```bash
 $ myapp
@@ -98,6 +100,9 @@ Available commands:
 Type "help <command>" for more information.
 > exit
 ```
+
+stdin がパイプ入力、または stdout がリダイレクトされている場合、引数なしの起動は
+REPL を開かず、ヘルプを表示して終了します。
 
 インタラクティブシェルの機能:
 - コマンド履歴 (ディスクに永続化)

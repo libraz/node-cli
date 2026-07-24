@@ -11,7 +11,7 @@
  *   npx tsx examples/04-output-showcase.ts spinner
  *   npx tsx examples/04-output-showcase.ts logger
  */
-import { c, color, createCLI, logger, progress, table } from "../src/index.js";
+import { createCLI, createColorizer, logger, progress, table } from "../src/index.js";
 
 const cli = createCLI({ name: "showcase" });
 
@@ -21,17 +21,18 @@ cli
   .command("color")
   .description("Demonstrate color output")
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     ctx.stdout.write("=== Proxy-based API ===\n");
-    ctx.stdout.write(`${color.red("Red text")}\n`);
-    ctx.stdout.write(`${color.bold.green("Bold green")}\n`);
-    ctx.stdout.write(`${color.bgYellow.black("Black on yellow")}\n`);
-    ctx.stdout.write(`${color.dim.italic("Dim italic")}\n`);
-    ctx.stdout.write(`${color.underline.cyan("Underlined cyan")}\n\n`);
+    ctx.stdout.write(`${col.red("Red text")}\n`);
+    ctx.stdout.write(`${col.bold.green("Bold green")}\n`);
+    ctx.stdout.write(`${col.bgYellow.black("Black on yellow")}\n`);
+    ctx.stdout.write(`${col.dim.italic("Dim italic")}\n`);
+    ctx.stdout.write(`${col.underline.cyan("Underlined cyan")}\n\n`);
 
-    ctx.stdout.write("=== Template literal tag ===\n");
-    ctx.stdout.write(c`Status: {green OK}\n`);
-    ctx.stdout.write(c`{bold.red ERROR}: Something went wrong\n`);
-    ctx.stdout.write(c`{dim [12:00:00]} {cyan https://example.com}\n`);
+    ctx.stdout.write("=== Composed styles ===\n");
+    ctx.stdout.write(`Status: ${col.green("OK")}\n`);
+    ctx.stdout.write(`${col.bold.red("ERROR")}: Something went wrong\n`);
+    ctx.stdout.write(`${col.dim("[12:00:00]")} ${col.cyan("https://example.com")}\n`);
   });
 
 // ── Table demo ──

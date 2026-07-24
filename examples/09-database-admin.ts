@@ -10,7 +10,7 @@
  *   npx tsx examples/09-database-admin.ts db query "SELECT * FROM users"
  *   npx tsx examples/09-database-admin.ts      # interactive shell with sql mode
  */
-import { c, color, createCLI, PromptCancelError, prompt, table } from "../src/index.js";
+import { c, createCLI, createColorizer, PromptCancelError, prompt, table } from "../src/index.js";
 
 // Simulated database
 const mockDb = {
@@ -42,13 +42,14 @@ db.command("status")
   .alias("s")
   .description("Show database connection status")
   .action((ctx) => {
-    ctx.stdout.write(c`{bold Database Status}\n\n`);
+    const col = createColorizer(ctx.stdout);
+    ctx.stdout.write(`${col.bold("Database Status")}\n\n`);
     ctx.stdout.write(
-      c`  Connection: ${mockDb.connected ? "{green Connected}" : "{red Disconnected}"}\n`,
+      `  Connection: ${mockDb.connected ? col.green("Connected") : col.red("Disconnected")}\n`,
     );
-    ctx.stdout.write(c`  Tables:     {cyan ${String(Object.keys(mockDb.tables).length)}}\n`);
-    ctx.stdout.write(c`  Host:       {dim localhost:5432}\n`);
-    ctx.stdout.write(c`  Database:   {dim myapp_dev}\n\n`);
+    ctx.stdout.write(`  Tables:     ${col.cyan(String(Object.keys(mockDb.tables).length))}\n`);
+    ctx.stdout.write(`  Host:       ${col.dim("localhost:5432")}\n`);
+    ctx.stdout.write(`  Database:   ${col.dim("myapp_dev")}\n\n`);
 
     const tableData = Object.entries(mockDb.tables).map(([name, rows]) => ({
       table: name,
@@ -75,10 +76,11 @@ dbTable
   .alias("ls")
   .description("List all tables")
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     const names = Object.keys(mockDb.tables);
     for (const name of names) {
       const rowCount = mockDb.tables[name].length;
-      ctx.stdout.write(c`  {cyan ${name}} {dim (${String(rowCount)} rows)}\n`);
+      ctx.stdout.write(`  ${col.cyan(name)} ${col.dim(`(${String(rowCount)} rows)`)}\n`);
     }
   });
 
@@ -94,12 +96,15 @@ dbTable
     }
   })
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     const name = ctx.args.name as string;
     const limit = ctx.options.limit as number;
     const rows = mockDb.tables[name].slice(0, limit);
 
     ctx.stdout.write(
-      c`\n{bold Table: ${name}} {dim (${String(mockDb.tables[name].length)} rows)}\n\n`,
+      `\n${col.bold(`Table: ${name}`)} ${col.dim(
+        `(${String(mockDb.tables[name].length)} rows)`,
+      )}\n\n`,
     );
     ctx.stdout.write(table(rows, { border: "rounded", headerStyle: "bold" }));
     ctx.stdout.write("\n");
@@ -115,6 +120,7 @@ dbTable
     }
   })
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     const name = ctx.args.name as string;
     const sample = mockDb.tables[name][0] || {};
     const schema = Object.entries(sample).map(([col, val]) => ({
@@ -123,7 +129,7 @@ dbTable
       nullable: "no",
     }));
 
-    ctx.stdout.write(c`\n{bold Schema: ${name}}\n\n`);
+    ctx.stdout.write(`\n${col.bold(`Schema: ${name}`)}\n\n`);
     ctx.stdout.write(table(schema, { border: "simple", headerStyle: "bold" }));
     ctx.stdout.write("\n");
   });
@@ -143,6 +149,7 @@ db.command("query <sql>")
 db.command("drop <name>")
   .description("Drop a table (with confirmation)")
   .action(async (ctx) => {
+    const col = createColorizer(ctx.stdout);
     const name = ctx.args.name as string;
     if (!mockDb.tables[name]) {
       throw new Error(`Table "${name}" not found.`);
@@ -150,17 +157,18 @@ db.command("drop <name>")
 
     try {
       const confirm = await prompt.confirm(
-        c`{red.bold WARNING}: This will permanently delete table "${name}". Continue?`,
+        `${col.red.bold("WARNING")}: This will permanently delete table "${name}". Continue?`,
+        { stdout: ctx.stdout },
       );
       if (confirm) {
         delete mockDb.tables[name];
-        ctx.stdout.write(c`{green Table "${name}" dropped.}\n`);
+        ctx.stdout.write(`${col.green(`Table "${name}" dropped.`)}\n`);
       } else {
-        ctx.stdout.write(c`{dim Cancelled.}\n`);
+        ctx.stdout.write(`${col.dim("Cancelled.")}\n`);
       }
     } catch (err) {
       if (err instanceof PromptCancelError) {
-        ctx.stdout.write(c`{dim Cancelled.}\n`);
+        ctx.stdout.write(`${col.dim("Cancelled.")}\n`);
       } else {
         throw err;
       }
@@ -188,6 +196,7 @@ cli
   });
 
 function executeQuery(sql: string, stdout: NodeJS.WritableStream) {
+  const col = createColorizer(stdout);
   // Very basic SQL simulation
   const match = sql.match(/SELECT\s+\*\s+FROM\s+(\w+)/i);
   if (match) {
@@ -195,13 +204,13 @@ function executeQuery(sql: string, stdout: NodeJS.WritableStream) {
     const rows = mockDb.tables[tableName];
     if (rows) {
       stdout.write(`${table(rows, { border: "simple", headerStyle: "bold" })}\n`);
-      stdout.write(c`{dim ${String(rows.length)} row(s)}\n`);
+      stdout.write(`${col.dim(`${String(rows.length)} row(s)`)}\n`);
     } else {
-      stdout.write(c`{red Error}: Table "${tableName}" does not exist\n`);
+      stdout.write(`${col.red("Error")}: Table "${tableName}" does not exist\n`);
     }
   } else {
-    stdout.write(`${color.yellow("Simulated")}: ${sql}\n`);
-    stdout.write(c`{dim (Only "SELECT * FROM <table>" is supported in this demo)}\n`);
+    stdout.write(`${col.yellow("Simulated")}: ${sql}\n`);
+    stdout.write(`${col.dim('(Only "SELECT * FROM <table>" is supported in this demo)')}\n`);
   }
 }
 

@@ -13,7 +13,7 @@
  *   npx tsx examples/10-advanced-api.ts logs
  *   npx tsx examples/10-advanced-api.ts completion-info
  */
-import { c, color, createCLI, logger, progress, table } from "../src/index.js";
+import { c, createCLI, createColorizer, logger, progress, table } from "../src/index.js";
 
 const cli = createCLI({
   name: "advanced",
@@ -48,8 +48,9 @@ cli
     hidden: true,
   })
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     const date = ctx.options.date as Date | undefined;
-    ctx.stdout.write(c`{bold Config}\n`);
+    ctx.stdout.write(`${col.bold("Config")}\n`);
     ctx.stdout.write(`  date:  ${date ? date.toISOString().slice(0, 10) : "(none)"}\n`);
     ctx.stdout.write(`  cache: ${ctx.options.cache ? "enabled" : "disabled"}\n`);
     ctx.stdout.write(`  secret supplied: ${ctx.options.secret ? "yes" : "no"}\n`);
@@ -164,7 +165,8 @@ cli
   .command("cancel-info")
   .description("Register a custom SIGINT cancel handler")
   .cancel((ctx) => {
-    ctx.stderr.write(color.yellow("Cancelled long-running work\n"));
+    const col = createColorizer(ctx.stderr);
+    ctx.stderr.write(col.yellow("Cancelled long-running work\n"));
   })
   .action((ctx) => {
     ctx.stdout.write(

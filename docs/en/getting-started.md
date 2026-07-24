@@ -60,13 +60,15 @@ node-cli supports two execution modes determined automatically:
 flowchart LR
   A["cli.start()"] --> B{"process.argv<br>has args?"}
   B -- Yes --> C["Direct CLI Mode"]
-  B -- No --> D["Interactive Shell Mode"]
+  B -- No --> D{"stdin and stdout<br>are both TTY?"}
+  D -- Yes --> F["Interactive Shell Mode"]
+  D -- No --> J["Print help and return"]
   C --> E["Parse → Execute → Exit"]
-  D --> F["REPL Loop"]
-  F --> G["Read Input"]
-  G --> H["Parse → Execute"]
-  H --> F
-  F -- "exit / quit" --> I["Exit"]
+  F --> G["REPL Loop"]
+  G --> H["Read Input"]
+  H --> I["Parse → Execute"]
+  I --> G
+  G -- "exit / quit" --> K["Exit"]
 ```
 
 ### Direct CLI Mode
@@ -80,7 +82,8 @@ Hello, WORLD!
 
 ### Interactive Shell Mode
 
-When no arguments are provided, an interactive REPL starts:
+When no arguments are provided and both stdin and stdout are TTYs, an interactive
+REPL starts:
 
 ```bash
 $ myapp
@@ -98,6 +101,9 @@ Available commands:
 Type "help <command>" for more information.
 > exit
 ```
+
+With piped stdin or redirected stdout, no-argument startup prints help and
+returns instead of opening a REPL.
 
 The interactive shell provides:
 - Command history (persisted to disk)

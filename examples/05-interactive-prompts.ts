@@ -8,7 +8,7 @@
  *   npx tsx examples/05-interactive-prompts.ts init
  *   npx tsx examples/05-interactive-prompts.ts login
  */
-import { c, color, createCLI, PromptCancelError, prompt } from "../src/index.js";
+import { createCLI, createColorizer, PromptCancelError, prompt } from "../src/index.js";
 
 const cli = createCLI({ name: "setup" });
 
@@ -18,8 +18,9 @@ cli
   .command("init")
   .description("Initialize a new project interactively")
   .action(async (ctx) => {
+    const col = createColorizer(ctx.stdout);
     try {
-      ctx.stdout.write(c`{bold.cyan Project Setup Wizard}\n\n`);
+      ctx.stdout.write(`${col.bold.cyan("Project Setup Wizard")}\n\n`);
 
       // Text input
       const name = await prompt.text("Project name:", {
@@ -58,26 +59,24 @@ cli
       const git = await prompt.confirm("Initialize git repository?", { default: true });
 
       // Summary
-      ctx.stdout.write(c`\n{bold.green Project Configuration}\n`);
-      ctx.stdout.write(`  Name:        ${color.cyan(name)}\n`);
-      ctx.stdout.write(c`  Description: ${description || color.dim("(none)")}\n`);
-      ctx.stdout.write(`  Template:    ${color.yellow(template)}\n`);
+      ctx.stdout.write(`\n${col.bold.green("Project Configuration")}\n`);
+      ctx.stdout.write(`  Name:        ${col.cyan(name)}\n`);
+      ctx.stdout.write(`  Description: ${description || col.dim("(none)")}\n`);
+      ctx.stdout.write(`  Template:    ${col.yellow(template)}\n`);
       ctx.stdout.write(
-        c`  Features:    ${(features as string[]).join(", ") || color.dim("(none)")}\n`,
+        `  Features:    ${(features as string[]).join(", ") || col.dim("(none)")}\n`,
       );
-      ctx.stdout.write(`  Git:         ${git ? color.green("Yes") : color.red("No")}\n`);
+      ctx.stdout.write(`  Git:         ${git ? col.green("Yes") : col.red("No")}\n`);
 
       const proceed = await prompt.confirm("\nProceed with setup?");
       if (proceed) {
-        ctx.stdout.write(
-          `\n${color.green.bold("Done!")} Project "${name}" created successfully.\n`,
-        );
+        ctx.stdout.write(`\n${col.green.bold("Done!")} Project "${name}" created successfully.\n`);
       } else {
-        ctx.stdout.write(c`\n{yellow Cancelled.}\n`);
+        ctx.stdout.write(`\n${col.yellow("Cancelled.")}\n`);
       }
     } catch (err) {
       if (err instanceof PromptCancelError) {
-        ctx.stdout.write(c`\n{dim Cancelled by user.}\n`);
+        ctx.stdout.write(`\n${col.dim("Cancelled by user.")}\n`);
       } else {
         throw err;
       }
@@ -90,17 +89,18 @@ cli
   .command("login")
   .description("Authenticate with the service")
   .action(async (ctx) => {
+    const col = createColorizer(ctx.stdout);
     try {
-      ctx.stdout.write(c`{bold Login}\n\n`);
+      ctx.stdout.write(`${col.bold("Login")}\n\n`);
 
       const username = await prompt.text("Username:");
       const _password = await prompt.password("Password:");
 
-      ctx.stdout.write(c`\n{dim Authenticating...}\n`);
-      ctx.stdout.write(c`{green.bold Logged in} as {bold ${username}}.\n`);
+      ctx.stdout.write(`\n${col.dim("Authenticating...")}\n`);
+      ctx.stdout.write(`${col.green.bold("Logged in")} as ${col.bold(username)}.\n`);
     } catch (err) {
       if (err instanceof PromptCancelError) {
-        ctx.stdout.write(c`\n{dim Login cancelled.}\n`);
+        ctx.stdout.write(`\n${col.dim("Login cancelled.")}\n`);
       } else {
         throw err;
       }

@@ -352,6 +352,11 @@ multi.finish();  // 全バーを完了
 multi.stop();    // 全バーを停止
 ```
 
+同じ stream を同時に所有できる standalone renderer（`bar`、`spinner`、`multi`）は
+1つだけです。先の renderer を stop / finish する前に同じ stream で別の renderer を
+開始すると例外になります。複数の indicator を同時表示する場合は
+`progress.multi()` を使用してください。
+
 ### TTY 検出
 
 プログレスバーのアニメーションとスピナーのフレームは TTY ストリームでのみレンダリングされます。非 TTY（パイプ出力、CI）ではバーは出力せず、スピナーの `succeed()`、`fail()`、`warn()` だけが最終ステータスを1行出力します。`start()`、`update()`、`stop()` は出力しません。
@@ -475,7 +480,7 @@ const log = logger({
 });
 ```
 
-ストリームが backpressure を適用している間、logger は最大 `bufferLimit` 行を保持し、上限到達時は最も古い待機行を破棄します。`await log.flush()` で logger 管理下の待機行がストリームへ渡されるまで待機できます。`0` を指定すると backpressure 中の新しい行をすべて破棄します。
+ストリームが backpressure を適用している間、logger は最大 `bufferLimit` 行を保持し、上限到達時は最も古い待機行を破棄します。`await log.flush()` で logger 管理下の待機行がストリームへ渡されるまで待機でき、先に stream が error / close した場合は reject します。`0` を指定すると backpressure 中の新しい行をすべて破棄します。
 
 ### printf スタイルのフォーマット
 

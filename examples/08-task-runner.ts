@@ -12,9 +12,7 @@
  *   npx tsx examples/08-task-runner.ts list
  */
 import type { Writable } from "node:stream";
-import { c, color, createCLI, logger, progress, table } from "../src/index.js";
-
-const log = logger({ prefix: "runner", timestamp: true });
+import { createCLI, createColorizer, logger, progress, table } from "../src/index.js";
 
 interface Task {
   name: string;
@@ -48,18 +46,19 @@ cli
   .alias("ls")
   .description("Show all available tasks")
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     const data = tasks.map((t) => ({
       name: t.name,
       description: t.description,
       status:
         t.status === "done"
-          ? color.green(t.status)
+          ? col.green(t.status)
           : t.status === "failed"
-            ? color.red(t.status)
+            ? col.red(t.status)
             : t.status,
     }));
 
-    ctx.stdout.write(c`{bold Available Tasks}\n\n`);
+    ctx.stdout.write(`${col.bold("Available Tasks")}\n\n`);
     ctx.stdout.write(table(data, { border: "rounded", headerStyle: "bold" }));
     ctx.stdout.write("\n");
   });
@@ -92,8 +91,10 @@ cli
   });
 
 async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
+  const col = createColorizer(ctx.stdout);
+  const log = logger({ prefix: "runner", timestamp: true, stream: ctx.stderr });
   const spinner = progress.spinner({
-    label: c`Running {bold ${task.name}}...`,
+    label: `Running ${col.bold(task.name)}...`,
     color: "cyan",
     stream: ctx.stdout,
   });
@@ -110,12 +111,12 @@ async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
   for (let i = 0; i < steps; i++) {
     await sleep(task.duration / steps);
     if (verbose && i === Math.floor(steps / 2)) {
-      spinner.update(c`Running {bold ${task.name}}... (50%%)`);
+      spinner.update(`Running ${col.bold(task.name)}... (50%)`);
     }
   }
 
   task.status = "done";
-  spinner.succeed(c`{bold ${task.name}} completed in ${String(task.duration)}ms`);
+  spinner.succeed(`${col.bold(task.name)} completed in ${String(task.duration)}ms`);
 
   if (verbose) {
     log.success("Task %s finished", task.name);
@@ -123,7 +124,9 @@ async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
 }
 
 async function runAll(ctx: TaskContext, verbose: boolean) {
-  ctx.stdout.write(c`{bold Running all tasks...}\n\n`);
+  const col = createColorizer(ctx.stdout);
+  const log = logger({ prefix: "runner", timestamp: true, stream: ctx.stderr });
+  ctx.stdout.write(`${col.bold("Running all tasks...")}\n\n`);
 
   const bar = progress.bar({
     total: tasks.length,
@@ -133,18 +136,23 @@ async function runAll(ctx: TaskContext, verbose: boolean) {
   });
 
   for (let i = 0; i < tasks.length; i++) {
-    await runSingle(tasks[i], ctx, verbose);
+    const task = tasks[i];
+    task.status = "running";
+    if (verbose) log.info("Starting task: %s", task.name);
+    await sleep(task.duration);
+    task.status = "done";
+    if (verbose) log.success("Task %s finished", task.name);
     bar.update(i + 1);
   }
 
   bar.finish();
 
-  ctx.stdout.write(c`\n{green.bold All tasks completed!}\n\n`);
+  ctx.stdout.write(`\n${col.green.bold("All tasks completed!")}\n\n`);
 
   // Summary table
   const summary = tasks.map((t) => ({
     task: t.name,
-    status: t.status === "done" ? color.green("PASS") : color.red("FAIL"),
+    status: t.status === "done" ? col.green("PASS") : col.red("FAIL"),
     time: `${t.duration}ms`,
   }));
 
@@ -158,10 +166,11 @@ cli
   .command("reset")
   .description("Reset all task statuses")
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     for (const task of tasks) {
       task.status = "pending";
     }
-    ctx.stdout.write(c`{green All tasks reset.}\n`);
+    ctx.stdout.write(`${col.green("All tasks reset.")}\n`);
   });
 
 await cli.start();

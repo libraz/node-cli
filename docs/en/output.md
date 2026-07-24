@@ -352,6 +352,11 @@ multi.finish();  // Finish all bars
 multi.stop();    // Stop all bars
 ```
 
+Only one standalone `bar`, `spinner`, or `multi` renderer may own a given stream
+at a time. Starting another one on the same stream before the first is stopped or
+finished throws. Use `progress.multi()` when several indicators must remain
+visible concurrently.
+
 ### TTY Detection
 
 Animated progress bars and spinner frames render only on TTY streams. On non-TTY streams (piped output or CI), bars remain silent; spinner `succeed()`, `fail()`, and `warn()` emit one final plain status line, while `start()`, `update()`, and `stop()` remain silent.
@@ -475,7 +480,7 @@ const log = logger({
 });
 ```
 
-When the stream applies backpressure, the logger queues at most `bufferLimit` lines and drops the oldest queued line when full. Use `await log.flush()` to wait until logger-managed queued lines have been handed to the stream. A limit of `0` drops every line logged while backpressured.
+When the stream applies backpressure, the logger queues at most `bufferLimit` lines and drops the oldest queued line when full. Use `await log.flush()` to wait until logger-managed queued lines have been handed to the stream; it rejects if the stream errors or closes first. A limit of `0` drops every line logged while backpressured.
 
 ### Printf-Style Formatting
 

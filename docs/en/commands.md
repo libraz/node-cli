@@ -88,9 +88,16 @@ interface OptionSchema {
 | `--no-force` | `{ force: false }` |
 | `--tag v2` | `{ tag: "v2" }` |
 | `--tag=v2` | `{ tag: "v2" }` |
-| `-t v2` | `{ tag: "v2" }` after option resolution |
+| `-t 5000` | `{ timeout: 5000 }` after option resolution |
 | `-abc` | `{ a: true, b: true, c: true }` |
 | `-- --not-an-option` | Treated as positional arg |
+
+Explicit option values are resolved in declaration order. A custom `parse`
+function receives the raw string and replaces built-in coercion; otherwise the
+declared `type` performs coercion. Defaults are used only when the option is
+absent, receive built-in coercion, and do not pass through custom `parse`.
+`required: true` and `default` are mutually exclusive and are rejected when the
+option is defined.
 
 ## Command Aliases
 

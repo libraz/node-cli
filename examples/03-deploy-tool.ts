@@ -10,7 +10,7 @@
  *   npx tsx examples/03-deploy-tool.ts rollback prod
  *   npx tsx examples/03-deploy-tool.ts status
  */
-import { c, createCLI } from "../src/index.js";
+import { createCLI, createColorizer } from "../src/index.js";
 
 const cli = createCLI({ name: "deploy-tool" });
 
@@ -18,22 +18,28 @@ const cli = createCLI({ name: "deploy-tool" });
 
 cli.on("beforeExecute", (ctx) => {
   if (ctx.commandPath[0] === "help") return;
-  ctx.stderr.write(c`{dim [${new Date().toISOString()}] Running: ${ctx.commandPath.join(" ")}}\n`);
+  const col = createColorizer(ctx.stderr);
+  ctx.stderr.write(
+    col.dim(`[${new Date().toISOString()}] Running: ${ctx.commandPath.join(" ")}\n`),
+  );
 });
 
 cli.on("afterExecute", (ctx) => {
   if (ctx.commandPath[0] === "help") return;
-  ctx.stderr.write(c`{dim [${new Date().toISOString()}] Done}\n`);
+  const col = createColorizer(ctx.stderr);
+  ctx.stderr.write(col.dim(`[${new Date().toISOString()}] Done\n`));
 });
 
 cli.on("commandError", (error, ctx) => {
-  ctx.stderr.write(c`{red.bold Error in ${ctx.commandPath.join(" ")}}: ${error.message}\n`);
+  const col = createColorizer(ctx.stderr);
+  ctx.stderr.write(`${col.red.bold(`Error in ${ctx.commandPath.join(" ")}`)}: ${error.message}\n`);
 });
 
 // ── Catch unknown commands ──
 
 cli.catch((input, { stderr }) => {
-  stderr.write(c`{yellow Unknown command}: "${input}"\n`);
+  const col = createColorizer(stderr);
+  stderr.write(`${col.yellow("Unknown command")}: "${input}"\n`);
   stderr.write('Run "help" for available commands.\n');
 });
 
@@ -58,17 +64,20 @@ cli
     }
   })
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     const env = ctx.args.env as string;
     const tag = ctx.options.tag as string;
     const dryRun = ctx.options["dry-run"] as boolean;
 
     if (dryRun) {
-      ctx.stdout.write(c`{yellow [DRY RUN]} Would deploy {bold ${tag}} to {bold ${env}}\n`);
+      ctx.stdout.write(
+        `${col.yellow("[DRY RUN]")} Would deploy ${col.bold(tag)} to ${col.bold(env)}\n`,
+      );
       return;
     }
 
-    ctx.stdout.write(c`{green Deploying} {bold ${tag}} to {bold ${env}}...\n`);
-    ctx.stdout.write(c`{green.bold Done!} Deployment successful.\n`);
+    ctx.stdout.write(`${col.green("Deploying")} ${col.bold(tag)} to ${col.bold(env)}...\n`);
+    ctx.stdout.write(`${col.green.bold("Done!")} Deployment successful.\n`);
   });
 
 // ── Rollback command ──
@@ -82,10 +91,13 @@ cli
     description: "Number of versions to rollback",
   })
   .action((ctx) => {
+    const col = createColorizer(ctx.stdout);
     const env = ctx.args.env as string;
     const steps = ctx.options.steps as number;
-    ctx.stdout.write(c`{yellow Rolling back} {bold ${env}} by ${String(steps)} version(s)...\n`);
-    ctx.stdout.write(c`{green.bold Done!} Rollback complete.\n`);
+    ctx.stdout.write(
+      `${col.yellow("Rolling back")} ${col.bold(env)} by ${String(steps)} version(s)...\n`,
+    );
+    ctx.stdout.write(`${col.green.bold("Done!")} Rollback complete.\n`);
   });
 
 // ── Status command ──
@@ -95,10 +107,11 @@ cli
   .alias("s")
   .description("Show deployment status")
   .action((ctx) => {
-    ctx.stdout.write(c`{bold Deployment Status}\n`);
-    ctx.stdout.write(c`  prod:    {green v1.2.3}  (deployed 2h ago)\n`);
-    ctx.stdout.write(c`  staging: {yellow v1.3.0-rc1}  (deployed 30m ago)\n`);
-    ctx.stdout.write(c`  dev:     {cyan v1.3.0-dev.42}  (deployed 5m ago)\n`);
+    const col = createColorizer(ctx.stdout);
+    ctx.stdout.write(`${col.bold("Deployment Status")}\n`);
+    ctx.stdout.write(`  prod:    ${col.green("v1.2.3")}  (deployed 2h ago)\n`);
+    ctx.stdout.write(`  staging: ${col.yellow("v1.3.0-rc1")}  (deployed 30m ago)\n`);
+    ctx.stdout.write(`  dev:     ${col.cyan("v1.3.0-dev.42")}  (deployed 5m ago)\n`);
   });
 
 await cli.start();

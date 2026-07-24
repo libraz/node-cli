@@ -10,7 +10,7 @@
  *   npx tsx examples/06-plugin-system.ts greet World
  */
 import type { PluginContext } from "../src/index.js";
-import { c, createCLI } from "../src/index.js";
+import { c, createCLI, createColorizer } from "../src/index.js";
 
 // ── Plugin: Timing ──
 // Adds execution timing to all commands
@@ -26,7 +26,8 @@ function timingPlugin(ctx: PluginContext) {
     const start = timers.get(cmdCtx.rawInput);
     if (start) {
       const elapsed = Date.now() - start;
-      cmdCtx.stderr.write(c`{dim Completed in ${String(elapsed)}ms}\n`);
+      const col = createColorizer(cmdCtx.stderr);
+      cmdCtx.stderr.write(col.dim(`Completed in ${String(elapsed)}ms\n`));
       timers.delete(cmdCtx.rawInput);
     }
   });
@@ -55,7 +56,8 @@ function healthPlugin(ctx: PluginContext) {
     .command("ping")
     .description("Check if the application is alive")
     .action((cmdCtx) => {
-      cmdCtx.stdout.write(c`{green pong} — all systems operational\n`);
+      const col = createColorizer(cmdCtx.stdout);
+      cmdCtx.stdout.write(`${col.green("pong")} — all systems operational\n`);
     });
 
   ctx.on("commandError", (error) => {

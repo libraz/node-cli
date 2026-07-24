@@ -11,7 +11,7 @@
  *   calc> 2 + 3
  *   calc> exit
  */
-import { c, createCLI } from "../src/index.js";
+import { c, createCLI, createColorizer } from "../src/index.js";
 
 const cli = createCLI({ name: "pipes", prompt: "pipes> " });
 
@@ -102,6 +102,8 @@ cli
       prompt: c`{cyan calc}> `,
       message: c`{bold Calculator Mode} — Type math expressions. 'exit' to return.`,
       action: (input, { stdout, stderr }) => {
+        const out = createColorizer(stdout);
+        const err = createColorizer(stderr);
         try {
           // Simple and safe evaluation for basic arithmetic
           if (!/^[\d\s+\-*/().]+$/.test(input)) {
@@ -109,9 +111,9 @@ cli
             return;
           }
           const result = Function(`"use strict"; return (${input})`)();
-          stdout.write(c`{green =} ${String(result)}\n`);
+          stdout.write(`${out.green("=")} ${String(result)}\n`);
         } catch {
-          stderr.write(c`{red Invalid expression}\n`);
+          stderr.write(`${err.red("Invalid expression")}\n`);
         }
       },
     });
@@ -134,17 +136,18 @@ cli
       prompt: c`{yellow note}> `,
       message: c`{bold Notes Mode} — Type notes to save. 'list' to view. 'exit' to return.`,
       action: (input, { stdout }) => {
+        const col = createColorizer(stdout);
         if (input === "list") {
           if (entries.length === 0) {
-            stdout.write(c`{dim No notes yet.}\n`);
+            stdout.write(`${col.dim("No notes yet.")}\n`);
           } else {
             for (let i = 0; i < entries.length; i++) {
-              stdout.write(c`  {dim ${String(i + 1)}.} ${entries[i]}\n`);
+              stdout.write(`  ${col.dim(`${String(i + 1)}.`)} ${entries[i]}\n`);
             }
           }
         } else {
           entries.push(input);
-          stdout.write(c`{green Saved} (${String(entries.length)} notes total)\n`);
+          stdout.write(`${col.green("Saved")} (${String(entries.length)} notes total)\n`);
         }
       },
     });

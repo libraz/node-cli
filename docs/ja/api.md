@@ -283,13 +283,17 @@ interface OptionSchema {
 | プロパティ | デフォルト | 説明 |
 |-----------|---------|------|
 | `type` | 推論 | 値の型。`<value>` なしのフラグは `"boolean"`、それ以外は `"string"` と推論 |
-| `required` | `false` | 未提供時にエラーを発生 |
-| `default` | — | デフォルト値。ブールオプションは `false` がデフォルト |
+| `required` | `false` | 未提供時にエラーを発生。`default` とは併用不可 |
+| `default` | — | 未指定時だけ使う値。組み込み型変換は適用し、カスタム `parse` は適用しない。ブールオプションは `false` がデフォルト |
 | `choices` | — | 列挙された値に制限 |
 | `parse` | — | 生の文字列値のカスタムパーサー |
 | `validate` | — | カスタムバリデーター（無効時に例外を投げる） |
 | `hidden` | `false` | ヘルプ出力から非表示 |
 | `autocomplete` | — | オプション値の補完候補。文字列配列または `(current: string) => string[] \| Promise<string[]>` |
+
+明示値はカスタム `parse` があればそれを使い、なければ `type` の組み込み型変換を
+使います。デフォルト値は、組み込み型変換を除いて解決済みの値として扱われます。
+`required: true` と `default` を同時に宣言するとオプション定義時に例外になります。
 
 ---
 
@@ -340,7 +344,11 @@ interface CLIEventMap {
 ```typescript
 interface ModeConfig {
   prompt: string;
-  action: (input: string, ctx: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream }) => void | Promise<void>;
+  action: (input: string, ctx: {
+    stdout: NodeJS.WritableStream;
+    stderr: NodeJS.WritableStream;
+    signal: AbortSignal;
+  }) => void | Promise<void>;
   message?: string;
   completer?: (line: string) => [string[], string] | Promise<[string[], string]>;
   history?: "session" | "none";
@@ -348,6 +356,20 @@ interface ModeConfig {
 ```
 
 `completer` を指定しない限りモード内の補完は無効です。モード履歴は親 REPL とディスク履歴から分離され、既定の `"session"` はメモリ内だけに保持し、`"none"` は履歴を無効にします。
+
+モード action 実行中の最初の Ctrl+C は `ctx.signal` を abort します。長時間処理では
+この signal を `fetch` や abort 対応 timer へ渡してください。2回目の Ctrl+C は
+プロセスを強制終了します。
+
+```typescript
+shell.enterMode({
+  prompt: "query> ",
+  async action(input, { stdout, signal }) {
+    const response = await fetch(`/query?q=${encodeURIComponent(input)}`, { signal });
+    stdout.write(`${await response.text()}\n`);
+  },
+});
+```
 
 ---
 
@@ -404,6 +426,17 @@ function stringWidth(text: string): number
 ```
 
 ANSI コードと東アジアワイド文字を考慮した表示幅を計算。
+
+## その他の color / parser helper
+
+| export | 説明 |
+|--------|------|
+| `createColorizer(stream)` | 出力 stream に紐づくチェーン可能な colorizer を作成 |
+| `isColorEnabled(stream?)` | stream で color が有効かを返す |
+| `resetColorEnabled()` | 上書き後に color の自動判定へ戻す |
+| `truncateAnsi(text, width, suffix?)` | ANSI 状態を維持しつつ表示幅で切り詰める |
+| `activePipeSegment(input)` | 補完用に最後の非 quote pipeline segment を返す |
+| `maskInput(chunk)` | terminal control sequence を維持しつつ可視 grapheme をマスクする |
 
 ---
 
@@ -614,7 +647,7 @@ function prompt.multiselect<T>(
 ### prompt.password
 
 ```typescript
-function prompt.password(message: string, options?: PromptBaseOptions): Promise<string>
+function prompt.password(message: string, options?: PasswordOptions): Promise<string>
 ```
 
 入力はアスタリスクでマスクされ、先頭・末尾の空白も保持されます。
@@ -663,7 +696,7 @@ function logger(options?: LoggerOptions): Logger
 |---------|------|
 | `setLevel(level: LogLevel)` | ランタイムで最小レベルを変更 |
 | `child(prefix: string): Logger` | ネストプレフィックスの子ロガーを作成 |
-| `flush(): Promise<void>` | logger 管理下の待機行がストリームへ渡されるまで待機 |
+| `flush(): Promise<void>` | 待機行がストリームへ渡されるまで待つ。先に stream が error / close した場合は reject |
 
 ### LogLevel
 
@@ -675,7 +708,8 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "silent"
 
 ## エラークラス
 
-すべて `CLIError` を継承し、`code: string` プロパティを持つ。
+すべて `CLIError` を継承し、機械判定用の `code: CLIErrorCode` と推奨終了コード
+`exitCode: number` を持ちます。
 
 | クラス | コード | 説明 |
 |-------|--------|------|
@@ -688,3 +722,15 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "silent"
 | `UnknownOptionError` | `UNKNOWN_OPTION` | 未認識のフラグ |
 | `ValidationError` | `VALIDATION_ERROR` | カスタムバリデーション失敗 |
 | `PromptCancelError` | `PROMPT_CANCELLED` | プロンプトのキャンセル |
+
+追加の構造化フィールド:
+
+| クラス | フィールド |
+|-------|-----------|
+| `CommandNotFoundError` | `input` |
+| `MissingArgumentError` | `argName`、任意の `usage` |
+| `ExtraArgumentError` | `extra` |
+| `MissingOptionError` | `optionName` |
+| `InvalidOptionError` | 任意の `optionName`、任意の `value` |
+| `UnknownOptionError` | `flag` |
+| `ValidationError` | 任意の `cause` |
