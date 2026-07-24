@@ -95,6 +95,22 @@ describe("event system", () => {
     expect(order).toEqual([1, 2]);
   });
 
+  it("uses a listener snapshot when a handler removes itself", async () => {
+    const router = createRouter();
+    const stream = createMockStdout();
+    const calls: string[] = [];
+    const first = () => {
+      calls.push("first");
+      router.off("beforeExecute", first);
+    };
+    router.on("beforeExecute", first);
+    router.on("beforeExecute", () => calls.push("second"));
+
+    await router.execute("deploy prod", { stdout: stream, stderr: stream });
+    await router.execute("deploy prod", { stdout: stream, stderr: stream });
+    expect(calls).toEqual(["first", "second", "second"]);
+  });
+
   it("async handlers are awaited", async () => {
     const router = createRouter();
     const stream = createMockStdout();

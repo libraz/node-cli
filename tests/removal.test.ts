@@ -45,4 +45,27 @@ describe("command removal", () => {
     const registry = new CommandRegistry();
     expect(registry.unregister([])).toBe(false);
   });
+
+  it("does not let a stale builder remove or alias a replacement command", () => {
+    const registry = new CommandRegistry();
+    const stale = new CommandBuilder(registry, "temporary");
+    expect(stale.remove()).toBe(true);
+    const replacement = new CommandBuilder(registry, "temporary").action(() => {});
+
+    expect(stale.remove()).toBe(false);
+    expect(() => stale.alias("old")).toThrow(/detached/);
+    expect(registry.resolve(["temporary"])).toBeDefined();
+    expect(registry.resolve(["old"])).toBeUndefined();
+    expect(replacement.remove()).toBe(true);
+  });
+
+  it("does not let a stale builder attach a subcommand to a replacement", () => {
+    const registry = new CommandRegistry();
+    const stale = new CommandBuilder(registry, "parent");
+    stale.remove();
+    new CommandBuilder(registry, "parent");
+
+    expect(() => stale.command("child")).toThrow(/detached/);
+    expect(registry.resolve(["parent", "child"])).toBeUndefined();
+  });
 });

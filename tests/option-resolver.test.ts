@@ -148,8 +148,8 @@ describe("resolveOptions", () => {
     const result = resolveOptions({ opt: "x" }, defs, dummyCtx);
     expect(result.opt).toBeUndefined();
     expect(Object.hasOwn(result, "opt")).toBe(true);
-    // Absent: the default still applies as usual.
-    expect(resolveOptions({}, defs, dummyCtx).opt).toBe("fallback");
+    // Absent: required presence wins over a contradictory default.
+    expect(() => resolveOptions({}, defs, dummyCtx)).toThrow(MissingOptionError);
   });
 
   it("treats scalar and array custom-parse-returns-undefined consistently", () => {

@@ -335,6 +335,22 @@ describe("table", () => {
     expect(result).toContain("xy");
   });
 
+  it("sanitizes inferred and explicit header labels", () => {
+    const hostileKey = "na\x07me\x1b[2J";
+    const inferred = table([{ [hostileKey]: "Alice" }], { border: "single" });
+    expect(inferred).not.toContain("\x07");
+    expect(inferred).not.toContain("\x1b[2J");
+    expect(inferred).toContain("name");
+
+    const explicit = table([[1]], {
+      columns: ["va\x1b]2;spoofed\x07lue"],
+      headerLabels: { value: "ignored" },
+      border: "single",
+    });
+    expect(explicit).not.toContain("\x1b]2;");
+    expect(explicit).toContain("value");
+  });
+
   it("preserves SGR color sequences in cell content while sanitizing controls", () => {
     setColorEnabled(true);
     const result = table([{ v: `${color.red("hi")}\x07` }], { columns: ["v"], border: "single" });
@@ -362,6 +378,44 @@ describe("table", () => {
     const result = table([["A"], ["one"], ["two", "extra"]], { border: "single" });
     const widths = new Set(result.split("\n").map((line) => stringWidth(line)));
     expect(widths.size).toBe(1);
+    expect(result).toContain("extra");
+  });
+
+  it("handles row counts above the engine argument-spread limit", () => {
+    const rows = Array.from({ length: 150_000 }, () => ["x"]);
+    let result = "";
+    expect(() => {
+      result = table(rows, { header: false });
+    }).not.toThrow();
+    expect(result.startsWith("x")).toBe(true);
+  });
+
+  it("normalizes leading, middle, and trailing holes in outer array data", () => {
+    const rows = new Array<string[]>(6);
+    rows[1] = ["Header"];
+    rows[3] = ["one"];
+    rows[4] = ["two", "extra"];
+
+    let result = "";
+    expect(() => {
+      result = table(rows, { border: "single" });
+    }).not.toThrow();
+    expect(result).toContain("Header");
+    expect(result).toContain("one");
+    expect(result).toContain("extra");
+  });
+
+  it("normalizes holes in outer object-array data", () => {
+    const rows = new Array<Record<string, unknown>>(5);
+    rows[1] = { name: "one" };
+    rows[3] = { name: "two", detail: "extra" };
+
+    let result = "";
+    expect(() => {
+      result = table(rows, { border: "single" });
+    }).not.toThrow();
+    expect(result).toContain("one");
+    expect(result).toContain("two");
     expect(result).toContain("extra");
   });
 

@@ -1,12 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const python = spawnSync("python3", ["--version"], { stdio: "ignore" });
-const canRunPty =
-  process.platform !== "win32" && python.status === 0 && existsSync("dist/index.js");
+const canRunPty = process.platform !== "win32" && python.status === 0;
 
 const ptyProxy = `
 import os, pty, sys
@@ -153,8 +153,14 @@ raise SystemExit(result.returncode)
 
       child.stdin.write("alpha\n");
       await waitForOutput(() => output, "MODE:alpha");
+      child.stdin.write("beta\n");
+      await waitForOutput(() => output, "MODE:beta");
+      child.stdin.write("gamma\n");
+      await waitForOutput(() => output, "MODE:gamma");
       child.stdin.write("\x1b[A\n");
-      await waitForOutput(() => String(count(output, "MODE:alpha")), "2");
+      await waitForOutput(() => String(count(output, "MODE:gamma")), "2");
+      child.stdin.write("\x1b[A\x1b[A\n");
+      await waitForOutput(() => String(count(output, "MODE:beta")), "2");
       const exitStart = output.length;
       child.stdin.write("exit\n");
       await waitForOutput(() => output.slice(exitStart), "\x1b[0J> ");
@@ -168,8 +174,57 @@ raise SystemExit(result.returncode)
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
 
-    expect(count(output, "MODE:alpha")).toBe(2);
+    expect(count(output, "MODE:alpha")).toBe(1);
+    expect(count(output, "MODE:beta")).toBe(2);
+    expect(count(output, "MODE:gamma")).toBe(2);
     expect(output).not.toContain("MODE:mode");
     expect(output).not.toContain("MODE:parent");
+  });
+
+  it("persists accepted history before a force-quit and restores the cursor", async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), "node-cli-force-quit-"));
+    const historyFile = join(fixtureDir, "history");
+    const child = spawn(
+      "python3",
+      [
+        "-c",
+        ptyProxy,
+        process.execPath,
+        resolve("tests/fixtures/force-quit-history-child.mjs"),
+        historyFile,
+      ],
+      { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, NO_COLOR: "1" } },
+    );
+    let output = "";
+    child.stdout.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+
+    try {
+      await waitForOutput(() => output, "FORCE_QUIT_READY");
+      child.stdin.write("normal\n");
+      await waitForOutput(() => output, "NORMAL_DONE");
+      child.stdin.write("hang\n");
+      await waitForOutput(() => output, "HANGING");
+      child.stdin.write("\x03");
+      await waitForOutput(() => output, "Press Ctrl-C again to force quit");
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+      child.stdin.write("\x03");
+
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
+      clearTimeout(timeout);
+      expect({ code, signal }).toEqual({ code: 130, signal: null });
+      expect(await readFile(historyFile, "utf8")).toBe("normal\nhang\n");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+
+    expect(output).toContain("\x1b[?25l");
+    expect(output).toContain("\x1b[?25h");
   });
 });

@@ -206,6 +206,23 @@ export function parseDefinitionString(definition: string): {
     throw new Error(`Invalid command definition: missing command name in "${definition}"`);
   }
 
+  const argumentNames = new Set<string>();
+  let seenOptional = false;
+  for (const arg of argDefs) {
+    if (argumentNames.has(arg.name)) {
+      throw new Error(
+        `Invalid command definition: duplicate argument name "${arg.name}" in "${definition}"`,
+      );
+    }
+    argumentNames.add(arg.name);
+    if (!arg.required) seenOptional = true;
+    if (arg.required && seenOptional) {
+      throw new Error(
+        `Invalid command definition: required argument "${arg.name}" cannot follow an optional argument in "${definition}"`,
+      );
+    }
+  }
+
   // A variadic argument must be the last argument; nothing after it is reachable.
   for (let i = 0; i < argDefs.length - 1; i++) {
     if (argDefs[i].variadic) {
@@ -433,7 +450,7 @@ function extractOptionsAndArgs(
     // (A negative value bound to a preceding number option is already consumed as
     // that option's value, so reaching here means it stands on its own.)
     if (
-      /^-\d/.test(token) &&
+      token.startsWith("-") &&
       Number.isFinite(Number(token)) &&
       !optionDefs.has(token.slice(1)) &&
       !aliasMap.has(token.slice(1))

@@ -291,6 +291,14 @@ describe("definition parsing validation", () => {
   it("rejects a non-final variadic argument", () => {
     expect(() => parseDefinitionString("cp <...src> <dest>")).toThrow(/must be last/);
   });
+  it("rejects duplicate positional argument names", () => {
+    expect(() => parseDefinitionString("copy <file> <file>")).toThrow(/duplicate argument/);
+  });
+  it("rejects a required positional after an optional positional", () => {
+    expect(() => parseDefinitionString("copy [source] <destination>")).toThrow(
+      /cannot follow an optional/,
+    );
+  });
 });
 
 // ── tokenize / splitPipes unification (D-1) ──
@@ -561,7 +569,17 @@ describe("negative-number arguments", () => {
     const registry = new CommandRegistry();
     new CommandBuilder(registry, "calc <n>").action(() => {});
     expect(parse(["calc", "-5"], registry).args.n).toBe("-5");
+    expect(parse(["calc", "-.5"], registry).args.n).toBe("-.5");
     expect(parse(["calc", "-3.14"], registry).args.n).toBe("-3.14");
+    expect(parse(["calc", "-1e3"], registry).args.n).toBe("-1e3");
+  });
+
+  it("gives an exact numeric-looking option alias precedence over positional parsing", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "calc [n]").option("-1, --one").action(() => {});
+    const result = parse(["calc", "-1"], registry);
+    expect(result.options.one).toBe(true);
+    expect(result.args.n).toBeUndefined();
   });
 });
 

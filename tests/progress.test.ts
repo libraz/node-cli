@@ -126,12 +126,61 @@ describe("progress.bar", () => {
     bar.stop();
   });
 
+  it("redraws a one-row bar without moving into the preceding terminal row", () => {
+    const stream = createMockTTY();
+    (stream as unknown as { columns: number }).columns = 200;
+    const bar = progress.bar({ total: 10, stream });
+    bar.update(1);
+    const before = stream.getOutput().length;
+    bar.update(2);
+    expect(stream.getOutput().slice(before)).not.toContain("\x1b[1A");
+    bar.stop();
+  });
+
+  it("releases cursor and visual ownership when the final formatter throws", () => {
+    const stream = createMockTTY();
+    const bar = progress.bar({
+      total: 10,
+      stream,
+      format(state) {
+        if (state.current === state.total) throw new Error("format failed");
+        return `${state.current}/${state.total}`;
+      },
+    });
+    bar.update(5);
+
+    expect(() => bar.finish()).toThrow("format failed");
+    expect(stream.getOutput()).toContain("\x1b[?25h");
+    expect(() => bar.stop()).not.toThrow();
+
+    const replacement = progress.bar({ total: 1, stream });
+    expect(() => replacement.update(1)).not.toThrow();
+    replacement.stop();
+  });
+
   it("normalizes labels and custom formats to one terminal line", () => {
     const stream = createMockTTY();
     const bar = progress.bar({ total: 10, label: "line1\nline2\t", stream });
     bar.update(1);
     expect(stripAnsi(stream.getOutput())).toContain("line1 line2 ");
     expect(stripAnsi(stream.getOutput()).split("\n")).toHaveLength(1);
+    bar.stop();
+  });
+
+  it("removes terminal controls from labels while preserving SGR styling", () => {
+    const stream = createMockTTY();
+    const bar = progress.bar({
+      total: 10,
+      label: "\x1b[2J\x1b]2;spoofed\x07bad\r\nok\x07\x1b[31mred\x1b[0m",
+      stream,
+    });
+    bar.update(1);
+    const output = stream.getOutput();
+    expect(output).not.toContain("\x1b[2J");
+    expect(output).not.toContain("\x1b]2;");
+    expect(output).not.toContain("\x07");
+    expect(output).toMatch(/bad +ok/);
+    expect(output).toContain("\x1b[31mred\x1b[0m");
     bar.stop();
   });
 });
@@ -307,21 +356,17 @@ describe("progress.spinner signal ownership", () => {
     expect(process.listenerCount("SIGINT")).toBe(baseline);
   });
 
-  it("shares cursor ownership between two spinners and a bar", () => {
+  it("rejects concurrent standalone indicators on the same stream", () => {
     const stream = createMockTTY();
     const first = progress.spinner({ stream });
     const second = progress.spinner({ stream });
     const bar = progress.bar({ total: 2, stream });
     first.start();
-    second.start();
-    bar.tick();
-    expect(stream.getOutput().split("\x1b[?25l")).toHaveLength(2);
-
-    second.stop();
-    bar.finish();
-    expect(stream.getOutput()).not.toContain("\x1b[?25h");
+    expect(() => second.start()).toThrow(/already rendering/);
+    expect(() => bar.tick()).toThrow(/already rendering/);
     first.stop();
-    expect(stream.getOutput().split("\x1b[?25h")).toHaveLength(2);
+    expect(() => second.start()).not.toThrow();
+    second.stop();
   });
 });
 

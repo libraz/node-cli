@@ -77,4 +77,18 @@ describe("command aliases", () => {
     expect(output).toContain("d");
     expect(output).toContain("dep");
   });
+
+  it("rolls back a multi-alias registration when a later alias collides", () => {
+    const registry = new CommandRegistry();
+    const owner = new CommandBuilder(registry, "owner").alias("taken");
+    const candidate = new CommandBuilder(registry, "candidate");
+
+    expect(() => candidate.alias("fresh", "taken")).toThrow(/already maps/);
+    expect(registry.resolve(["fresh"])).toBeUndefined();
+    expect(registry.resolve(["taken"])?.name).toBe("owner");
+
+    candidate.remove();
+    expect(registry.resolve(["taken"])?.name).toBe("owner");
+    expect(owner.remove()).toBe(true);
+  });
 });

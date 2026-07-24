@@ -6,6 +6,7 @@ const cli = new CLI({
   name: "mode-fixture",
   banner: "MODE_SHELL_READY",
   historyFile: join(tmpdir(), `node-cli-mode-tty-${process.pid}.history`),
+  historySize: 2,
 });
 cli.command("parent").action((ctx) => ctx.stdout.write("PARENT_ACTION\n"));
 cli.command("mode").action((ctx) => {

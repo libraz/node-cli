@@ -117,44 +117,41 @@ describe("History", () => {
     expect(loaded).toEqual(expect.arrayContaining(["from-first", "from-second"]));
   });
 
-  it.runIf(existsSync("dist/shell/history.js"))(
-    "merges stale snapshots saved concurrently by separate processes",
-    async () => {
-      const startPath = join(tempDir, "start");
-      const readyPaths = [join(tempDir, "ready-1"), join(tempDir, "ready-2")];
-      const children = readyPaths.map((readyPath, index) =>
-        spawn(
-          process.execPath,
-          [
-            join(process.cwd(), "tests/fixtures/history-writer-child.mjs"),
-            filePath,
-            readyPath,
-            startPath,
-            `child-${index + 1}`,
-          ],
-          { stdio: ["ignore", "ignore", "pipe"] },
-        ),
-      );
-      let stderr = "";
-      for (const child of children) {
-        child.stderr.on("data", (chunk) => {
-          stderr += chunk.toString();
-        });
-      }
+  it("merges stale snapshots saved concurrently by separate processes", async () => {
+    const startPath = join(tempDir, "start");
+    const readyPaths = [join(tempDir, "ready-1"), join(tempDir, "ready-2")];
+    const children = readyPaths.map((readyPath, index) =>
+      spawn(
+        process.execPath,
+        [
+          join(process.cwd(), "tests/fixtures/history-writer-child.mjs"),
+          filePath,
+          readyPath,
+          startPath,
+          `child-${index + 1}`,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      ),
+    );
+    let stderr = "";
+    for (const child of children) {
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+    }
 
-      await vi.waitFor(() => expect(readyPaths.every(existsSync)).toBe(true));
-      await writeFile(startPath, "start");
-      const exits = await Promise.all(children.map((child) => once(child, "exit")));
-      expect(exits).toEqual([
-        [0, null],
-        [0, null],
-      ]);
-      expect(stderr).toBe("");
+    await vi.waitFor(() => expect(readyPaths.every(existsSync)).toBe(true));
+    await writeFile(startPath, "start");
+    const exits = await Promise.all(children.map((child) => once(child, "exit")));
+    expect(exits).toEqual([
+      [0, null],
+      [0, null],
+    ]);
+    expect(stderr).toBe("");
 
-      const loaded = await new History({ filePath }).load();
-      expect(loaded).toEqual(expect.arrayContaining(["child-1", "child-2"]));
-    },
-  );
+    const loaded = await new History({ filePath }).load();
+    expect(loaded).toEqual(expect.arrayContaining(["child-1", "child-2"]));
+  });
 
   it("treats maxSize 0 as disabled and validates invalid sizes", async () => {
     const disabled = new History({ filePath, maxSize: 0 });

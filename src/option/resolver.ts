@@ -68,6 +68,8 @@ export function resolveOptions(
       } else {
         value = coerce(value, schema.type, long);
       }
+    } else if (schema.required) {
+      throw new MissingOptionError(long);
     } else if (schema.default !== undefined) {
       // Apply the default only when the flag was absent, and run it through the
       // same built-in coercion an explicit value receives so the runtime type
@@ -75,8 +77,6 @@ export function resolveOptions(
       // A default already in its final type is left unchanged. Custom `parse` is
       // not re-applied: a default is an already-resolved value, not raw input.
       value = coerce(schema.default, schema.type, long);
-    } else if (schema.required) {
-      throw new MissingOptionError(long);
     }
 
     // Keep the flag present whenever it was supplied — even if its resolved

@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PromptCancelError } from "../src/errors.js";
 import type { Choice, PromptBaseOptions, SelectChoice, TextOptions } from "../src/index.js";
 import { resetColorEnabled } from "../src/output/color.js";
@@ -87,10 +87,25 @@ describe("prompt", () => {
       await expect(promise).resolves.toBe("");
       expect(streams.getOutput()).not.toContain("\x1b[32m");
       expect(streams.getOutput()).not.toContain("\x1b[1m");
+      expect(streams.getOutput()).not.toContain("\x1b[");
     } finally {
       resetColorEnabled();
       process.env = originalEnv;
     }
+  });
+
+  it("does not echo scripted input or terminal controls to non-TTY output", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.text("Name", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    streams.stdin.end("Alice\n");
+
+    await expect(promise).resolves.toBe("Alice");
+    expect(streams.getOutput()).not.toContain("Alice");
+    expect(streams.getOutput()).not.toContain("\x1b[");
   });
 
   it("re-prompts text until validation succeeds", async () => {
@@ -183,6 +198,32 @@ describe("prompt", () => {
     expect(streams.getOutput()).toContain("Select at most 2 items");
   });
 
+  it.each([
+    { min: -1 },
+    { max: -1 },
+    { min: 3 },
+    { min: 2, max: 1 },
+    { min: Number.POSITIVE_INFINITY },
+  ])("multiselect rejects impossible bounds before reading input: %j", async (bounds) => {
+    const { prompt } = await import("../src/output/prompt.js");
+    await expect(prompt.multiselect("Pick", ["a", "b"], bounds)).rejects.toBeInstanceOf(RangeError);
+  });
+
+  it("sanitizes terminal controls in choice labels and hints", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.select(
+      "Pick",
+      [{ label: "safe\x1b[2J", hint: "hint\x1b]2;title\x07", value: "ok" }],
+      { stdin: streams.stdin, stdout: streams.stdout },
+    );
+    streams.stdin.end("1\n");
+
+    await expect(promise).resolves.toBe("ok");
+    expect(streams.getOutput()).not.toContain("\x1b[2J");
+    expect(streams.getOutput()).not.toContain("\x1b]2;");
+  });
+
   it("multiselect rejects partially numeric tokens", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
@@ -221,6 +262,24 @@ describe("prompt", () => {
 
     await expect(promise).resolves.toBe("secret");
     expect(streams.getOutput()).not.toContain("secret");
+  });
+
+  it("never treats prompt text inside a password as a trusted redraw prefix", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    (streams.stdin as unknown as { isTTY: boolean }).isTTY = true;
+    (streams.stdout as unknown as { isTTY: boolean; columns: number }).isTTY = true;
+    (streams.stdout as unknown as { columns: number }).columns = 80;
+    const promise = prompt.password("Password", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    await vi.waitFor(() => expect(streams.getOutput()).toContain("Password"));
+    streams.stdin.write("abc? Password xyz");
+    streams.stdin.end("\x7f\n");
+
+    await expect(promise).resolves.toBe("abc? Password xy");
+    expect(streams.getOutput()).not.toContain("abc? Password");
   });
 
   it("password preserves leading and trailing whitespace", async () => {

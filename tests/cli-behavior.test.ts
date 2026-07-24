@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
@@ -24,10 +27,14 @@ describe("parse-phase errors emit the error event", () => {
     const { registry, router } = setup();
     new CommandBuilder(registry, "deploy <env>").action(() => {});
     const onError = vi.fn();
+    const onCommandError = vi.fn();
     router.on("error", onError);
+    router.on("commandError", onCommandError);
 
     await expect(router.execute("deploy prod --bogus")).rejects.toThrow();
     expect(onError).toHaveBeenCalledOnce();
+    expect(onCommandError).toHaveBeenCalledOnce();
+    expect(onCommandError.mock.calls[0][1].commandPath).toEqual(["deploy"]);
     expect(onError.mock.calls[0][0]).toBeInstanceOf(Error);
   });
 
@@ -37,10 +44,13 @@ describe("parse-phase errors emit the error event", () => {
       .option("--tag <tag>", { type: "string" })
       .action(() => {});
     const onError = vi.fn();
+    const onCommandError = vi.fn();
     router.on("error", onError);
+    router.on("commandError", onCommandError);
 
     await expect(router.execute("deploy prod --tag")).rejects.toThrow();
     expect(onError).toHaveBeenCalledOnce();
+    expect(onCommandError).toHaveBeenCalledOnce();
   });
 
   it.each(['deploy "', "deploy |"])(
@@ -401,7 +411,7 @@ describe("usage string consistency", () => {
 
   it("lists arguments in declaration order in help", () => {
     const { registry, helpGenerator } = setup();
-    new CommandBuilder(registry, "copy [from] <to>").action(() => {});
+    new CommandBuilder(registry, "copy <from> [to]").action(() => {});
 
     const help = helpGenerator.generateCommand(["copy"]);
     expect(help.indexOf("from")).toBeLessThan(help.indexOf("to"));
@@ -485,8 +495,10 @@ describe("non-interactive start with no arguments", () => {
 
 describe("history save error formatting", () => {
   it("formats a save failure without [object Object]", async () => {
-    // A path whose parent is a file (not a directory) makes the write fail.
-    const history = new History({ filePath: "/dev/null/nope/history" });
+    const fixtureDir = await mkdtemp(join(tmpdir(), "node-cli-history-warning-"));
+    const regularFileParent = join(fixtureDir, "not-a-directory");
+    await writeFile(regularFileParent, "fixture");
+    const history = new History({ filePath: join(regularFileParent, "history") });
     history.add("ls");
 
     const originalWrite = process.stderr.write.bind(process.stderr);
@@ -500,11 +512,11 @@ describe("history save error formatting", () => {
       await history.save();
     } finally {
       process.stderr.write = originalWrite;
+      await rm(fixtureDir, { recursive: true, force: true });
     }
 
-    if (captured.length > 0) {
-      expect(captured).not.toContain("[object Object]");
-    }
+    expect(captured).toContain("Warning: Could not save history");
+    expect(captured).not.toContain("[object Object]");
   });
 });
 

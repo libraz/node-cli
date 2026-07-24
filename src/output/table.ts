@@ -1,4 +1,4 @@
-import { color as c, splitAnsi, stringWidth, truncateAnsi } from "./color.js";
+import { color as c, sanitizeTerminalText, stringWidth, truncateAnsi } from "./color.js";
 
 /**
  * Custom border characters for table rendering.
@@ -281,33 +281,6 @@ export function table(
  * C0 control characters, DEL, and C1 controls (e.g. `\b`, NUL, BEL) that would
  * otherwise reach the terminal and corrupt the frame or hijack the cursor.
  */
-function sanitizeCellText(text: string): string {
-  let result = "";
-  for (const char of text) {
-    const code = char.codePointAt(0) as number;
-    if (code === 0x09 || code === 0x0a || code === 0x0b || code === 0x0c || code === 0x0d) {
-      result += " ";
-    } else if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      // Drop remaining C0 controls, DEL, and C1 controls.
-    } else {
-      result += char;
-    }
-  }
-  return result;
-}
-
-/**
- * Decides whether an ANSI escape sequence from cell content is safe to keep.
- * SGR color/style sequences and OSC 8 hyperlinks are preserved so colored and
- * linked content renders intact; all other escapes (cursor moves, screen
- * clears, etc.) are dropped to protect the table frame.
- */
-function isSafeCellEscape(seq: string): boolean {
-  if (seq.startsWith("\x1b[") && seq.endsWith("m")) return true;
-  if (seq.startsWith("\x1b]8;;")) return true;
-  return false;
-}
-
 /**
  * Converts a cell value to a display string, mapping null/undefined to an empty
  * string. Visible text is sanitized of control characters while SGR color
@@ -316,15 +289,7 @@ function isSafeCellEscape(seq: string): boolean {
  */
 function cellToString(value: unknown): string {
   if (value === null || value === undefined) return "";
-  return splitAnsi(String(value))
-    .map((segment) =>
-      segment.ansi
-        ? isSafeCellEscape(segment.text)
-          ? segment.text
-          : ""
-        : sanitizeCellText(segment.text),
-    )
-    .join("");
+  return sanitizeTerminalText(String(value));
 }
 
 /**
@@ -340,7 +305,11 @@ function normalizeData(
   if (data.length === 0) return { rows: [], columns: [], keys: [] };
 
   // Array of arrays
-  if (Array.isArray(data[0])) {
+  const firstDefinedIndex = data.findIndex((row) => row !== undefined);
+  const firstDefined = data[firstDefinedIndex];
+  if (firstDefined === undefined) return { rows: [], columns: [], keys: [] };
+
+  if (Array.isArray(firstDefined)) {
     const arrayData = data as unknown[][];
     const headerProvided = options.header !== false;
     const explicitColumns = options.columns;
@@ -349,16 +318,23 @@ function normalizeData(
     // are given (matching the object-array branch, which never drops a row).
     const consumeFirstRowAsHeader = headerProvided && explicitColumns === undefined;
     const rawColumns =
-      explicitColumns ?? (consumeFirstRowAsHeader ? arrayData[0].map(cellToString) : []);
-    const rawRows = arrayData
-      .slice(consumeFirstRowAsHeader ? 1 : 0)
-      .map((row) => (row as unknown[]).map(cellToString));
-    const colCount = Math.max(rawColumns.length, ...rawRows.map((row) => row.length));
+      explicitColumns?.map(cellToString) ??
+      (consumeFirstRowAsHeader ? (arrayData[firstDefinedIndex] ?? []).map(cellToString) : []);
+    const rawRows = arrayData.map((row, index) =>
+      consumeFirstRowAsHeader && index === firstDefinedIndex
+        ? undefined
+        : row === undefined
+          ? []
+          : (row as unknown[]).map(cellToString),
+    );
+    const normalizedRows = rawRows.filter((row): row is string[] => row !== undefined);
+    let colCount = rawColumns.length;
+    for (const row of normalizedRows) colCount = Math.max(colCount, row.length);
     const keys = Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? String(index));
     const columns = headerProvided
       ? Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? "")
       : [];
-    const rows = rawRows.map((row) =>
+    const rows = normalizedRows.map((row) =>
       Array.from({ length: colCount }, (_, index) => row[index] ?? ""),
     );
     return { rows, columns, keys };
@@ -372,6 +348,7 @@ function normalizeData(
     const seen = new Set<string>();
     keys = [];
     for (const obj of objData) {
+      if (obj === undefined) continue;
       for (const k of Object.keys(obj)) {
         if (!seen.has(k)) {
           seen.add(k);
@@ -380,8 +357,10 @@ function normalizeData(
       }
     }
   }
-  const labels = keys.map((col) => options.headerLabels?.[col] ?? col);
-  const rows = objData.map((obj) => (keys as string[]).map((col) => cellToString(obj[col])));
+  const labels = keys.map((col) => cellToString(options.headerLabels?.[col] ?? col));
+  const rows = Array.from(objData, (obj) =>
+    obj === undefined ? [] : (keys as string[]).map((col) => cellToString(obj[col])),
+  );
 
   return { rows, columns: labels, keys };
 }
@@ -396,7 +375,8 @@ function calculateWidths(
   header: boolean,
   options: TableOptions,
 ): number[] {
-  const colCount = Math.max(labels.length, keys.length, ...rows.map((row) => row.length));
+  let colCount = Math.max(labels.length, keys.length);
+  for (const row of rows) colCount = Math.max(colCount, row.length);
   const widths = new Array<number>(colCount).fill(0);
 
   // Header widths (from display labels)

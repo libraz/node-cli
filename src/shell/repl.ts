@@ -44,6 +44,7 @@ export class Shell {
   private promptStr: string;
   private readonly banner: string;
   private readonly history: History;
+  private readonly historySize: number;
   private readonly completer: ShellCompleter;
   private rl?: Interface;
   private running = false;
@@ -77,6 +78,7 @@ export class Shell {
     this.promptStr = options.prompt;
     this.banner = options.banner ?? "";
     this.beforeExecute = options.beforeExecute;
+    this.historySize = options.historySize ?? 1000;
     this.history = new History({
       filePath: options.historyFile,
       maxSize: options.historySize,
@@ -226,14 +228,22 @@ export class Shell {
       this.rl?.close();
       this.reopeningReadline = false;
       this.rl = undefined;
+      process.stdin.pause();
 
       // Only persist top-level commands; mode sub-REPL input (which may be
       // sensitive) must not leak into the shared, on-disk history.
       if (!this.mode) {
         this.history.add(trimmed);
+        // Persist before command execution so a later force-quit cannot discard
+        // commands already accepted in this session. Readline is closed above,
+        // so this async write cannot consume or lose buffered terminal input.
+        await this.history.save();
       } else if (this.mode.history !== "none") {
         if (this.modeHistory[this.modeHistory.length - 1] !== trimmed) {
           this.modeHistory.push(trimmed);
+          if (this.modeHistory.length > this.historySize) {
+            this.modeHistory.splice(0, this.modeHistory.length - this.historySize);
+          }
         }
       }
 
@@ -283,7 +293,11 @@ export class Shell {
 
       // Recreate readline with updated history for the next prompt cycle.
       if (this.running) {
-        this.openReadline(this.history.entries());
+        // A piped/non-interactive input may have reached EOF while the command
+        // (or the history write above) was running. Reopening readline after
+        // that point would never receive another close event.
+        if (process.stdin.readableEnded) break;
+        this.openReadline(this.mode ? [] : this.history.entries());
       }
     }
 

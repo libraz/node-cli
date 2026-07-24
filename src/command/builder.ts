@@ -76,6 +76,10 @@ export class CommandBuilder {
       resolved.type = takesValue ? "string" : "boolean";
     }
 
+    if (resolved.required === true && resolved.default !== undefined) {
+      throw new Error(`Option "--${long}" cannot be both required and have a default value`);
+    }
+
     // Single source of truth for "does this option take a value": derive it from
     // the resolved type. This keeps the parser, help output, and completion in
     // agreement even when the schema type and the flag placeholder disagree
@@ -159,16 +163,15 @@ export class CommandBuilder {
    * @returns This builder instance for chaining.
    */
   alias(...names: string[]): this {
-    if (!this.definition.aliases) {
-      this.definition.aliases = [];
-    }
+    const aliases = [...(this.definition.aliases ?? [])];
     // Deduplicate against existing aliases and the command's own name.
     for (const name of names) {
-      if (name && name !== this.definition.name && !this.definition.aliases.includes(name)) {
-        this.definition.aliases.push(name);
+      if (name && name !== this.definition.name && !aliases.includes(name)) {
+        aliases.push(name);
       }
     }
-    this.registry.registerAliases(this.definition, this.parentPath);
+    this.registry.registerAliases(this.definition, this.parentPath, aliases);
+    this.definition.aliases = aliases;
     return this;
   }
 
@@ -201,7 +204,7 @@ export class CommandBuilder {
    * @returns True if the command was found and removed, false otherwise.
    */
   remove(): boolean {
-    return this.registry.unregister([...this.parentPath, this.definition.name]);
+    return this.registry.unregister([...this.parentPath, this.definition.name], this.definition);
   }
 
   /**
@@ -211,6 +214,9 @@ export class CommandBuilder {
    * @returns A new {@link CommandBuilder} for configuring the subcommand.
    */
   command(definitionStr: string): CommandBuilder {
+    if (!this.registry.isRegistered(this.definition, this.parentPath)) {
+      throw new Error(`Cannot add subcommands to detached command "${this.definition.name}"`);
+    }
     const fullParentPath = [...this.parentPath, this.definition.name];
     return new CommandBuilder(this.registry, definitionStr, fullParentPath);
   }

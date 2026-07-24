@@ -42,6 +42,17 @@ describe("ShellCompleter", () => {
     expect(candidates).toEqual(["create"]);
   });
 
+  it("does not offer subcommands across an option or double-dash separator", () => {
+    const reg = new CommandRegistry();
+    const group = new CommandBuilder(reg, "admin").option("--force", { type: "boolean" });
+    group.command("create");
+    const comp = new ShellCompleter(reg);
+
+    expect(comp.complete("admin --force cr")[0]).not.toContain("create");
+    expect(comp.complete("admin -- cr")[0]).not.toContain("create");
+    expect(comp.complete("admin cr")[0]).toContain("create");
+  });
+
   it("completes nested subcommand aliases", () => {
     const reg = new CommandRegistry();
     const user = new CommandBuilder(reg, "user");

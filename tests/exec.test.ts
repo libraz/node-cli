@@ -126,4 +126,22 @@ describe("programmatic exec", () => {
     await cli.exec("check", { signal: controller.signal });
     expect(aborted).toBe(true);
   });
+
+  it("restores the outer diagnostic stream after a nested execution", async () => {
+    const cli = new CLI();
+    const outerErr = createMockStdout();
+    const innerErr = createMockStdout();
+    cli.command("inner").action(() => {});
+    cli.command("outer").action(async () => {
+      await cli.exec("inner", { stderr: innerErr });
+      throw new Error("outer failed");
+    });
+    cli.on("error", () => {
+      throw new Error("error handler failed");
+    });
+
+    await expect(cli.exec("outer", { stderr: outerErr })).rejects.toThrow("outer failed");
+    expect(outerErr.getOutput()).toContain("Error in error handler: error handler failed");
+    expect(innerErr.getOutput()).toBe("");
+  });
 });

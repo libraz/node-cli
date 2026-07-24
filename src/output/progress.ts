@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { createColorizer, splitAnsi, stringWidth } from "./color.js";
+import { createColorizer, sanitizeTerminalText, stringWidth } from "./color.js";
 
 // ── Progress Bar ──
 
@@ -125,17 +125,7 @@ function isTTY(stream: Writable): boolean {
 }
 
 function singleLine(text: string): string {
-  return splitAnsi(text)
-    .map((segment) => {
-      if (segment.ansi) return segment.text;
-      return [...segment.text]
-        .map((character) => {
-          const code = character.codePointAt(0) as number;
-          return code <= 0x1f || (code >= 0x7f && code <= 0x9f) ? " " : character;
-        })
-        .join("");
-    })
-    .join("");
+  return sanitizeTerminalText(text);
 }
 
 function createFrameWriter(stream: Writable): {
@@ -177,6 +167,7 @@ function createFrameWriter(stream: Writable): {
 type TerminalSession = { users: number };
 
 const terminalSessions = new WeakMap<Writable, TerminalSession>();
+const visualOwners = new WeakMap<Writable, symbol>();
 
 /**
  * Streams that currently have their cursor hidden. Tracked separately from the
@@ -248,6 +239,42 @@ function acquireTerminal(stream: Writable): () => void {
   };
 }
 
+/**
+ * Structured progress renderers need exclusive ownership of their terminal
+ * region. Multiple standalone renderers cannot infer one another's row layout;
+ * callers that need concurrent bars should use progress.multi().
+ */
+function acquireVisualTerminal(stream: Writable, owner: symbol): () => void {
+  if (!isTTY(stream)) return () => {};
+  const currentOwner = visualOwners.get(stream);
+  if (currentOwner && currentOwner !== owner) {
+    throw new Error(
+      "Another progress indicator is already rendering to this stream; use progress.multi() for concurrent bars",
+    );
+  }
+  visualOwners.set(stream, owner);
+  const releaseCursor = acquireTerminal(stream);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (visualOwners.get(stream) === owner) visualOwners.delete(stream);
+    releaseCursor();
+  };
+}
+
+function clearStandaloneFrame(renderedRows: number): string {
+  if (renderedRows <= 0) return "\r\x1b[K";
+  const up = renderedRows > 1 ? `\x1b[${renderedRows - 1}A` : "";
+  let frame = `${up}\r`;
+  for (let row = 0; row < renderedRows; row++) {
+    frame += "\x1b[K";
+    if (row < renderedRows - 1) frame += "\x1b[1B\r";
+  }
+  if (renderedRows > 1) frame += `\x1b[${renderedRows - 1}A`;
+  return `${frame}\r`;
+}
+
 // ── Bar Implementation ──
 
 /**
@@ -270,6 +297,7 @@ function createBar(options: BarOptions): Bar {
   let started = false;
   let renderedRows = 0;
   let releaseTerminal: (() => void) | null = null;
+  const visualOwner = Symbol("progress-bar");
   const startTime = Date.now();
   const tty = isTTY(stream);
   const col = createColorizer(stream);
@@ -286,50 +314,49 @@ function createBar(options: BarOptions): Bar {
   function render(final = false): void {
     if (!tty) return;
     if (!started) {
+      releaseTerminal = acquireVisualTerminal(stream, visualOwner);
       started = true;
-      releaseTerminal = acquireTerminal(stream);
     }
 
-    const state = getState();
+    try {
+      const state = getState();
+      let line: string;
 
-    if (customFormat) {
-      const line = singleLine(customFormat(state));
-      const frame = `${renderedRows > 0 ? `\x1b[${renderedRows}A` : ""}\r\x1b[K${line}`;
+      if (customFormat) {
+        line = singleLine(customFormat(state));
+      } else {
+        const filledCount = Math.round((state.percent / 100) * width);
+        const emptyCount = width - filledCount;
+        let bar = filled.repeat(filledCount) + empty.repeat(emptyCount);
+
+        if (barColor) {
+          try {
+            bar = (col as Record<string, (s: string) => string>)[barColor](bar);
+          } catch {
+            // ignore unknown color
+          }
+        }
+
+        const parts: string[] = [];
+        if (label) parts.push(singleLine(label));
+        parts.push(`[${bar}]`);
+        parts.push(`${state.percent}%`);
+        parts.push(`${state.current}/${state.total}`);
+        line = parts.join("  ");
+      }
+
+      const frame = `${clearStandaloneFrame(renderedRows)}${line}`;
       if (final) frameWriter.final(frame);
       else frameWriter.write(frame);
       renderedRows = Math.max(
         1,
         Math.ceil(stringWidth(line) / ((stream as NodeJS.WriteStream).columns || 80)),
       );
-      return;
+    } catch (error) {
+      cleanup();
+      started = false;
+      throw error;
     }
-
-    const filledCount = Math.round((state.percent / 100) * width);
-    const emptyCount = width - filledCount;
-    let bar = filled.repeat(filledCount) + empty.repeat(emptyCount);
-
-    if (barColor) {
-      try {
-        bar = (col as Record<string, (s: string) => string>)[barColor](bar);
-      } catch {
-        // ignore unknown color
-      }
-    }
-
-    const parts: string[] = [];
-    if (label) parts.push(singleLine(label));
-    parts.push(`[${bar}]`);
-    parts.push(`${state.percent}%`);
-    parts.push(`${state.current}/${state.total}`);
-
-    const line = parts.join("  ");
-    const frame = `${renderedRows > 0 ? `\x1b[${renderedRows}A` : ""}\r\x1b[K${line}`;
-    if (final) frameWriter.final(frame);
-    else frameWriter.write(frame);
-    renderedRows = Math.max(
-      1,
-      Math.ceil(stringWidth(line) / ((stream as NodeJS.WriteStream).columns || 80)),
-    );
   }
 
   function cleanup(): void {
@@ -353,9 +380,12 @@ function createBar(options: BarOptions): Bar {
       if (finished) return;
       finished = true;
       current = total;
-      render(true);
-      cleanup();
-      if (tty) stream.write("\n");
+      try {
+        render(true);
+      } finally {
+        cleanup();
+        if (tty) stream.write("\n");
+      }
     },
     stop() {
       if (finished) return;
@@ -385,6 +415,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   let timer: ReturnType<typeof setInterval> | null = null;
   let done = false;
   let releaseTerminal: (() => void) | null = null;
+  const visualOwner = Symbol("progress-spinner");
   const tty = isTTY(stream);
   const col = createColorizer(stream);
   const frameWriter = createFrameWriter(stream);
@@ -420,7 +451,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   return {
     start() {
       if (timer || done) return;
-      releaseTerminal = acquireTerminal(stream);
+      releaseTerminal = acquireVisualTerminal(stream, visualOwner);
       render();
       // Keep the interval from holding the event loop open on its own.
       timer = setInterval(render, interval);
@@ -483,11 +514,12 @@ function createMultiBar(): MultiBar {
   let renderedRows = 0;
   let closed = false;
   let releaseTerminal: (() => void) | null = null;
+  const visualOwner = Symbol("progress-multi");
   let frameWriter = createFrameWriter(stream);
 
   function startTerminalSession(): void {
     if (releaseTerminal || !isTTY(stream)) return;
-    releaseTerminal = acquireTerminal(stream);
+    releaseTerminal = acquireVisualTerminal(stream, visualOwner);
   }
 
   function cleanup(): void {

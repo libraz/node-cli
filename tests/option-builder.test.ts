@@ -41,4 +41,16 @@ describe("boolean flag default injection", () => {
     if (!def) throw new Error("command not registered");
     expect(def.options.get("verbose")?.schema.default).toBeUndefined();
   });
+
+  it("rejects an option that is both required and defaulted", () => {
+    const registry = new CommandRegistry();
+    const command = new CommandBuilder(registry, "deploy");
+    expect(() =>
+      command.option("--target <target>", {
+        type: "string",
+        required: true,
+        default: "production",
+      }),
+    ).toThrow(/both required and have a default/);
+  });
 });

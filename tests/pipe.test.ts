@@ -175,4 +175,67 @@ describe("piped execution", () => {
     ).rejects.toThrow("stage failed");
     expect(aborted.sort()).toEqual(["middle", "source"]);
   });
+
+  it("preserves the initiating stage error when aborted siblings reject with AbortError", async () => {
+    const registry = new CommandRegistry();
+    const waitForAbort = (name: string) =>
+      new CommandBuilder(registry, name).action(
+        (ctx) =>
+          new Promise<void>((_resolve, reject) => {
+            ctx.signal.addEventListener(
+              "abort",
+              () => reject(new DOMException(`${name} aborted`, "AbortError")),
+              { once: true },
+            );
+          }),
+      );
+    waitForAbort("source");
+    waitForAbort("middle");
+    new CommandBuilder(registry, "fail").action(() => {
+      throw new Error("database failed");
+    });
+
+    const router = new CommandRouter(registry);
+    await expect(router.execute("source | middle | fail")).rejects.toThrow("database failed");
+  });
+
+  it("does not emit failure events for a graceful abort-aware early stop", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "source").action(
+      (ctx) =>
+        new Promise<void>((_resolve, reject) => {
+          ctx.signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("source stopped", "AbortError")),
+            { once: true },
+          );
+        }),
+    );
+    new CommandBuilder(registry, "take").action(() => {});
+    const router = new CommandRouter(registry);
+    const commandErrors: Error[] = [];
+    const errors: Error[] = [];
+    router.on("commandError", (error) => commandErrors.push(error));
+    router.on("error", (error) => errors.push(error));
+
+    await expect(router.execute("source | take")).resolves.toBeUndefined();
+    expect(commandErrors).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it("does not hide a genuine upstream error after a downstream early stop", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "source").action(
+      (ctx) =>
+        new Promise<void>((_resolve, reject) => {
+          ctx.signal.addEventListener("abort", () => reject(new Error("late source failure")), {
+            once: true,
+          });
+        }),
+    );
+    new CommandBuilder(registry, "take").action(() => {});
+
+    const router = new CommandRouter(registry);
+    await expect(router.execute("source | take")).rejects.toThrow("late source failure");
+  });
 });

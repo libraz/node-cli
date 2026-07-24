@@ -87,6 +87,7 @@ export class ShellCompleter {
       const partial = tokens[tokens.length - 1];
       if (
         parentMatch?.command.subcommands.size &&
+        parentMatch.consumed === tokens.length - 1 &&
         !hasUnreachableSubcommands(parentMatch.command) &&
         !partial.startsWith("-")
       ) {

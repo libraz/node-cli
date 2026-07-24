@@ -1,5 +1,3 @@
-import type { Writable } from "node:stream";
-
 // ── ANSI codes ──
 
 /**
@@ -42,7 +40,7 @@ let _enabled: boolean | null = null;
 /**
  * Determines whether a value looks like a TTY stream.
  */
-function streamIsTTY(stream: Writable): boolean {
+function streamIsTTY(stream: NodeJS.WritableStream): boolean {
   return "isTTY" in stream && (stream as NodeJS.WriteStream).isTTY === true;
 }
 
@@ -58,7 +56,7 @@ function streamIsTTY(stream: Writable): boolean {
  * @param stream - Optional output stream to evaluate. Defaults to `process.stdout`.
  * @returns Whether color escape codes should be emitted.
  */
-export function isColorEnabled(stream?: Writable): boolean {
+export function isColorEnabled(stream?: NodeJS.WritableStream): boolean {
   if (_enabled !== null) return _enabled;
   if (process.env.NO_COLOR != null && process.env.NO_COLOR !== "") return false;
   // FORCE_COLOR is evaluated before TERM/TTY checks: "0"/"false" disable, any
@@ -187,7 +185,7 @@ export const color: Record<string, ColorFn> = createColorProxy(() => isColorEnab
  * @param stream - The output stream color will be written to.
  * @returns A chainable color proxy bound to the stream's TTY status.
  */
-export function createColorizer(stream: Writable): Record<string, ColorFn> {
+export function createColorizer(stream: NodeJS.WritableStream): Record<string, ColorFn> {
   return createColorProxy(() => isColorEnabled(stream));
 }
 
@@ -287,7 +285,7 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
 /** Regular expression matching ANSI escape sequences (CSI and OSC). */
 const ansiRegex =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence matching requires control characters
-  /[\x1b\x9b][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?(?:\x07|\x1b\\))|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+  /[\x1b\x9b][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?(?:\x07|\x1b\\))|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 
 /**
  * Remove all ANSI escape sequences from the given string.
@@ -333,6 +331,49 @@ export function splitAnsi(text: string): AnsiSegment[] {
   return segments;
 }
 
+/**
+ * Sanitizes text before it is rendered inside a structured terminal UI.
+ *
+ * SGR styling and OSC 8 hyperlinks are preserved. Cursor movement, screen
+ * clearing, title changes, and every other escape sequence are removed. Visible
+ * C0/C1 controls are either collapsed to spaces in single-line mode or dropped.
+ */
+export function sanitizeTerminalText(
+  text: string,
+  options: { singleLine?: boolean; allowHyperlinks?: boolean } = {},
+): string {
+  const { singleLine = true, allowHyperlinks = true } = options;
+  return splitAnsi(text)
+    .map((segment) => {
+      if (segment.ansi) {
+        if (segment.text.startsWith("\x1b[") && segment.text.endsWith("m")) {
+          return segment.text;
+        }
+        if (allowHyperlinks && segment.text.startsWith("\x1b]8;;")) {
+          return segment.text;
+        }
+        return "";
+      }
+
+      let result = "";
+      for (const character of segment.text) {
+        const code = character.codePointAt(0) as number;
+        if (
+          singleLine &&
+          (code === 0x09 || code === 0x0a || code === 0x0b || code === 0x0c || code === 0x0d)
+        ) {
+          result += " ";
+        } else if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+          // Drop remaining C0 controls, DEL, and C1 controls.
+        } else {
+          result += character;
+        }
+      }
+      return result;
+    })
+    .join("");
+}
+
 // ── String width (East Asian Width aware) ──
 
 /**
@@ -360,6 +401,9 @@ export function stringWidth(text: string): number {
  * already-split grapheme via {@link stringWidth}.
  */
 function graphemeWidth(grapheme: string): number {
+  // Emoji-presentation variation selectors and keycap sequences make otherwise
+  // narrow base characters occupy a two-column terminal cell.
+  if (grapheme.includes("\ufe0f") || grapheme.includes("\u20e3")) return 2;
   let width = 0;
   for (const char of grapheme) {
     width = Math.max(width, getCharWidth(char.codePointAt(0) as number));

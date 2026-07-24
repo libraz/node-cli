@@ -152,6 +152,9 @@ describe("logger", () => {
         if (event === "drain") onDrain = handler;
         return stream;
       },
+      off() {
+        return stream;
+      },
     } as unknown as Writable;
     const log = logger({ stream, bufferLimit: 1 });
     log.info("first");
@@ -168,4 +171,33 @@ describe("logger", () => {
   it("validates bufferLimit", () => {
     expect(() => logger({ bufferLimit: -1 })).toThrow(RangeError);
   });
+
+  it.each(["error", "close"] as const)(
+    "rejects flush when a backpressured stream emits %s before drain",
+    async (terminalEvent) => {
+      const listeners = new Map<string, (...args: unknown[]) => void>();
+      const stream = {
+        write() {
+          return false;
+        },
+        once(event: string, handler: (...args: unknown[]) => void) {
+          listeners.set(event, handler);
+          return stream;
+        },
+        off(event: string, handler: (...args: unknown[]) => void) {
+          if (listeners.get(event) === handler) listeners.delete(event);
+          return stream;
+        },
+      } as unknown as Writable;
+      const log = logger({ stream });
+      log.info("queued");
+      const flushed = log.flush();
+      if (terminalEvent === "error") {
+        listeners.get("error")?.(new Error("disk failed"));
+      } else {
+        listeners.get("close")?.();
+      }
+      await expect(flushed).rejects.toThrow(terminalEvent === "error" ? "disk failed" : "closed");
+    },
+  );
 });

@@ -42,6 +42,7 @@ export type {
   Choice,
   ConfirmOptions,
   MultiselectOptions,
+  PasswordOptions,
   PromptBaseOptions,
   SelectChoice,
   SelectOptions,

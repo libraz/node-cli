@@ -79,13 +79,21 @@ export class CommandRegistry {
    * @param def - The command definition with aliases.
    * @param parentPath - The parent path of the command.
    */
-  registerAliases(def: CommandDefinition, parentPath: string[]): void {
-    if (!def.aliases) return;
+  registerAliases(
+    def: CommandDefinition,
+    parentPath: string[],
+    aliases: string[] = def.aliases ?? [],
+  ): void {
+    if (aliases.length === 0) return;
     const prefix = parentPath.join("/");
     // Sibling commands at this level, used to detect alias/name collisions.
     const siblings = parentPath.length === 0 ? this.root : this.resolve(parentPath)?.subcommands;
+    if (siblings?.get(def.name) !== def) {
+      throw new Error(`Cannot add aliases to detached command "${def.name}"`);
+    }
 
-    for (const alias of def.aliases) {
+    // Validate the complete batch before committing any mapping.
+    for (const alias of aliases) {
       const key = `${prefix}:${alias}`;
 
       // Collision with another command's existing alias at the same level.
@@ -101,12 +109,20 @@ export class CommandRegistry {
       if (sibling && sibling !== def) {
         throw new Error(`Alias "${alias}" conflicts with existing command "${alias}"`);
       }
-
-      // Aliases are resolved through aliasMap only; they are intentionally not
-      // added to the command maps so they cannot shadow real commands or inflate
-      // subcommand counts / completion candidates.
-      this.aliasMap.set(key, def.name);
     }
+
+    // Aliases are resolved through aliasMap only; they are intentionally not
+    // added to the command maps so they cannot shadow real commands or inflate
+    // subcommand counts / completion candidates.
+    for (const alias of aliases) {
+      this.aliasMap.set(`${prefix}:${alias}`, def.name);
+    }
+  }
+
+  /** True when this exact definition still owns its registered path. */
+  isRegistered(def: CommandDefinition, parentPath: string[]): boolean {
+    const siblings = parentPath.length === 0 ? this.root : this.resolve(parentPath)?.subcommands;
+    return siblings?.get(def.name) === def;
   }
 
   /**
@@ -195,13 +211,14 @@ export class CommandRegistry {
    * @param commandPath - The full path of the command to remove.
    * @returns True if the command was found and removed, false otherwise.
    */
-  unregister(commandPath: string[]): boolean {
+  unregister(commandPath: string[], expectedDefinition?: CommandDefinition): boolean {
     if (commandPath.length === 0) return false;
 
     if (commandPath.length === 1) {
       const name = commandPath[0];
       const def = this.root.get(name);
       if (!def) return false;
+      if (expectedDefinition && def !== expectedDefinition) return false;
 
       this.removeSubtreeAliases(def, []);
       this.root.delete(name);
@@ -216,6 +233,7 @@ export class CommandRegistry {
     const name = commandPath[commandPath.length - 1];
     const def = parent.subcommands.get(name);
     if (!def) return false;
+    if (expectedDefinition && def !== expectedDefinition) return false;
 
     this.removeSubtreeAliases(def, parentPath);
     parent.subcommands.delete(name);
@@ -224,7 +242,10 @@ export class CommandRegistry {
 
   private removeSubtreeAliases(def: CommandDefinition, parentPath: string[]): void {
     const prefix = parentPath.join("/");
-    for (const alias of def.aliases ?? []) this.aliasMap.delete(`${prefix}:${alias}`);
+    for (const alias of def.aliases ?? []) {
+      const key = `${prefix}:${alias}`;
+      if (this.aliasMap.get(key) === def.name) this.aliasMap.delete(key);
+    }
     const childParentPath = [...parentPath, def.name];
     for (const child of def.subcommands.values()) {
       this.removeSubtreeAliases(child, childParentPath);

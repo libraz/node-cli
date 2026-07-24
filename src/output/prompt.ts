@@ -1,7 +1,13 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import { type Readable, Writable } from "node:stream";
 import { PromptCancelError } from "../errors.js";
-import { type color as c, createColorizer, splitAnsi, splitGraphemes } from "./color.js";
+import {
+  type color as c,
+  createColorizer,
+  sanitizeTerminalText,
+  splitAnsi,
+  splitGraphemes,
+} from "./color.js";
 
 // ── Types ──
 
@@ -9,8 +15,6 @@ import { type color as c, createColorizer, splitAnsi, splitGraphemes } from "./c
  * Base options shared by all prompt types.
  */
 export interface PromptBaseOptions {
-  /** Default value returned when the user provides no input. */
-  default?: unknown;
   /** Validation function; throw an Error to reject the value. */
   validate?: (value: unknown) => void;
   /** Whether a non-empty value is required. Defaults to true for text/password prompts. */
@@ -73,6 +77,9 @@ export interface MultiselectOptions<T> extends PromptBaseOptions {
   max?: number;
 }
 
+/** Options for a password prompt. Passwords intentionally have no default value. */
+export type PasswordOptions = PromptBaseOptions;
+
 /**
  * A choice can be either a raw value or a SelectChoice object with label/value/hint.
  */
@@ -89,9 +96,14 @@ export type Choice<T> = T | SelectChoice<T>;
 function normalizeChoices<T>(choices: Choice<T>[]): SelectChoice<T>[] {
   return choices.map((ch) => {
     if (typeof ch === "object" && ch !== null && "label" in (ch as Record<string, unknown>)) {
-      return ch as SelectChoice<T>;
+      const choice = ch as SelectChoice<T>;
+      return {
+        ...choice,
+        label: sanitizeTerminalText(choice.label),
+        hint: choice.hint === undefined ? undefined : sanitizeTerminalText(choice.hint),
+      };
     }
-    return { label: String(ch), value: ch as T };
+    return { label: sanitizeTerminalText(String(ch)), value: ch as T };
   });
 }
 
@@ -163,10 +175,15 @@ interface CancelableRl {
  * @returns The readline interface, an abort signal, a closed flag, and teardown.
  */
 function createCancelableRl(stdin?: Readable, stdout?: Writable): CancelableRl {
+  const input = stdin ?? process.stdin;
+  const output = stdout ?? process.stdout;
+  const terminal =
+    (input as Partial<NodeJS.ReadStream>).isTTY === true &&
+    (output as Partial<NodeJS.WriteStream>).isTTY === true;
   const rl = createInterface({
-    input: stdin ?? process.stdin,
-    output: stdout ?? process.stdout,
-    terminal: true,
+    input,
+    output,
+    terminal,
   });
   const controller = new AbortController();
   const onSigint = () => controller.abort();
@@ -448,6 +465,20 @@ async function multiselect<T = string>(
   if (normalized.length === 0) {
     throw new Error("multiselect() requires at least one choice");
   }
+  for (const [name, value] of [
+    ["min", min],
+    ["max", max],
+  ] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+      throw new RangeError(`multiselect() ${name} must be a non-negative safe integer`);
+    }
+  }
+  if (min !== undefined && max !== undefined && min > max) {
+    throw new RangeError("multiselect() min cannot exceed max");
+  }
+  if (min !== undefined && min > normalized.length) {
+    throw new RangeError("multiselect() min cannot exceed the number of choices");
+  }
   const defaultIndexes = new Set(
     (defaults ?? []).map((d) => findDefaultIndex(normalized, d)).filter((i) => i >= 0),
   );
@@ -575,7 +606,7 @@ export function maskInput(chunk: string): string {
  * @returns The entered password string.
  * @throws PromptCancelError if the user cancels.
  */
-async function password(message: string, options: PromptBaseOptions = {}): Promise<string> {
+async function password(message: string, options: PasswordOptions = {}): Promise<string> {
   const { validate, required = true, prefix = "?" } = options;
   const stdout = options.stdout ?? process.stdout;
   const col = createColorizer(stdout);
@@ -591,6 +622,7 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
   // chunk), the label is passed through unmasked and only the typed value after
   // it is masked. Previously the label was masked into asterisks on every redraw.
   let promptQuery = "";
+  let promptRendered = false;
   const maskingOutput = new Writable({
     write(chunk: string | Buffer, _encoding, callback) {
       const text = typeof chunk === "string" ? chunk : chunk.toString();
@@ -601,9 +633,22 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
       }
       // If this chunk carries the prompt label, everything up to and including it
       // is passed through verbatim; only the user's input after it is masked.
-      const idx = promptQuery ? text.lastIndexOf(promptQuery) : -1;
-      if (idx !== -1) {
+      const idx = promptQuery ? text.indexOf(promptQuery) : -1;
+      const prefixSegments = idx === -1 ? [] : splitAnsi(text.slice(0, idx));
+      const prefixHasVisibleText = prefixSegments.some(
+        (segment) =>
+          !segment.ansi &&
+          [...segment.text].some((character) => {
+            const code = character.codePointAt(0) as number;
+            return code > 0x1f && !(code >= 0x7f && code <= 0x9f);
+          }),
+      );
+      const prefixHasTerminalEscape = prefixSegments.some((segment) => segment.ansi);
+      const trustedPrompt =
+        idx !== -1 && !prefixHasVisibleText && (!promptRendered || prefixHasTerminalEscape);
+      if (trustedPrompt) {
         const boundary = idx + promptQuery.length;
+        promptRendered = true;
         stdout.write(text.slice(0, boundary) + maskInput(text.slice(boundary)));
       } else {
         stdout.write(maskInput(text));
@@ -613,7 +658,7 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
   });
   // Mirror TTY status/size so readline keeps terminal echo behavior.
   const ttyStdout = stdout as Partial<NodeJS.WriteStream>;
-  (maskingOutput as unknown as Record<string, unknown>).isTTY = ttyStdout.isTTY ?? true;
+  (maskingOutput as unknown as Record<string, unknown>).isTTY = ttyStdout.isTTY === true;
   (maskingOutput as unknown as Record<string, unknown>).columns = ttyStdout.columns ?? 80;
   (maskingOutput as unknown as Record<string, unknown>).rows = ttyStdout.rows ?? 24;
 
@@ -624,6 +669,7 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
       const query = `${col.green(prefix)} ${col.bold(message)} `;
       masking = true;
       promptQuery = query;
+      promptRendered = false;
 
       let answer: string;
       try {
@@ -631,6 +677,7 @@ async function password(message: string, options: PromptBaseOptions = {}): Promi
       } finally {
         masking = false;
         promptQuery = "";
+        promptRendered = false;
       }
 
       const value = answer;

@@ -43,7 +43,7 @@ export interface Logger {
   setLevel(level: LogLevel): void;
   /** Creates a child logger with an additional prefix segment. */
   child(prefix: string): Logger;
-  /** Resolves when all logger-managed buffered lines have been handed to the stream. */
+  /** Resolves after buffered lines reach the stream; rejects if the stream errors or closes first. */
   flush(): Promise<void>;
 }
 
@@ -121,29 +121,64 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
   const col = createColorizer(stream);
   const colorOn = () => isColorEnabled(stream);
   const bufferedLines: string[] = [];
-  const flushWaiters = new Set<() => void>();
+  const flushWaiters = new Set<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }>();
   let backpressured = false;
+  let streamFailure: Error | undefined;
 
-  const resolveFlushWaiters = () => {
-    if (backpressured || bufferedLines.length > 0) return;
-    for (const resolve of flushWaiters) resolve();
+  const removeBackpressureListeners = () => {
+    stream.off("drain", flushBuffered);
+    stream.off("error", failBuffered);
+    stream.off("close", closeBuffered);
+  };
+
+  const rejectFlushWaiters = (error: Error) => {
+    for (const waiter of flushWaiters) waiter.reject(error);
     flushWaiters.clear();
   };
 
-  const flushBuffered = () => {
+  const failBuffered = (error: Error) => {
+    removeBackpressureListeners();
+    streamFailure = error;
+    backpressured = false;
+    bufferedLines.length = 0;
+    rejectFlushWaiters(error);
+  };
+
+  const closeBuffered = () => {
+    failBuffered(new Error("Logger output stream closed before buffered data was flushed"));
+  };
+
+  const waitForDrain = () => {
+    stream.once("drain", flushBuffered);
+    stream.once("error", failBuffered);
+    stream.once("close", closeBuffered);
+  };
+
+  const resolveFlushWaiters = () => {
+    if (backpressured || bufferedLines.length > 0) return;
+    for (const waiter of flushWaiters) waiter.resolve();
+    flushWaiters.clear();
+  };
+
+  function flushBuffered() {
+    removeBackpressureListeners();
     backpressured = false;
     while (bufferedLines.length > 0) {
       const line = bufferedLines.shift() as string;
       if (!stream.write(line)) {
         backpressured = true;
-        stream.once("drain", flushBuffered);
+        waitForDrain();
         return;
       }
     }
     resolveFlushWaiters();
-  };
+  }
 
   const writeLine = (line: string) => {
+    if (streamFailure) return;
     if (backpressured) {
       if (bufferLimit === 0) return;
       if (bufferedLines.length >= bufferLimit) bufferedLines.shift();
@@ -152,7 +187,7 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
     }
     if (!stream.write(line)) {
       backpressured = true;
-      stream.once("drain", flushBuffered);
+      waitForDrain();
     }
   };
 
@@ -227,8 +262,9 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
       return logger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
     },
     flush() {
+      if (streamFailure) return Promise.reject(streamFailure);
       if (!backpressured && bufferedLines.length === 0) return Promise.resolve();
-      return new Promise<void>((resolve) => flushWaiters.add(resolve));
+      return new Promise<void>((resolve, reject) => flushWaiters.add({ resolve, reject }));
     },
   };
 

@@ -139,6 +139,13 @@ describe("stripAnsi", () => {
     const hyperlink = "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\";
     expect(stripAnsi(hyperlink)).toBe("link");
   });
+
+  it("recognizes colon-form SGR sequences across ANSI helpers", () => {
+    const styled = "\x1b[38:2::255:0:0mX\x1b[0m";
+    expect(stripAnsi(styled)).toBe("X");
+    expect(stringWidth(styled)).toBe(1);
+    expect(truncateAnsi(`${styled}Y`, 1)).toContain("…");
+  });
 });
 
 describe("stringWidth", () => {
@@ -180,6 +187,12 @@ describe("stringWidth", () => {
 
   it("counts an emoji with a skin-tone modifier as one wide grapheme", () => {
     expect(stringWidth("👍🏽")).toBe(2);
+  });
+
+  it("counts keycap and VS16 emoji-presentation graphemes as wide", () => {
+    expect(stringWidth("1️⃣")).toBe(2);
+    expect(stringWidth("©️")).toBe(2);
+    expect(stringWidth("©")).toBe(1);
   });
 
   it("measures a transport emoji as width 2", () => {

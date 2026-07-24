@@ -1,5 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { PassThrough, type Readable, type Writable } from "node:stream";
-import { CommandNotFoundError, ExtraArgumentError, MissingArgumentError } from "../errors.js";
+import {
+  CommandNotFoundError,
+  ExtraArgumentError,
+  isCancellationError,
+  MissingArgumentError,
+} from "../errors.js";
 import { formatUsage, type HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
 import { restoreCursor } from "../output/progress.js";
@@ -14,6 +20,8 @@ import type { CommandRegistry } from "./registry.js";
  * failure, so the pipeline does not surface a spurious `AbortError`.
  */
 class PipelineStopSignal extends Error {
+  static readonly instance = new PipelineStopSignal();
+
   constructor() {
     super("pipeline stage stopped early");
     this.name = "PipelineStopSignal";
@@ -63,13 +71,8 @@ export class CommandRouter {
    */
   private readonly active: CancellationScope = new Set();
 
-  /**
-   * The stderr stream of the execution currently in flight. A best-effort target
-   * for internal diagnostics (e.g. an error handler that itself throws) so they
-   * reach a captured stream when an embedder supplied one, rather than always
-   * going to the real `process.stderr`.
-   */
-  private currentStderr: Writable = process.stderr;
+  /** Execution-local diagnostic stream, isolated across nested/concurrent exec calls. */
+  private readonly stderrContext = new AsyncLocalStorage<Writable>();
 
   /**
    * Creates a new CommandRouter.
@@ -116,14 +119,14 @@ export class CommandRouter {
     event: K,
     ...args: Parameters<CLIEventMap[K]>
   ): Promise<void> {
-    for (const handler of this.listeners[event]) {
+    for (const handler of [...this.listeners[event]]) {
       try {
         await (handler as (...a: Parameters<CLIEventMap[K]>) => void | Promise<void>)(...args);
       } catch (err) {
         // A listener should never break command flow. Surface error-event
         // failures to stderr; route others to the error event when possible.
         if (event === "error") {
-          this.currentStderr.write(
+          (this.stderrContext.getStore() ?? process.stderr).write(
             `Error in error handler: ${err instanceof Error ? err.message : String(err)}\n`,
           );
         } else {
@@ -221,7 +224,7 @@ export class CommandRouter {
   ): Promise<void> {
     // Where the "press Ctrl-C again" hint is written. For command execution the
     // router already tracks the in-flight stderr; a mode action supplies its own.
-    const hintStream = options.stderr ?? this.currentStderr;
+    const hintStream = options.stderr ?? this.stderrContext.getStore() ?? process.stderr;
     // How a first interrupt is delivered. Defaults to cancelling the router's
     // active commands; callers running work outside the router (e.g. a mode
     // sub-REPL action) supply their own so cooperative cancellation still works.
@@ -300,7 +303,8 @@ export class CommandRouter {
       signal?: AbortSignal;
     } = {},
   ): Promise<void> {
-    await this.executeInternal(input, options);
+    const stderr = options.stderr ?? process.stderr;
+    await this.stderrContext.run(stderr, () => this.executeInternal(input, options));
   }
 
   private async executeInternal(
@@ -312,6 +316,7 @@ export class CommandRouter {
       stderr?: Writable;
       signal?: AbortSignal;
       cancellationScope?: CancellationScope;
+      expectedCancellation?: () => unknown;
     } = {},
   ): Promise<void> {
     const {
@@ -321,9 +326,8 @@ export class CommandRouter {
       stderr = process.stderr,
       signal,
       cancellationScope,
+      expectedCancellation,
     } = options;
-    this.currentStderr = stderr;
-
     // Check for pipe chains (only for string input)
     if (typeof input === "string") {
       let segments: string[];
@@ -358,15 +362,31 @@ export class CommandRouter {
       return;
     }
 
-    // Parsing happens before a command context exists, so a parse failure
-    // (unknown/invalid option) cannot carry a `commandError` context — but it
-    // must still surface through the catch-all `error` event so failure
-    // monitoring is consistent across every input.
+    // Resolve the command independently before full option extraction. This lets
+    // option-syntax failures on a known command honor the documented
+    // commandError contract even though parse() cannot return a partial result.
+    const preliminaryMatch = this.registry.matchCommandPath(tokens);
     let result: ReturnType<typeof parse>;
     try {
       result = parse(input, this.registry);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      if (preliminaryMatch) {
+        const command = preliminaryMatch.command;
+        const ctx: CommandContext = {
+          args: Object.create(null),
+          options: Object.create(null),
+          rawInput: Array.isArray(input) ? input.join(" ") : input,
+          rawArgv: Array.isArray(input) ? [...input] : undefined,
+          commandPath: this.registry.getCommandPath(command),
+          shell,
+          stdin,
+          stdout,
+          stderr,
+          signal: new AbortController().signal,
+        };
+        await this.emit("commandError", error, ctx);
+      }
       await this.emit("error", error);
       throw err;
     }
@@ -478,8 +498,14 @@ export class CommandRouter {
       await this.emit("afterExecute", ctx);
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      await this.emit("commandError", error, ctx);
-      await this.emit("error", error);
+      const expected = expectedCancellation?.();
+      const isExpectedCancellation =
+        expected !== undefined &&
+        (error === expected || isPipelineStop(error) || isCancellationError(error));
+      if (!isExpectedCancellation) {
+        await this.emit("commandError", error, ctx);
+        await this.emit("error", error);
+      }
       throw err;
     } finally {
       signal?.removeEventListener("abort", abortFromExternalSignal);
@@ -509,6 +535,8 @@ export class CommandRouter {
     const { shell = null, stderr } = options;
     const stageScopes: CancellationScope[] = segments.map(() => new Set());
     let pipelineFailed = false;
+    let primaryFailure: Error | undefined;
+    let primaryFailureIndex = -1;
     // Marks stages that were aborted purely because a downstream stage finished
     // early (a graceful stop), so their resulting rejection is not treated as a
     // pipeline failure — even if the action surfaces a generic abort error rather
@@ -547,6 +575,8 @@ export class CommandRouter {
         stderr,
         signal: options.signal,
         cancellationScope: stageScopes[i],
+        expectedCancellation: () =>
+          gracefullyStopped[i] ? PipelineStopSignal.instance : primaryFailure,
       })
         .then(() => {
           // Once this stage has completed successfully, close its upstream input
@@ -564,7 +594,7 @@ export class CommandRouter {
             for (let j = 0; j < i; j++) gracefullyStopped[j] = true;
             this.cancelEntries(
               stageScopes.slice(0, i).flatMap((scope) => [...scope]),
-              new PipelineStopSignal(),
+              PipelineStopSignal.instance,
             );
           }
           // Signal end-of-input to the downstream stage.
@@ -577,7 +607,13 @@ export class CommandRouter {
           // downstream stage finished and no longer needs its output. Close its
           // pipes but do NOT fail the pipeline (mirrors a `producer | head` where
           // the producer's SIGPIPE/abort is expected, not an error).
-          if (isPipelineStop(error) || gracefullyStopped[i]) {
+          if (
+            isPipelineStop(error) ||
+            (gracefullyStopped[i] && isCancellationError(error)) ||
+            (pipelineFailed &&
+              i !== primaryFailureIndex &&
+              (error === primaryFailure || isCancellationError(error)))
+          ) {
             if (i > 0 && !pipes[i - 1].destroyed) destroyPipe(pipes[i - 1]);
             if (!isLast && !pipes[i].destroyed) destroyPipe(pipes[i]);
             return;
@@ -588,8 +624,12 @@ export class CommandRouter {
           // forever waiting on a consumer that has already failed.
           if (!pipelineFailed) {
             pipelineFailed = true;
+            primaryFailure = error;
+            primaryFailureIndex = i;
             this.cancelEntries(
-              stageScopes.flatMap((scope) => [...scope]),
+              stageScopes
+                .filter((_, stageIndex) => stageIndex !== i)
+                .flatMap((scope) => [...scope]),
               error,
             );
           }
@@ -605,11 +645,8 @@ export class CommandRouter {
     // observed rather than surfacing as unhandled promise rejections. The first
     // failure is then re-thrown to the caller.
     const settled = await Promise.allSettled(runs);
-    const failure = settled.find(
-      (r) => r.status === "rejected" && !isPipelineStop((r as PromiseRejectedResult).reason),
-    );
-    if (failure) {
-      throw (failure as PromiseRejectedResult).reason;
-    }
+    if (primaryFailure) throw primaryFailure;
+    const failure = settled.find((result) => result.status === "rejected");
+    if (failure) throw (failure as PromiseRejectedResult).reason;
   }
 }
