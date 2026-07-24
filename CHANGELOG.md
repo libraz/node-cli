@@ -5,6 +5,61 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] - 2026-07-24
+
+A correctness and hardening release across parsing, routing, option
+resolution, output, and the interactive shell; no breaking API changes.
+
+### Added
+
+- Export the `PasswordOptions` type for password prompts.
+- Command definitions are validated up front: duplicate argument names and a
+  required argument following an optional one are rejected, and an option
+  cannot be both required and carry a default. Adding aliases or subcommands to
+  a command that has been removed now throws instead of silently detaching.
+- The pack and git-install smoke gates verify the packed `description`, Node.js
+  engine range, and README runtime requirement; the package now ships a
+  `description` field.
+
+### Changed
+
+- The router isolates its diagnostic stderr per execution via
+  `AsyncLocalStorage`, so nested and concurrent programmatic executions no
+  longer share or clobber each other's error stream.
+- Documentation states the Node.js runtime requirement as `>= 22`, matching the
+  package's existing engine floor.
+
+### Fixed
+
+- Parsing treats bare negative numbers as positionals, honors the built-in `-h`
+  inside short-flag clusters, and keeps single quotes literal when splitting
+  pipelines.
+- A second SIGINT escalates to a force quit with exit code 130 and restores the
+  terminal cursor. A graceful pipeline early-stop is no longer reported as a
+  failure, option-syntax errors on a known command surface through
+  `commandError`, and pipeline failure and cancellation propagate to the
+  correct stages only.
+- Option resolution is driven by raw presence and runs defaults through the same
+  built-in coercion as explicit values. Registry alias batches are validated
+  before any mapping is committed, and subtree removal only clears aliases it
+  still owns.
+- Color and table rendering widen emoji and CJK width handling, preserve SGR
+  colors and OSC 8 hyperlinks while sanitizing control characters, and stop
+  consuming row 0 as a header when columns are explicit. Progress restores a
+  hidden cursor on process exit.
+- Password prompts keep their label unmasked across readline redraws and
+  preserve surrounding whitespace. History reads through an `O_NOFOLLOW`
+  descriptor (TOCTOU-safe), strips control characters at both trust boundaries,
+  breaks stale locks by PID and mtime, and saves on SIGTERM. The REPL closes
+  readline before execution, drains pending plugins, cancels mode actions
+  cooperatively, and clears the whole line on Ctrl-C.
+- Completion suggests subcommands only at the matching token boundary, and
+  `AbortError` is treated as a cancellation for a clean message and exit 130.
+
+### Security
+
+- The `actions/checkout` step is pinned to an audited `v7.0.1` release.
+
 ## [1.3.2] - 2026-07-15
 
 ### Added
@@ -249,6 +304,8 @@ These correct previously buggy behavior and may be observable:
 Initial public feature set: interactive shell, subcommands, tab completion,
 color, tables, progress, prompts, logger, events, plugins, and pipes.
 
+[1.3.3]: https://github.com/libraz/node-cli/compare/v1.3.2...v1.3.3
+[1.3.2]: https://github.com/libraz/node-cli/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/libraz/node-cli/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/libraz/node-cli/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/libraz/node-cli/compare/v1.1.0...v1.2.0

@@ -45,7 +45,7 @@ await cli.start();
   "type": "module",
   "bin": { "myapp": "dist/cli.js" },
   "scripts": { "build": "tsc", "start": "node dist/cli.js" },
-  "dependencies": { "@libraz/node-cli": "^1.3.2" },
+  "dependencies": { "@libraz/node-cli": "^1.3.3" },
   "devDependencies": { "@types/node": "^22", "typescript": "^6" }
 }
 ```
