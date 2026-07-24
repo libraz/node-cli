@@ -298,6 +298,12 @@ export class Shell {
         // that point would never receive another close event.
         if (process.stdin.readableEnded) break;
         this.openReadline(this.mode ? [] : this.history.entries());
+        // Pair with the `process.stdin.pause()` above: the reopened readline is
+        // now attached, so resume the input to guarantee buffered lines (and a
+        // pending EOF) flow to it. Attaching a `data` listener does not reliably
+        // un-pause an explicitly paused stream across Node versions, so resume
+        // explicitly rather than relying on that side effect.
+        process.stdin.resume();
       }
     }
 
