@@ -217,6 +217,9 @@ cli.catch((input, { stdout }) => {
 });
 ```
 
+A registered handler also receives input that fails to parse (see `ParseError`
+below) instead of that error being thrown.
+
 ## Programmatic Execution
 
 Execute commands programmatically:
@@ -456,6 +459,7 @@ cli.command("fetch <url>")
 | `InvalidOptionError` | `INVALID_OPTION` | Wrong type or not in choices |
 | `UnknownOptionError` | `UNKNOWN_OPTION` | Unrecognized flag |
 | `ValidationError` | `VALIDATION_ERROR` | Custom validation failed |
+| `ParseError` | `PARSE_ERROR` | Unclosed quote, empty or trailing pipe, unsupported redirection operator |
 | `PromptCancelError` | `PROMPT_CANCELLED` | User cancelled prompt |
 
 All error classes extend `CLIError` which has a `code` property for programmatic handling.

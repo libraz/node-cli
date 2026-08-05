@@ -216,6 +216,9 @@ cli.catch((input, { stdout }) => {
 });
 ```
 
+ハンドラを登録している場合、パースに失敗した入力 (後述の `ParseError`) も例外を投げずに
+このハンドラへ渡されます。
+
 ## プログラム実行
 
 コマンドをプログラムから実行:
@@ -453,6 +456,7 @@ cli.command("fetch <url>")
 | `InvalidOptionError` | `INVALID_OPTION` | 型の不一致または選択肢外 |
 | `UnknownOptionError` | `UNKNOWN_OPTION` | 未認識のフラグ |
 | `ValidationError` | `VALIDATION_ERROR` | カスタムバリデーション失敗 |
+| `ParseError` | `PARSE_ERROR` | 閉じられていないクォート、空または末尾のパイプ、未対応のリダイレクト演算子 |
 | `PromptCancelError` | `PROMPT_CANCELLED` | プロンプトのキャンセル |
 
 すべてのエラークラスは `CLIError` を継承し、プログラムによるハンドリング用の `code` プロパティを持ちます。

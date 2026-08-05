@@ -157,6 +157,10 @@ cli.command("prompt <text>")
 
 コマンドの説明を設定 (ヘルプに表示)。
 
+#### `hidden(hidden?: boolean): this`
+
+このコマンドを生成ヘルプとタブ補完から除外。引数なしで呼ぶと `true` を指定したことになる。除外されたコマンドも実行自体は可能。
+
 #### `option(flags: string, schema?: OptionSchema): this`
 
 コマンドにオプションを追加。
@@ -287,7 +291,9 @@ interface OptionSchema {
 
 | プロパティ | デフォルト | 説明 |
 |-----------|---------|------|
+| `description` | — | ヘルプ出力に表示するこのオプションの説明 |
 | `type` | 推論 | 値の型。`<value>` なしのフラグは `"boolean"`、それ以外は `"string"` と推論 |
+| `alias` | — | 追加の別名。`flags` で宣言した別名とマージされる。先頭の `-` / `--` は除去され、ロング形式で宣言していない別名は 1 文字でなければならない |
 | `required` | `false` | 未提供時にエラーを発生。`default` とは併用不可 |
 | `default` | — | 未指定時だけ使う値。組み込み型変換は適用し、カスタム `parse` は適用しない。ブールオプションは `false` がデフォルト |
 | `choices` | — | 列挙された値に制限 |
@@ -524,6 +530,7 @@ function progress.bar(options: BarOptions): Bar
 | `tick(delta?: number)` | 進捗を加算 (デフォルト: 1) |
 | `finish()` | バーを完了 (100% に設定) |
 | `stop()` | 完了せずに停止 |
+| `[Symbol.dispose]()` | `stop()` の別名。`using` で宣言したバーはスコープを抜けると解放される |
 
 #### BarState
 
@@ -564,6 +571,7 @@ function progress.spinner(options?: SpinnerOptions): Spinner
 | `fail(message?: string)` | バツ印で停止 |
 | `warn(message?: string)` | 警告マークで停止 |
 | `stop()` | ステータスなしで停止 |
+| `[Symbol.dispose]()` | `stop()` の別名。`using` で宣言したスピナーはスコープを抜けると解放される |
 
 ### progress.multi
 
@@ -578,6 +586,18 @@ function progress.multi(): MultiBar
 | `add(options: BarOptions): Bar` | 新しいプログレスバーを追加 |
 | `finish()` | 全バーを完了 |
 | `stop()` | 全バーを停止 |
+| `[Symbol.dispose]()` | `stop()` の別名。`using` で宣言したマルチバーはスコープを抜けると解放される |
+
+### progress.releaseAll
+
+```typescript
+function progress.releaseAll(): void
+```
+
+まだ動作中のインジケーターをすべて停止し、端末のカーソルを復帰します。コマンド実行は
+finalizer でこれを呼ぶため、アクションが例外を投げてもカーソルが隠れたままになることは
+ありません。コマンド外でインジケーターを扱う場合は直接呼び出してください。トップレベル
+export の `releaseAll` としても利用できます。
 
 ---
 
@@ -599,6 +619,7 @@ function prompt.text(message: string, options?: TextOptions): Promise<string>
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
+| `signal` | `AbortSignal` | — | abort されると待機中のプロンプトを `PromptCancelError` で reject |
 
 ### prompt.confirm
 
@@ -613,6 +634,7 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
+| `signal` | `AbortSignal` | — | abort されると待機中のプロンプトを `PromptCancelError` で reject |
 
 ### prompt.select
 
@@ -631,6 +653,7 @@ function prompt.select<T>(
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
+| `signal` | `AbortSignal` | — | abort されると待機中のプロンプトを `PromptCancelError` で reject |
 
 ### prompt.multiselect
 
@@ -651,6 +674,7 @@ function prompt.multiselect<T>(
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
+| `signal` | `AbortSignal` | — | abort されると待機中のプロンプトを `PromptCancelError` で reject |
 
 ### prompt.password
 
@@ -668,6 +692,8 @@ function prompt.password(message: string, options?: PasswordOptions): Promise<st
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
+| `stderr` | `Writable` | `process.stderr` | stdin が TTY で stdout がリダイレクトされている場合のプロンプト出力先 |
+| `signal` | `AbortSignal` | — | abort されると待機中のプロンプトを `PromptCancelError` で reject |
 
 すべてのプロンプトは Ctrl+C または Ctrl+D で `PromptCancelError` を投げる。
 
@@ -730,19 +756,26 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "silent"
 | `InvalidOptionError` | `INVALID_OPTION` | 不正なオプション値 |
 | `UnknownOptionError` | `UNKNOWN_OPTION` | 未認識のフラグ |
 | `ValidationError` | `VALIDATION_ERROR` | カスタムバリデーション失敗 |
+| `ParseError` | `PARSE_ERROR` | 入力をトークン化、またはパイプライン区間へ分割できない |
 | `PromptCancelError` | `PROMPT_CANCELLED` | プロンプトのキャンセル |
 
 追加の構造化フィールド:
 
 | クラス | フィールド |
 |-------|-----------|
-| `CommandNotFoundError` | `input` |
+| `CommandNotFoundError` | `input`、任意の `available` |
 | `MissingArgumentError` | `argName`、任意の `usage` |
 | `ExtraArgumentError` | `extra` |
 | `MissingOptionError` | `optionName` |
 | `InvalidOptionError` | 任意の `optionName`、任意の `value` |
 | `UnknownOptionError` | `flag` |
-| `ValidationError` | 任意の `cause` |
+| `ValidationError` | 任意の `cause`、任意の `optionName` |
+| `ParseError` | 任意の `quote` |
+
+`ParseError` は、閉じられていないクォート (`quote` がどちらかを示します)、空または末尾の
+パイプ、未対応のリダイレクト演算子で発生します。コマンド解決より前に発生するため、
+`catch()` フォールバックハンドラを登録している場合は例外を投げずにそのハンドラへ入力が
+渡されます。
 
 ## パースと端末ユーティリティ
 

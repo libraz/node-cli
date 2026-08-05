@@ -90,11 +90,11 @@ const data = [
 console.log(table(data));
 ```
 
-Output:
+Output (cells are padded to their column width):
 ```
-name     role     active
-Alice    Admin    true
-Bob      User     false
+name   role   active
+Alice  Admin  true
+Bob    User   false
 ```
 
 ### Array of Arrays
@@ -109,7 +109,7 @@ const data = [
 console.log(table(data, { header: true }));
 ```
 
-Array rows are normalized to the widest row and missing cells are padded as empty strings. Empty and header-only data arrays return an empty string.
+Array rows are normalized to the widest row and missing cells are padded as empty strings. An empty data array returns an empty string; an array holding only a header row renders that header row alone.
 
 ### Options
 
@@ -356,6 +356,20 @@ Only one standalone `bar`, `spinner`, or `multi` renderer may own a given stream
 at a time. Starting another one on the same stream before the first is stopped or
 finished throws. Use `progress.multi()` when several indicators must remain
 visible concurrently.
+
+Every indicator implements `[Symbol.dispose]`, so a `using` declaration releases it
+when the scope exits — including when the block exits by throwing (TypeScript 5.2
+or newer):
+
+```typescript
+{
+  using bar = progress.bar({ total: 100, label: "Downloading" });
+  await download((n) => bar.update(n));
+}  // bar.stop() runs here
+```
+
+`progress.releaseAll()` stops every indicator that is still active and restores the
+cursor. Command execution calls it automatically once an action returns or throws.
 
 ### TTY Detection
 

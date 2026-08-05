@@ -157,6 +157,10 @@ Fluent builder returned by `cli.command()`.
 
 Set the command description (shown in help).
 
+#### `hidden(hidden?: boolean): this`
+
+Exclude this command from generated help and tab completion. Defaults to `true` when called with no argument. A hidden command remains fully executable.
+
 #### `option(flags: string, schema?: OptionSchema): this`
 
 Add an option to the command.
@@ -287,7 +291,9 @@ interface OptionSchema {
 
 | Property | Default | Description |
 |----------|---------|-------------|
+| `description` | — | Text shown for this option in help output |
 | `type` | Inferred | Value type. Inferred as `"boolean"` for flags without `<value>`, `"string"` otherwise |
+| `alias` | — | Additional alias or aliases, merged with any declared in `flags`. A leading `-` / `--` is stripped; an alias that is not declared in long form must be exactly one character |
 | `required` | `false` | Throw if not provided. Cannot be combined with `default` |
 | `default` | — | Value used only when absent. Built-in coercion applies, custom `parse` does not. Boolean options default to `false` |
 | `choices` | — | Restrict to listed values |
@@ -527,6 +533,7 @@ function progress.bar(options: BarOptions): Bar
 | `tick(delta?: number)` | Increment progress (default: 1) |
 | `finish()` | Complete the bar (set to 100%) |
 | `stop()` | Stop without completing |
+| `[Symbol.dispose]()` | Alias for `stop()`, so a bar declared with `using` is released at scope exit |
 
 #### BarState
 
@@ -567,6 +574,7 @@ function progress.spinner(options?: SpinnerOptions): Spinner
 | `fail(message?: string)` | Stop with cross |
 | `warn(message?: string)` | Stop with warning |
 | `stop()` | Stop without status |
+| `[Symbol.dispose]()` | Alias for `stop()`, so a spinner declared with `using` is released at scope exit |
 
 ### progress.multi
 
@@ -581,6 +589,18 @@ function progress.multi(): MultiBar
 | `add(options: BarOptions): Bar` | Add a new progress bar |
 | `finish()` | Finish all bars |
 | `stop()` | Stop all bars |
+| `[Symbol.dispose]()` | Alias for `stop()`, so a multi-bar declared with `using` is released at scope exit |
+
+### progress.releaseAll
+
+```typescript
+function progress.releaseAll(): void
+```
+
+Stop every indicator that is still active and restore the terminal cursor. Command
+execution calls this in its finalizer, so an action that throws cannot leave the
+cursor hidden; call it directly when driving indicators outside a command. Also
+available as the top-level export `releaseAll`.
 
 ---
 
@@ -602,6 +622,7 @@ function prompt.text(message: string, options?: TextOptions): Promise<string>
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
+| `signal` | `AbortSignal` | — | Rejects the pending prompt with `PromptCancelError` when aborted |
 
 ### prompt.confirm
 
@@ -616,6 +637,7 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
+| `signal` | `AbortSignal` | — | Rejects the pending prompt with `PromptCancelError` when aborted |
 
 ### prompt.select
 
@@ -634,6 +656,7 @@ function prompt.select<T>(
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
+| `signal` | `AbortSignal` | — | Rejects the pending prompt with `PromptCancelError` when aborted |
 
 ### prompt.multiselect
 
@@ -654,6 +677,7 @@ function prompt.multiselect<T>(
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
+| `signal` | `AbortSignal` | — | Rejects the pending prompt with `PromptCancelError` when aborted |
 
 ### prompt.password
 
@@ -671,6 +695,8 @@ Input is masked with asterisks. Leading and trailing whitespace is preserved by 
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
+| `stderr` | `Writable` | `process.stderr` | Prompt target when stdin is a TTY but stdout is redirected |
+| `signal` | `AbortSignal` | — | Rejects the pending prompt with `PromptCancelError` when aborted |
 
 All prompts throw `PromptCancelError` on Ctrl+C or Ctrl+D.
 
@@ -733,19 +759,26 @@ a suggested `exitCode: number`.
 | `InvalidOptionError` | `INVALID_OPTION` | Bad option value |
 | `UnknownOptionError` | `UNKNOWN_OPTION` | Unrecognized flag |
 | `ValidationError` | `VALIDATION_ERROR` | Custom validation failed |
+| `ParseError` | `PARSE_ERROR` | Input could not be tokenized or split into pipeline stages |
 | `PromptCancelError` | `PROMPT_CANCELLED` | User cancelled prompt |
 
 Additional structured fields:
 
 | Class | Fields |
 |-------|--------|
-| `CommandNotFoundError` | `input` |
+| `CommandNotFoundError` | `input`, optional `available` |
 | `MissingArgumentError` | `argName`, optional `usage` |
 | `ExtraArgumentError` | `extra` |
 | `MissingOptionError` | `optionName` |
 | `InvalidOptionError` | optional `optionName`, optional `value` |
 | `UnknownOptionError` | `flag` |
-| `ValidationError` | optional `cause` |
+| `ValidationError` | optional `cause`, optional `optionName` |
+| `ParseError` | optional `quote` |
+
+`ParseError` covers an unclosed quote (`quote` reports which one), an empty or
+trailing pipe, and an unsupported redirection operator. It is raised before a
+command is resolved, so a registered `catch()` fallback handler receives the input
+instead of the error being thrown.
 
 ## Parsing and terminal utilities
 

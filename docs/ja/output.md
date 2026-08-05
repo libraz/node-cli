@@ -90,11 +90,11 @@ const data = [
 console.log(table(data));
 ```
 
-出力:
+出力（各セルはカラム幅までパディングされます）:
 ```
-name     role     active
-Alice    Admin    true
-Bob      User     false
+name   role   active
+Alice  Admin  true
+Bob    User   false
 ```
 
 ### 配列の配列
@@ -109,7 +109,7 @@ const data = [
 console.log(table(data, { header: true }));
 ```
 
-配列行は最も列数の多い行に合わせ、不足セルを空文字で補います。空のデータ配列とヘッダーだけの配列は空文字列を返します。
+配列行は最も列数の多い行に合わせ、不足セルを空文字で補います。空のデータ配列は空文字列を返します。ヘッダー行だけの配列は、そのヘッダー行のみを出力します。
 
 ### オプション
 
@@ -356,6 +356,19 @@ multi.stop();    // 全バーを停止
 1つだけです。先の renderer を stop / finish する前に同じ stream で別の renderer を
 開始すると例外になります。複数の indicator を同時表示する場合は
 `progress.multi()` を使用してください。
+
+各 indicator は `[Symbol.dispose]` を実装しているため、`using` 宣言にするとスコープを
+抜けるときに解放されます。ブロックが例外で抜けた場合も同様です (TypeScript 5.2 以降)。
+
+```typescript
+{
+  using bar = progress.bar({ total: 100, label: "ダウンロード中" });
+  await download((n) => bar.update(n));
+}  // ここで bar.stop() が実行される
+```
+
+`progress.releaseAll()` はまだ動作中の indicator をすべて停止し、カーソルを復帰します。
+コマンド実行では、アクションが正常終了しても例外を投げても自動的に呼ばれます。
 
 ### TTY 検出
 
