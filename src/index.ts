@@ -1,15 +1,23 @@
 export type { ExecOptions, PluginContext } from "./cli.js";
 export { CLI } from "./cli.js";
 export { CommandBuilder } from "./command/builder.js";
-export { activePipeSegment } from "./command/parser.js";
+export {
+  activePipeSegment,
+  splitPipes,
+  stripOptionPrefix,
+  tokenize,
+} from "./command/parser.js";
 export type { CLIErrorCode } from "./errors.js";
 export {
   CLIError,
   CommandNotFoundError,
   ExtraArgumentError,
+  formatErrorMessage,
   InvalidOptionError,
+  isCancellationError,
   MissingArgumentError,
   MissingOptionError,
+  ParseError,
   PromptCancelError,
   UnknownOptionError,
   ValidationError,
@@ -21,8 +29,11 @@ export {
   createColorizer,
   isColorEnabled,
   resetColorEnabled,
+  sanitizeTerminalText,
   setColorEnabled,
   splitAnsi,
+  splitGraphemes,
+  streamIsTTY,
   stringWidth,
   stripAnsi,
   truncateAnsi,
@@ -37,7 +48,7 @@ export type {
   Spinner,
   SpinnerOptions,
 } from "./output/progress.js";
-export { progress } from "./output/progress.js";
+export { progress, releaseAll, restoreCursor } from "./output/progress.js";
 export type {
   Choice,
   ConfirmOptions,
@@ -51,22 +62,18 @@ export type {
 export { maskInput, prompt } from "./output/prompt.js";
 export type { TableChars, TableOptions, TableStyle } from "./output/table.js";
 export { table } from "./output/table.js";
-export type { ModeConfig } from "./shell/repl.js";
-export { Shell } from "./shell/repl.js";
+export type { CompletionResult } from "./shell/completion.js";
+export type { ModeConfig, Shell } from "./shell/repl.js";
 export type {
   Action,
-  ArgDef,
   CatchContext,
   CLIEventHandler,
   CLIEventMap,
   CLIOptions,
   CommandContext,
-  CommandDefinition,
   Completer,
   CompletionContext,
-  OptionDef,
   OptionSchema,
-  ParseResult,
 } from "./types.js";
 
 import { CLI } from "./cli.js";

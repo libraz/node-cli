@@ -1,3 +1,4 @@
+import { coerceOptionValue } from "../option/resolver.js";
 import type {
   Action,
   CommandContext,
@@ -43,6 +44,12 @@ export class CommandBuilder {
     this.definition = registry.register(definition, this.parentPath);
   }
 
+  private assertRegistered(): void {
+    if (!this.registry.isRegistered(this.definition, this.parentPath)) {
+      throw new Error(`Cannot configure detached command "${this.definition.name}"`);
+    }
+  }
+
   /**
    * Sets a human-readable description for this command, used in help output.
    *
@@ -50,7 +57,15 @@ export class CommandBuilder {
    * @returns This builder instance for chaining.
    */
   description(text: string): this {
+    this.assertRegistered();
     this.definition.description = text;
+    return this;
+  }
+
+  /** Excludes this command from generated help and completion. */
+  hidden(hidden = true): this {
+    this.assertRegistered();
+    this.definition.hidden = hidden;
     return this;
   }
 
@@ -66,7 +81,8 @@ export class CommandBuilder {
    * @returns This builder instance for chaining.
    */
   option(flags: string, schema: OptionSchema = {}): this {
-    const { long, aliases, takesValue } = parseOptionFlags(flags);
+    this.assertRegistered();
+    const { long, aliases, longAliases, takesValue, valueName } = parseOptionFlags(flags);
 
     // Clone the caller's schema so we never mutate their object.
     const resolved: OptionSchema = { ...schema };
@@ -96,8 +112,32 @@ export class CommandBuilder {
       resolved.default = false;
     }
 
+    if (resolved.default !== undefined) {
+      if (
+        resolved.default === null &&
+        (resolved.type === "boolean" || resolved.type === "number")
+      ) {
+        throw new Error(`Invalid default for --${long}: null is not a ${resolved.type}`);
+      }
+      try {
+        resolved.default = coerceOptionValue(resolved.default, resolved.type, long);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Invalid default for --${long}: ${message}`);
+      }
+      if (resolved.choices) {
+        const allowed = resolved.choices.map(String);
+        const values = Array.isArray(resolved.default) ? resolved.default : [resolved.default];
+        if (values.some((value) => !allowed.includes(String(value)))) {
+          throw new Error(
+            `Invalid default for --${long}: value is not one of the declared choices`,
+          );
+        }
+      }
+    }
+
     // Merge schema-declared aliases (e.g. { alias: "p" }) into the alias list.
-    const mergedAliases = [...aliases];
+    const mergedAliases = [...aliases, ...longAliases];
     if (resolved.alias) {
       const extra = Array.isArray(resolved.alias) ? resolved.alias : [resolved.alias];
       for (const a of extra) {
@@ -109,12 +149,22 @@ export class CommandBuilder {
     }
 
     if (!long) throw new Error(`Invalid option flags: missing option name in "${flags}"`);
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(long)) {
+      throw new Error(`Invalid option name "${long}"`);
+    }
     for (const alias of mergedAliases) {
-      if (alias.length !== 1) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(alias)) {
+        throw new Error(`Invalid option alias "${alias}"`);
+      }
+      if (!longAliases.includes(alias) && alias.length !== 1) {
         throw new Error(`Option alias "-${alias}" must be exactly one character`);
       }
     }
 
+    // Redefinition is intentional: plugins can refine a built-in option without
+    // first removing it. Drop the previous definition so its own aliases do not
+    // collide, while aliases owned by other options remain protected.
+    this.definition.options.delete(long);
     const candidateNames = new Set([long, ...mergedAliases]);
     for (const existing of this.definition.options.values()) {
       for (const existingName of [existing.long, ...existing.aliases]) {
@@ -128,6 +178,7 @@ export class CommandBuilder {
       long,
       aliases: mergedAliases,
       takesValue: finalTakesValue,
+      valueName,
       schema: resolved,
     });
 
@@ -141,6 +192,13 @@ export class CommandBuilder {
    * @returns This builder instance for chaining.
    */
   action(fn: Action): this {
+    this.assertRegistered();
+    if (this.definition.argDefs.length > 0 && this.definition.subcommands.size > 0) {
+      process.emitWarning(
+        `Command "${this.definition.name}" has positional arguments, so its subcommands cannot be dispatched once an action is set`,
+        { code: "NODE_CLI_UNREACHABLE_SUBCOMMAND" },
+      );
+    }
     this.definition.action = fn;
     return this;
   }
@@ -152,6 +210,7 @@ export class CommandBuilder {
    * @returns This builder instance for chaining.
    */
   complete(fn: Completer): this {
+    this.assertRegistered();
     this.definition.completer = fn;
     return this;
   }
@@ -163,6 +222,7 @@ export class CommandBuilder {
    * @returns This builder instance for chaining.
    */
   alias(...names: string[]): this {
+    this.assertRegistered();
     const aliases = [...(this.definition.aliases ?? [])];
     // Deduplicate against existing aliases and the command's own name.
     for (const name of names) {
@@ -183,6 +243,7 @@ export class CommandBuilder {
    * @returns This builder instance for chaining.
    */
   validate(fn: (ctx: CommandContext) => void | Promise<void>): this {
+    this.assertRegistered();
     this.definition.validate = fn;
     return this;
   }
@@ -194,6 +255,7 @@ export class CommandBuilder {
    * @returns This builder instance for chaining.
    */
   cancel(fn: (ctx: CommandContext) => void): this {
+    this.assertRegistered();
     this.definition.cancelHandler = fn;
     return this;
   }
@@ -214,9 +276,7 @@ export class CommandBuilder {
    * @returns A new {@link CommandBuilder} for configuring the subcommand.
    */
   command(definitionStr: string): CommandBuilder {
-    if (!this.registry.isRegistered(this.definition, this.parentPath)) {
-      throw new Error(`Cannot add subcommands to detached command "${this.definition.name}"`);
-    }
+    this.assertRegistered();
     const fullParentPath = [...this.parentPath, this.definition.name];
     return new CommandBuilder(this.registry, definitionStr, fullParentPath);
   }

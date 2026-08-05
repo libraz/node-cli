@@ -40,8 +40,8 @@ let _enabled: boolean | null = null;
 /**
  * Determines whether a value looks like a TTY stream.
  */
-function streamIsTTY(stream: NodeJS.WritableStream): boolean {
-  return "isTTY" in stream && (stream as NodeJS.WriteStream).isTTY === true;
+export function streamIsTTY(stream: object): boolean {
+  return (stream as { isTTY?: unknown }).isTTY === true;
 }
 
 /**
@@ -112,8 +112,11 @@ function applyStyle(text: string, codes: [number, number][], enabled: boolean): 
     const [open, close] = codes[k];
     const openSeq = `${esc}${open}m`;
     const closeSeq = `${esc}${close}m`;
-    // Re-open this style wherever a nested fragment closed it.
-    result = openSeq + result.split(closeSeq).join(openSeq) + closeSeq;
+    // A close code can be shared by different styles (notably bold and dim
+    // both use 22). Preserve the nested close, then reopen this outer style:
+    // replacing it outright would leave the inner style active for following
+    // text.
+    result = openSeq + result.split(closeSeq).join(closeSeq + openSeq) + closeSeq;
   }
   return result;
 }
@@ -135,11 +138,10 @@ function createChain(accumulated: [number, number][], isEnabled: () => boolean):
 
   return new Proxy(apply, {
     get(target, prop: string | symbol): unknown {
-      // Pass through symbol and inherited props (e.g. then/Symbol.iterator) so
-      // the proxy is safe to introspect; only reject misspelled string styles.
+      // Symbols are used by language/runtime protocols; string properties are
+      // styles only, so inherited Function/Object members must not leak through.
       if (typeof prop !== "string") return Reflect.get(target, prop);
       if (!Object.hasOwn(styles, prop)) {
-        if (prop in target) return Reflect.get(target, prop);
         throw new Error(`Unknown style: ${prop}`);
       }
       return createChain([...accumulated, styles[prop]], isEnabled);
@@ -152,7 +154,6 @@ function createColorProxy(isEnabled: () => boolean): Record<string, ColorFn> {
     get(target, prop: string | symbol): unknown {
       if (typeof prop !== "string") return Reflect.get(target, prop);
       if (!Object.hasOwn(styles, prop)) {
-        if (prop in target) return Reflect.get(target, prop);
         throw new Error(`Unknown style: ${prop}`);
       }
       return createChain([styles[prop]], isEnabled);
@@ -231,10 +232,23 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
   const raw = strings.reduce((acc, str, i) => acc + str + (i < tokens.length ? tokens[i] : ""), "");
 
   const enabled = isColorEnabled();
-  const formatInline = (text: string, nesting = 0): string => {
+  const formatInline = (
+    text: string,
+    nesting = 0,
+    activeCodes: [number, number][] = [],
+  ): string => {
     if (nesting > 64) throw new Error("Inline color markup nesting exceeds 64 levels");
     let result = "";
     for (let i = 0; i < text.length; i++) {
+      const token = tokens.find((candidate) => text.startsWith(candidate, i));
+      if (token) {
+        // Values are substituted after inline styles have been rendered. If an
+        // interpolated ANSI fragment closes a shared color/style code, reopen
+        // every surrounding inline style before the following literal text.
+        result += token + activeCodes.map(([open]) => `\x1b[${open}m`).join("");
+        i += token.length - 1;
+        continue;
+      }
       if (text[i] !== "{") {
         result += text[i];
         continue;
@@ -266,7 +280,10 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
       }
 
       const codes = names.map((name) => styles[name]);
-      const inner = formatInline(text.slice(styleEnd + 1, end), nesting + 1);
+      const inner = formatInline(text.slice(styleEnd + 1, end), nesting + 1, [
+        ...activeCodes,
+        ...codes,
+      ]);
       result += applyStyle(inner, codes, enabled);
       i = end;
     }
@@ -391,7 +408,10 @@ export function sanitizeTerminalText(
  */
 export function stringWidth(text: string): number {
   const stripped = stripAnsi(text);
-  return splitGraphemes(stripped).reduce((width, grapheme) => width + graphemeWidth(grapheme), 0);
+  if (/^[\x20-\x7e]*$/.test(stripped)) return stripped.length;
+  let width = 0;
+  for (const grapheme of iterateGraphemes(stripped)) width += graphemeWidth(grapheme);
+  return width;
 }
 
 /**
@@ -431,22 +451,109 @@ function getSegmenter(): Intl.Segmenter | null {
 
 /** Splits visible text into user-perceived grapheme clusters. */
 export function splitGraphemes(text: string): string[] {
+  return [...iterateGraphemes(text)];
+}
+
+/** Iterates graphemes without materializing a complete array for large text. */
+function* iterateGraphemes(text: string): Iterable<string> {
   const segmenter = getSegmenter();
   if (segmenter) {
-    return [...segmenter.segment(text)].map((segment) => segment.segment);
+    for (const segment of segmenter.segment(text)) yield segment.segment;
+    return;
   }
-  return [...text];
+  yield* text;
+}
+
+/**
+ * Appends the terminal escapes required to close styling or an OSC 8 hyperlink
+ * that remains active at the end of text. Structured renderers use this at
+ * cell boundaries so untrusted content cannot style or link their frame.
+ */
+export function closeAnsiState(text: string): string {
+  const active = new Set<string>();
+  let hasOpenHyperlink = false;
+
+  for (const segment of splitAnsi(text)) {
+    if (!segment.ansi) continue;
+    if (segment.text.startsWith("\x1b[") && segment.text.endsWith("m")) {
+      const params = segment.text
+        .slice(2, -1)
+        .split(";")
+        .map((value) => (value === "" ? 0 : Number(value)));
+      for (let index = 0; index < params.length; index++) {
+        const code = params[index];
+        if (!Number.isFinite(code)) continue;
+        if (code === 0) {
+          active.clear();
+        } else if (code === 1 || code === 2) {
+          active.add("intensity");
+        } else if (code === 22) {
+          active.delete("intensity");
+        } else if (code === 3) {
+          active.add("italic");
+        } else if (code === 23) {
+          active.delete("italic");
+        } else if (code === 4 || code === 21) {
+          active.add("underline");
+        } else if (code === 24) {
+          active.delete("underline");
+        } else if (code === 5 || code === 6) {
+          active.add("blink");
+        } else if (code === 25) {
+          active.delete("blink");
+        } else if (code === 7) {
+          active.add("inverse");
+        } else if (code === 27) {
+          active.delete("inverse");
+        } else if (code === 8) {
+          active.add("conceal");
+        } else if (code === 28) {
+          active.delete("conceal");
+        } else if (code === 9) {
+          active.add("strikethrough");
+        } else if (code === 29) {
+          active.delete("strikethrough");
+        } else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+          active.add("foreground");
+        } else if (code === 39) {
+          active.delete("foreground");
+        } else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+          active.add("background");
+        } else if (code === 49) {
+          active.delete("background");
+        } else if (code === 38 || code === 48 || code === 58) {
+          active.add(code === 48 ? "background" : "foreground");
+          const mode = params[index + 1];
+          index += mode === 2 ? 4 : mode === 5 ? 2 : 0;
+        } else if (code === 59) {
+          active.delete("foreground");
+        } else if (code === 51 || code === 52) {
+          active.add("frame");
+        } else if (code === 54) {
+          active.delete("frame");
+        } else if (code === 53) {
+          active.add("overline");
+        } else if (code === 55) {
+          active.delete("overline");
+        }
+      }
+    } else if (segment.text.startsWith("\x1b]8;;")) {
+      hasOpenHyperlink = !["\x1b]8;;\x07", "\x1b]8;;\x1b\\"].includes(segment.text);
+    }
+  }
+
+  return text + (hasOpenHyperlink ? "\x1b]8;;\x1b\\" : "") + (active.size > 0 ? "\x1b[0m" : "");
 }
 
 /** Truncates terminal text without splitting graphemes or leaking active ANSI state. */
 export function truncateAnsi(text: string, maxWidth: number, marker = "…"): string {
   if (maxWidth <= 0) return "";
-  if (stringWidth(text) <= maxWidth) return text;
+  if (stringWidth(text) <= maxWidth) return closeAnsiState(text);
 
   const takePlain = (value: string, widthLimit: number) => {
     let width = 0;
     let result = "";
-    for (const grapheme of splitGraphemes(value)) {
+    for (const grapheme of iterateGraphemes(value)) {
       const nextWidth = graphemeWidth(grapheme);
       if (width + nextWidth > widthLimit) break;
       result += grapheme;
@@ -459,28 +566,19 @@ export function truncateAnsi(text: string, maxWidth: number, marker = "…"): st
   const contentLimit = maxWidth - stringWidth(fittedMarker);
   let visibleWidth = 0;
   let result = "";
-  let hasSgr = false;
-  let hasOpenHyperlink = false;
   outer: for (const segment of splitAnsi(text)) {
     if (segment.ansi) {
       result += segment.text;
-      if (segment.text.startsWith("\x1b[") && segment.text.endsWith("m")) hasSgr = true;
-      if (segment.text.startsWith("\x1b]8;;")) {
-        hasOpenHyperlink = !["\x1b]8;;\x07", "\x1b]8;;\x1b\\"].includes(segment.text);
-      }
       continue;
     }
-    for (const grapheme of splitGraphemes(segment.text)) {
+    for (const grapheme of iterateGraphemes(segment.text)) {
       const nextWidth = graphemeWidth(grapheme);
       if (visibleWidth + nextWidth > contentLimit) break outer;
       result += grapheme;
       visibleWidth += nextWidth;
     }
   }
-  result += fittedMarker;
-  if (hasOpenHyperlink) result += "\x1b]8;;\x1b\\";
-  if (hasSgr) result += "\x1b[0m";
-  return result;
+  return closeAnsiState(result + fittedMarker);
 }
 
 /**
@@ -517,8 +615,10 @@ function isWide(code: number): boolean {
   return (
     (code >= 0x1100 && code <= 0x115f) || // Hangul Jamo
     (code >= 0x2329 && code <= 0x232a) || // angle brackets
-    (code >= 0x2600 && code <= 0x26ff) || // misc symbols
-    (code >= 0x2700 && code <= 0x27bf) || // dingbats
+    code === 0x231a || // watch
+    code === 0x231b || // hourglass
+    code === 0x2b50 || // star
+    code === 0x2b55 || // heavy circle
     (code >= 0x2e80 && code <= 0xa4cf) || // CJK radicals … Yi
     (code >= 0xac00 && code <= 0xd7a3) || // Hangul syllables
     (code >= 0xf900 && code <= 0xfaff) || // CJK compatibility ideographs

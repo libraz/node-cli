@@ -5,10 +5,11 @@ import {
   ExtraArgumentError,
   isCancellationError,
   MissingArgumentError,
+  ParseError,
 } from "../errors.js";
 import { formatUsage, type HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
-import { restoreCursor } from "../output/progress.js";
+import { releaseAll, restoreCursor } from "../output/progress.js";
 import type { Shell } from "../shell/repl.js";
 import type { CatchContext, CLIEventMap, CommandContext, CommandDefinition } from "../types.js";
 import { parse, splitPipes, tokenize } from "./parser.js";
@@ -26,6 +27,10 @@ class PipelineStopSignal extends Error {
     super("pipeline stage stopped early");
     this.name = "PipelineStopSignal";
   }
+}
+
+function isAbortError(error: Error): boolean {
+  return error.name === "AbortError";
 }
 
 /** True when a value is a {@link PipelineStopSignal} (the graceful-stop marker). */
@@ -221,7 +226,7 @@ export class CommandRouter {
       onInterrupt?: () => boolean;
       stderr?: Writable;
     } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     // Where the "press Ctrl-C again" hint is written. For command execution the
     // router already tracks the in-flight stderr; a mode action supplies its own.
     const hintStream = options.stderr ?? this.stderrContext.getStore() ?? process.stderr;
@@ -276,6 +281,7 @@ export class CommandRouter {
     process.on("SIGINT", onSigint);
     try {
       await action();
+      return interruptRequested;
     } finally {
       process.removeListener("SIGINT", onSigint);
     }
@@ -304,7 +310,11 @@ export class CommandRouter {
     } = {},
   ): Promise<void> {
     const stderr = options.stderr ?? process.stderr;
-    await this.stderrContext.run(stderr, () => this.executeInternal(input, options));
+    try {
+      await this.stderrContext.run(stderr, () => this.executeInternal(input, options));
+    } finally {
+      releaseAll();
+    }
   }
 
   private async executeInternal(
@@ -335,8 +345,12 @@ export class CommandRouter {
         segments = splitPipes(input);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        if (error instanceof ParseError && this.catchHandler) {
+          await this.catchHandler(input, { stdout, stderr });
+          return;
+        }
         await this.emit("error", error);
-        throw err;
+        throw error;
       }
       if (segments.length > 1) {
         await this.executePiped(segments, { shell, stdin, stderr, stdout, signal });
@@ -345,7 +359,18 @@ export class CommandRouter {
     }
 
     // Built-in --version / -V interception (before command resolution).
-    const tokens = Array.isArray(input) ? input : tokenize(input);
+    let tokens: string[];
+    try {
+      tokens = Array.isArray(input) ? input : tokenize(input);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (error instanceof ParseError && this.catchHandler) {
+        await this.catchHandler(Array.isArray(input) ? input.join(" ") : input, { stdout, stderr });
+        return;
+      }
+      await this.emit("error", error);
+      throw error;
+    }
     if (this.version !== undefined && tokens.length === 1) {
       if (tokens[0] === "--version" || tokens[0] === "-V") {
         stdout.write(`${this.version}\n`);
@@ -388,7 +413,7 @@ export class CommandRouter {
         await this.emit("commandError", error, ctx);
       }
       await this.emit("error", error);
-      throw err;
+      throw error;
     }
 
     // Empty input
@@ -401,7 +426,7 @@ export class CommandRouter {
           } catch (err) {
             const error = err instanceof Error ? err : new Error(String(err));
             await this.emit("error", error);
-            throw err;
+            throw error;
           }
           return;
         }
@@ -413,6 +438,29 @@ export class CommandRouter {
     }
 
     const command = result.command as CommandDefinition;
+
+    // An actionless command with children is a command group, not a command
+    // accepting arbitrary positional input. Report an unknown child uniformly
+    // so nested `catch()` fallbacks get the same opportunity as top-level ones.
+    if (!command.action && command.subcommands.size > 0 && result.extraArgs?.length) {
+      const rawInput = Array.isArray(input) ? input.join(" ") : input;
+      if (this.catchHandler) {
+        try {
+          await this.catchHandler(rawInput, { stdout, stderr });
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          await this.emit("error", error);
+          throw error;
+        }
+        return;
+      }
+      const path = [...this.registry.getCommandPath(command), result.extraArgs[0]].join(" ");
+      const err = new CommandNotFoundError(path, {
+        available: [...command.subcommands.keys()].sort(),
+      });
+      await this.emit("error", err);
+      throw err;
+    }
 
     // Check --help flag
     if (result.builtInHelp) {
@@ -501,12 +549,12 @@ export class CommandRouter {
       const expected = expectedCancellation?.();
       const isExpectedCancellation =
         expected !== undefined &&
-        (error === expected || isPipelineStop(error) || isCancellationError(error));
+        (error === expected || isPipelineStop(error) || isCancellationError(error, ctx.signal));
       if (!isExpectedCancellation) {
         await this.emit("commandError", error, ctx);
         await this.emit("error", error);
       }
-      throw err;
+      throw error;
     } finally {
       signal?.removeEventListener("abort", abortFromExternalSignal);
       cancellationScope?.delete(activeEntry);
@@ -609,10 +657,10 @@ export class CommandRouter {
           // the producer's SIGPIPE/abort is expected, not an error).
           if (
             isPipelineStop(error) ||
-            (gracefullyStopped[i] && isCancellationError(error)) ||
+            (gracefullyStopped[i] && isAbortError(error)) ||
             (pipelineFailed &&
               i !== primaryFailureIndex &&
-              (error === primaryFailure || isCancellationError(error)))
+              (error === primaryFailure || isAbortError(error)))
           ) {
             if (i > 0 && !pipes[i - 1].destroyed) destroyPipe(pipes[i - 1]);
             if (!isLast && !pipes[i].destroyed) destroyPipe(pipes[i]);

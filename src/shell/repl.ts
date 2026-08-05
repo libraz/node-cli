@@ -2,6 +2,8 @@ import { createInterface, type Interface } from "node:readline/promises";
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
 import { formatErrorMessage, isCancellationError } from "../errors.js";
+import { streamIsTTY } from "../output/color.js";
+import { releaseAll } from "../output/progress.js";
 import type { CompletionResult } from "./completion.js";
 import { ShellCompleter } from "./completion.js";
 import { History } from "./history.js";
@@ -41,12 +43,18 @@ export interface ModeConfig {
 
 export class Shell {
   private readonly router: CommandRouter;
+  private readonly registry: CommandRegistry;
   private promptStr: string;
   private readonly banner: string;
   private readonly history: History;
   private readonly historySize: number;
   private readonly completer: ShellCompleter;
   private rl?: Interface;
+  /** Lines received while a command is being scheduled or executed. */
+  private readonly pendingLines: string[] = [];
+  /** Unsubmitted text that is prepended to the next completed readline input. */
+  private pendingPartialLine?: string;
+  private pendingLineResolver?: (line: string | null) => void;
   private running = false;
   private reopeningReadline = false;
   private mode: ModeConfig | null = null;
@@ -75,6 +83,7 @@ export class Shell {
     beforeExecute?: () => Promise<void>;
   }) {
     this.router = options.router;
+    this.registry = options.registry;
     this.promptStr = options.prompt;
     this.banner = options.banner ?? "";
     this.beforeExecute = options.beforeExecute;
@@ -108,14 +117,36 @@ export class Shell {
       history: activeHistory,
       completer: mode
         ? mode.completer
-          ? (line: string) => mode.completer?.(line) ?? [[], line]
+          ? (line: string) =>
+              Promise.resolve()
+                .then(() => mode.completer?.(line) ?? ([[], line] as CompletionResult))
+                .catch((): CompletionResult => [[], line])
           : undefined
         : (line: string) => this.completer.complete(line),
-      terminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
+      terminal: streamIsTTY(process.stdin) && streamIsTTY(process.stdout),
     });
     this.rl.on("close", () => {
+      const resolve = this.pendingLineResolver;
+      this.pendingLineResolver = undefined;
+      resolve?.(null);
       if (!this.reopeningReadline && !this.mode) {
         this.running = false;
+      }
+    });
+    // Keep this listener installed for the lifetime of the readline instance.
+    // A terminal paste can produce several `line` events in one input turn;
+    // using a one-shot listener would accept the first and silently discard the
+    // rest before the shell loop gets a chance to subscribe again.
+    this.rl.on("line", (line: string) => {
+      const pendingPartialLine = this.pendingPartialLine;
+      this.pendingPartialLine = undefined;
+      const completeLine = pendingPartialLine === undefined ? line : `${pendingPartialLine}${line}`;
+      const resolve = this.pendingLineResolver;
+      if (resolve) {
+        this.pendingLineResolver = undefined;
+        resolve(completeLine);
+      } else {
+        this.pendingLines.push(completeLine);
       }
     });
     // Ctrl+C at the prompt cancels the current line instead of exiting the shell.
@@ -139,23 +170,27 @@ export class Shell {
    * Returns `null` on EOF / close.
    */
   private readNextLine(): Promise<string | null> {
+    const line = this.pendingLines.shift();
+    if (line !== undefined) return Promise.resolve(line);
+    if (!this.rl) return Promise.resolve(null);
     return new Promise<string | null>((resolve) => {
-      const rl = this.rl;
-      if (!rl) {
-        resolve(null);
-        return;
-      }
-      const onLine = (line: string) => {
-        rl.off("close", onClose);
-        resolve(line);
-      };
-      const onClose = () => {
-        rl.off("line", onLine);
-        resolve(null);
-      };
-      rl.once("line", onLine);
-      rl.once("close", onClose);
+      this.pendingLineResolver = resolve;
     });
+  }
+
+  /**
+   * Releases readline before executing a command without losing a partially
+   * typed final line that readline has already buffered.
+   */
+  private closeReadlineForExecution(): void {
+    const rl = this.rl;
+    if (!rl) return;
+    const partialLine = rl.line;
+    this.reopeningReadline = true;
+    rl.close();
+    this.reopeningReadline = false;
+    this.rl = undefined;
+    if (partialLine.length > 0) this.pendingPartialLine = partialLine;
   }
 
   /**
@@ -169,15 +204,51 @@ export class Shell {
 
     this.running = true;
 
+    // Readline owns Ctrl-C while it is open and CommandRouter installs a
+    // cancellation handler while an action runs. Between those two states we
+    // briefly close/reopen readline; keep a process-level listener registered
+    // for the shell lifetime so Ctrl-C in that hand-off cannot trigger Node's
+    // default process termination.
+    const onSigintGap = () => undefined;
+    process.on("SIGINT", onSigintGap);
+
     // Persist history on SIGTERM (e.g. a process manager stopping the app) so a
     // session terminated between the end-of-loop saves does not lose its history.
     // The normal exit path still saves below; this only covers abnormal teardown.
+    let terminating = false;
     const onSigterm = () => {
-      void this.history.save().finally(() => {
-        process.exit(143); // 128 + SIGTERM
-      });
+      if (terminating) return;
+      terminating = true;
+      // Match Ctrl-C's cooperative cancellation path before the conventional
+      // SIGTERM exit. A short grace period lets handlers release locks and
+      // temporary resources without allowing a hung command to block shutdown.
+      this.router.triggerCancel();
+      setTimeout(() => {
+        void (async () => {
+          await this.history.save();
+          await this.router.emit("exit");
+          process.exit(143); // 128 + SIGTERM
+        })();
+      }, 200);
     };
     process.on("SIGTERM", onSigterm);
+
+    // A REPL is a long-lived session: asynchronous work started by a command
+    // can reject after its command boundary has returned. Keep those process
+    // failures visible without silently ending the whole interactive session.
+    // These handlers are scoped to this Shell instance and removed below so an
+    // embedding application retains its normal process-level policy outside a
+    // running REPL.
+    const onUnhandledRejection = (reason: unknown) => {
+      releaseAll();
+      this.reportError(reason);
+    };
+    const onUncaughtException = (error: Error) => {
+      releaseAll();
+      this.reportError(error);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    process.on("uncaughtException", onUncaughtException);
 
     if (this.banner) {
       process.stdout.write(`${this.banner}\n`);
@@ -206,7 +277,7 @@ export class Shell {
         continue;
       }
 
-      if (trimmed === "exit" || trimmed === "quit") {
+      if ((trimmed === "exit" || trimmed === "quit") && !this.registry.resolve([trimmed])) {
         if (this.mode) {
           this.exitMode();
           this.reopeningReadline = true;
@@ -224,10 +295,7 @@ export class Shell {
       // `await` runs, an open readline would consume the next buffered line and
       // drop it. It also frees stdin for commands that use prompt.* or create
       // their own readline interface.
-      this.reopeningReadline = true;
-      this.rl?.close();
-      this.reopeningReadline = false;
-      this.rl = undefined;
+      this.closeReadlineForExecution();
       process.stdin.pause();
 
       // Only persist top-level commands; mode sub-REPL input (which may be
@@ -247,48 +315,58 @@ export class Shell {
         }
       }
 
-      if (this.mode) {
-        // Mode actions bypass the router's command execution, so cancellation is
-        // driven by a dedicated controller: the first Ctrl-C aborts this signal
-        // (cooperative), a second force-quits the process.
-        const controller = new AbortController();
-        try {
-          await this.router.runWithSigintCancel(
-            async () => {
-              await this.mode?.action(trimmed, {
-                stdout: process.stdout,
-                stderr: process.stderr,
-                signal: controller.signal,
-              });
-            },
-            {
-              stderr: process.stderr,
-              onInterrupt: () => {
-                if (controller.signal.aborted) return false;
-                controller.abort();
-                return true;
+      try {
+        if (this.mode) {
+          // Mode actions bypass the router's command execution, so cancellation is
+          // driven by a dedicated controller: the first Ctrl-C aborts this signal
+          // (cooperative), a second force-quits the process.
+          const controller = new AbortController();
+          try {
+            await this.router.runWithSigintCancel(
+              async () => {
+                await this.mode?.action(trimmed, {
+                  stdout: process.stdout,
+                  stderr: process.stderr,
+                  signal: controller.signal,
+                });
               },
-            },
-          );
-        } catch (err) {
-          this.reportError(err);
+              {
+                stderr: process.stderr,
+                onForceQuit: () => void this.router.emit("exit"),
+                onInterrupt: () => {
+                  if (controller.signal.aborted) return false;
+                  controller.abort();
+                  return true;
+                },
+              },
+            );
+          } catch (err) {
+            this.reportError(err);
+          }
+        } else {
+          try {
+            // Drain any pending async plugins (registered but not yet initialized)
+            // before running, so a late plugin failure surfaces instead of showing
+            // up only as a missing command.
+            if (this.beforeExecute) await this.beforeExecute();
+            await this.router.runWithSigintCancel(
+              async () => {
+                await this.router.execute(trimmed, {
+                  shell: this,
+                  stdout: process.stdout,
+                  stderr: process.stderr,
+                });
+              },
+              { onForceQuit: () => void this.router.emit("exit") },
+            );
+          } catch (err) {
+            this.reportError(err);
+          }
         }
-      } else {
-        try {
-          // Drain any pending async plugins (registered but not yet initialized)
-          // before running, so a late plugin failure surfaces instead of showing
-          // up only as a missing command.
-          if (this.beforeExecute) await this.beforeExecute();
-          await this.router.runWithSigintCancel(async () => {
-            await this.router.execute(trimmed, {
-              shell: this,
-              stdout: process.stdout,
-              stderr: process.stderr,
-            });
-          });
-        } catch (err) {
-          this.reportError(err);
-        }
+      } finally {
+        // Mode actions do not run through CommandRouter.execute(), so they need
+        // the same unconditional progress cleanup as ordinary commands.
+        releaseAll();
       }
 
       // Recreate readline with updated history for the next prompt cycle.
@@ -308,6 +386,9 @@ export class Shell {
     }
 
     process.removeListener("SIGTERM", onSigterm);
+    process.removeListener("SIGINT", onSigintGap);
+    process.removeListener("unhandledRejection", onUnhandledRejection);
+    process.removeListener("uncaughtException", onUncaughtException);
     await this.history.save();
     await this.router.emit("exit");
     if (this.rl) {

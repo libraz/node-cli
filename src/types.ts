@@ -60,6 +60,8 @@ export interface OptionDef {
   aliases: string[];
   /** Whether the option expects a value (true) or is a boolean flag (false). */
   takesValue: boolean;
+  /** Placeholder name shown for a value-taking option in help output. */
+  valueName?: string;
   /** The schema describing this option's constraints. */
   schema: OptionSchema;
 }
@@ -95,6 +97,8 @@ export interface CommandDefinition {
   subcommands: Map<string, CommandDefinition>;
   /** Human-readable description of the command. */
   description?: string;
+  /** Excludes the command from generated help and completion. */
+  hidden?: boolean;
   /** Completion provider for this command. */
   completer?: Completer;
   /** Reference to the parent command definition, if any. */
@@ -143,9 +147,9 @@ export type CLIEventHandler<K extends keyof CLIEventMap> = CLIEventMap[K];
  * Context passed to a command's action handler at execution time.
  */
 export interface CommandContext {
-  /** Parsed positional arguments keyed by argument name. */
+  /** Parsed positional arguments keyed by argument name. This is a null-prototype record. */
   args: Record<string, unknown>;
-  /** Parsed options keyed by option long-name. */
+  /** Parsed options keyed by option long-name. This is a null-prototype record. */
   options: Record<string, unknown>;
   /** The original raw input string. */
   rawInput: string;
@@ -196,10 +200,12 @@ export interface CompletionContext {
   commandPath: string[];
   /** Positional arguments parsed so far. */
   args: Record<string, unknown>;
-  /** Options parsed so far. */
+  /** Raw option values parsed so far; coercion, defaults, and validation are not applied during completion. */
   options: Record<string, unknown>;
   /** Number of consecutive Tab presses (1-based). Resets on any other input. */
   iteration: number;
+  /** Aborted when the completion deadline expires. */
+  signal: AbortSignal;
 }
 
 // ── CLI Options ──

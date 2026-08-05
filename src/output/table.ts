@@ -1,4 +1,10 @@
-import { color as c, sanitizeTerminalText, stringWidth, truncateAnsi } from "./color.js";
+import {
+  color as c,
+  closeAnsiState,
+  sanitizeTerminalText,
+  stringWidth,
+  truncateAnsi,
+} from "./color.js";
 
 /**
  * Custom border characters for table rendering.
@@ -192,6 +198,28 @@ function resolveChars(options: TableOptions): Required<TableChars> {
   return base;
 }
 
+type TableLayout = {
+  border: NonNullable<TableOptions["border"]>;
+  chars: Required<TableChars>;
+  padLeft: number;
+  padRight: number;
+  colPadding: number;
+};
+
+/** Resolves border characters and every padding value shared by sizing and rendering. */
+function resolveLayout(options: TableOptions): TableLayout {
+  const border = options.chars ? (options.border ?? "custom") : (options.border ?? "none");
+  const isBordered = border !== "none" && border !== "simple";
+  const style = options.style ?? {};
+  return {
+    border,
+    chars: resolveChars(options),
+    padLeft: normalizePadding(style["padding-left"], isBordered ? 1 : 0),
+    padRight: normalizePadding(style["padding-right"], isBordered ? 1 : 0),
+    colPadding: normalizePadding(options.padding, 2),
+  };
+}
+
 /**
  * Renders tabular data as a formatted string.
  *
@@ -212,15 +240,17 @@ export function table(
   // Normalize to string[][]
   const { rows, columns, keys } = normalizeData(data, options);
 
-  if (rows.length === 0) return "";
+  if (rows.length === 0 && columns.length === 0) return "";
 
   // Calculate column widths (header width from labels, maxWidth keyed by column key)
-  const colWidths = calculateWidths(rows, columns, keys, header, options);
+  const layout = resolveLayout(options);
+  const colWidths = calculateWidths(rows, columns, keys, header, options, layout);
 
   // Truncate cells
   const truncated = rows.map((row) =>
     row.map((cell, i) => truncateCell(cell, colWidths[i], truncChar)),
   );
+  const truncatedWidths = truncated.map((row) => row.map(stringWidth));
 
   // Style
   const style = options.style ?? {};
@@ -236,39 +266,47 @@ export function table(
     if (headColor) styled = applyColorChain(styled, headColor);
     return styled;
   });
-
-  // Resolve border characters
-  const chars = resolveChars(options);
-
-  const border = options.chars ? (options.border ?? "custom") : (options.border ?? "none");
+  const styledHeaderWidths = styledHeader?.map(stringWidth);
 
   // Resolve alignment (keyed by column key)
   const getAlign = buildAlignFn(options, keys);
-
-  // Resolve cell padding
-  const isBordered = border !== "none" && border !== "simple";
-  const padLeft = style["padding-left"] ?? (isBordered ? 1 : 0);
-  const padRight = style["padding-right"] ?? (isBordered ? 1 : 0);
-  const colPadding = options.padding ?? 2;
 
   // Apply border color wrapper
   const bc = borderColor ? (s: string) => applyColorChain(s, borderColor) : (s: string) => s;
 
   // Render
-  if (border === "none") {
-    return renderNone(styledHeader, truncated, colWidths, colPadding, getAlign);
+  if (layout.border === "none") {
+    return renderNone(
+      styledHeader,
+      styledHeaderWidths,
+      truncated,
+      truncatedWidths,
+      colWidths,
+      layout.colPadding,
+      getAlign,
+    );
   }
-  if (border === "simple") {
-    return renderSimple(styledHeader, truncated, colWidths, getAlign, chars);
+  if (layout.border === "simple") {
+    return renderSimple(
+      styledHeader,
+      styledHeaderWidths,
+      truncated,
+      truncatedWidths,
+      colWidths,
+      getAlign,
+      layout.chars,
+    );
   }
 
   return renderBoxed(
     styledHeader,
+    styledHeaderWidths,
     truncated,
+    truncatedWidths,
     colWidths,
-    chars,
-    padLeft,
-    padRight,
+    layout.chars,
+    layout.padLeft,
+    layout.padRight,
     getAlign,
     bc,
     compact,
@@ -305,9 +343,9 @@ function normalizeData(
   if (data.length === 0) return { rows: [], columns: [], keys: [] };
 
   // Array of arrays
-  const firstDefinedIndex = data.findIndex((row) => row !== undefined);
+  const firstDefinedIndex = data.findIndex((row) => row != null);
   const firstDefined = data[firstDefinedIndex];
-  if (firstDefined === undefined) return { rows: [], columns: [], keys: [] };
+  if (firstDefined == null) return { rows: [], columns: [], keys: [] };
 
   if (Array.isArray(firstDefined)) {
     const arrayData = data as unknown[][];
@@ -323,7 +361,7 @@ function normalizeData(
     const rawRows = arrayData.map((row, index) =>
       consumeFirstRowAsHeader && index === firstDefinedIndex
         ? undefined
-        : row === undefined
+        : row == null
           ? []
           : (row as unknown[]).map(cellToString),
     );
@@ -332,7 +370,9 @@ function normalizeData(
     for (const row of normalizedRows) colCount = Math.max(colCount, row.length);
     const keys = Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? String(index));
     const columns = headerProvided
-      ? Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? "")
+      ? Array.from({ length: colCount }, (_, index) =>
+          cellToString(options.headerLabels?.[keys[index]] ?? rawColumns[index] ?? ""),
+        )
       : [];
     const rows = normalizedRows.map((row) =>
       Array.from({ length: colCount }, (_, index) => row[index] ?? ""),
@@ -348,7 +388,7 @@ function normalizeData(
     const seen = new Set<string>();
     keys = [];
     for (const obj of objData) {
-      if (obj === undefined) continue;
+      if (obj == null) continue;
       for (const k of Object.keys(obj)) {
         if (!seen.has(k)) {
           seen.add(k);
@@ -359,7 +399,7 @@ function normalizeData(
   }
   const labels = keys.map((col) => cellToString(options.headerLabels?.[col] ?? col));
   const rows = Array.from(objData, (obj) =>
-    obj === undefined ? [] : (keys as string[]).map((col) => cellToString(obj[col])),
+    obj == null ? [] : (keys as string[]).map((col) => cellToString(obj[col])),
   );
 
   return { rows, columns: labels, keys };
@@ -374,6 +414,7 @@ function calculateWidths(
   keys: string[],
   header: boolean,
   options: TableOptions,
+  layout: TableLayout,
 ): number[] {
   let colCount = Math.max(labels.length, keys.length);
   for (const row of rows) colCount = Math.max(colCount, row.length);
@@ -414,18 +455,20 @@ function calculateWidths(
       if (colWidths[i] !== undefined && colWidths[i] > 0) {
         // colWidths specifies total column width including padding
         // Internal content width = colWidths - padding
-        const style = options.style ?? {};
-        const border = options.chars ? (options.border ?? "custom") : (options.border ?? "none");
-        const isBordered = border !== "none" && border !== "simple";
-        const padL = style["padding-left"] ?? (isBordered ? 1 : 0);
-        const padR = style["padding-right"] ?? (isBordered ? 1 : 0);
-        const contentWidth = colWidths[i] - padL - padR;
+        const contentWidth = colWidths[i] - layout.padLeft - layout.padRight;
         widths[i] = Math.max(contentWidth, 1);
       }
     }
   }
 
   return widths;
+}
+
+/** Coerces user-provided spacing to a safe number of spaces. */
+function normalizePadding(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value));
 }
 
 /**
@@ -476,21 +519,25 @@ function applyColorChain(text: string, chain: string): string {
 /**
  * Pads a cell string to a target width using the specified alignment.
  */
-function padCell(cell: string, width: number, align: "left" | "right" | "center" = "left"): string {
-  const cellWidth = stringWidth(cell);
+function padCell(
+  cell: string,
+  width: number,
+  align: "left" | "right" | "center" = "left",
+  cellWidth = stringWidth(cell),
+): string {
   const diff = width - cellWidth;
-  if (diff <= 0) return cell;
+  if (diff <= 0) return closeAnsiState(cell);
 
   switch (align) {
     case "right":
-      return " ".repeat(diff) + cell;
+      return closeAnsiState(" ".repeat(diff) + cell);
     case "center": {
       const left = Math.floor(diff / 2);
       const right = diff - left;
-      return " ".repeat(left) + cell + " ".repeat(right);
+      return closeAnsiState(" ".repeat(left) + cell + " ".repeat(right));
     }
     default:
-      return cell + " ".repeat(diff);
+      return closeAnsiState(cell + " ".repeat(diff));
   }
 }
 
@@ -515,7 +562,9 @@ function buildAlignFn(
 
 function renderNone(
   header: string[] | undefined,
+  headerWidths: number[] | undefined,
   rows: string[][],
+  rowWidths: number[][],
   widths: number[],
   padding: number,
   getAlign: (i: number) => "left" | "right" | "center",
@@ -523,17 +572,26 @@ function renderNone(
   const lines: string[] = [];
   const pad = " ".repeat(padding);
   if (header) {
-    lines.push(header.map((h, i) => padCell(h, widths[i], getAlign(i))).join(pad));
+    lines.push(
+      header.map((h, i) => padCell(h, widths[i], getAlign(i), headerWidths?.[i])).join(pad),
+    );
   }
-  for (const row of rows) {
-    lines.push(row.map((cell, i) => padCell(cell, widths[i], getAlign(i))).join(pad));
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex];
+    lines.push(
+      row
+        .map((cell, i) => padCell(cell, widths[i], getAlign(i), rowWidths[rowIndex]?.[i]))
+        .join(pad),
+    );
   }
   return lines.join("\n");
 }
 
 function renderSimple(
   header: string[] | undefined,
+  headerWidths: number[] | undefined,
   rows: string[][],
+  rowWidths: number[][],
   widths: number[],
   getAlign: (i: number) => "left" | "right" | "center",
   chars?: Required<TableChars>,
@@ -543,18 +601,27 @@ function renderSimple(
   const separator = chars ? chars.mid : "-";
   const separatorMiddle = chars?.["mid-mid"] ?? "-|-";
   if (header) {
-    lines.push(header.map((h, i) => padCell(h, widths[i], getAlign(i))).join(middle));
+    lines.push(
+      header.map((h, i) => padCell(h, widths[i], getAlign(i), headerWidths?.[i])).join(middle),
+    );
     lines.push(widths.map((w) => separator.repeat(w)).join(separatorMiddle));
   }
-  for (const row of rows) {
-    lines.push(row.map((cell, i) => padCell(cell, widths[i], getAlign(i))).join(middle));
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex];
+    lines.push(
+      row
+        .map((cell, i) => padCell(cell, widths[i], getAlign(i), rowWidths[rowIndex]?.[i]))
+        .join(middle),
+    );
   }
   return lines.join("\n");
 }
 
 function renderBoxed(
   header: string[] | undefined,
+  headerWidths: number[] | undefined,
   rows: string[][],
+  rowWidths: number[][],
   widths: number[],
   chars: Required<TableChars>,
   padLeft: number,
@@ -583,15 +650,17 @@ function renderBoxed(
     chars["bottom-right"],
   );
 
-  const formatRow = (row: string[]) => {
-    const cells = row.map((cell, i) => pl + padCell(cell, widths[i], getAlign(i)) + pr);
+  const formatRow = (row: string[], cellWidths: number[] | undefined) => {
+    const cells = row.map(
+      (cell, i) => pl + padCell(cell, widths[i], getAlign(i), cellWidths?.[i]) + pr,
+    );
     return bc(chars.left) + cells.join(bc(chars.middle)) + bc(chars.right);
   };
 
   if (topLine) lines.push(topLine);
 
   if (header) {
-    lines.push(formatRow(header));
+    lines.push(formatRow(header, headerWidths));
     if (midLine) lines.push(midLine);
   }
 
@@ -599,7 +668,7 @@ function renderBoxed(
     if (!compact && i > 0 && midLine) {
       lines.push(midLine);
     }
-    lines.push(formatRow(rows[i]));
+    lines.push(formatRow(rows[i], rowWidths[i]));
   }
 
   if (botLine) lines.push(botLine);

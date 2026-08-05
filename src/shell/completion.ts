@@ -6,6 +6,7 @@ import {
   tokenize,
 } from "../command/parser.js";
 import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
+import { ParseError } from "../errors.js";
 import type { CommandDefinition, OptionDef } from "../types.js";
 
 /**
@@ -24,6 +25,9 @@ function findOptionByAlias(name: string, options: Map<string, OptionDef>): Optio
  */
 export type CompletionResult = [string[], string];
 
+/** Upper bound for a custom completion provider so readline can always resume. */
+export const COMPLETION_TIMEOUT_MS = 1_000;
+
 /**
  * Provides tab-completion for the interactive shell.
  * Completes command names, subcommands, option flags, option values,
@@ -33,6 +37,7 @@ export type CompletionResult = [string[], string];
 export class ShellCompleter {
   private readonly registry: CommandRegistry;
   private readonly hasVersion: boolean;
+  private readonly completionTimeoutMs: number;
   private tabCount = 0;
   private lastLine = "";
 
@@ -40,9 +45,13 @@ export class ShellCompleter {
    * Creates a new ShellCompleter.
    * @param registry - The command registry used to look up commands and options.
    */
-  constructor(registry: CommandRegistry, options: { hasVersion?: boolean } = {}) {
+  constructor(
+    registry: CommandRegistry,
+    options: { hasVersion?: boolean; completionTimeoutMs?: number } = {},
+  ) {
     this.registry = registry;
     this.hasVersion = options.hasVersion ?? false;
+    this.completionTimeoutMs = options.completionTimeoutMs ?? COMPLETION_TIMEOUT_MS;
   }
 
   /** Resets progressive completion state for a new readline prompt. */
@@ -71,8 +80,15 @@ export class ShellCompleter {
     // mirroring how execution splits pipes — so `ls | gr<TAB>` completes `grep`,
     // not a candidate derived from the first stage.
     const segment = activePipeSegment(line);
-    const tokens = this.tokenizeIncomplete(segment);
+    const tokenization = this.tokenizeIncomplete(segment);
+    if (!tokenization) return [[], segment];
+    const { tokens, incompleteQuote } = tokenization;
     const endsWithSpace = /\s$/.test(segment);
+
+    // An opening quote by itself tokenizes to an empty token after synthetic
+    // closure. It is not the same as an empty command line, so do not enumerate
+    // every top-level command in the middle of editing it.
+    if (incompleteQuote && tokens.length === 1 && tokens[0] === "") return [[], ""];
 
     // Empty or just starting — show top-level commands (including aliases)
     if (tokens.length === 0 || (tokens.length === 1 && !endsWithSpace)) {
@@ -199,8 +215,9 @@ export class ShellCompleter {
         // Ignore parse failures during completion (partial/invalid input).
       }
       const filterByPrefix = (candidates: string[]) =>
-        current ? candidates.filter((v) => v.startsWith(current)) : candidates;
+        formatCompletionCandidates(candidates, current);
       let result: ReturnType<NonNullable<CommandDefinition["completer"]>>;
+      const controller = new AbortController();
       try {
         result = command.completer({
           line: segment,
@@ -210,19 +227,42 @@ export class ShellCompleter {
           args: parsedArgs,
           options: parsedOptions,
           iteration: this.tabCount,
+          signal: controller.signal,
         });
       } catch {
         return [[], current];
       }
       if (result instanceof Promise) {
-        return result
-          .then((candidates) => [filterByPrefix(candidates), current] as CompletionResult)
-          .catch(() => [[], current] as CompletionResult);
+        return this.completeWithTimeout(result, current, controller, filterByPrefix);
       }
       return [filterByPrefix(result), current];
     }
 
     return [[], current];
+  }
+
+  private completeWithTimeout(
+    result: Promise<string[]>,
+    current: string,
+    controller: AbortController,
+    filterByPrefix: (candidates: string[]) => string[],
+  ): Promise<CompletionResult> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        controller.abort();
+        resolve([[], current]);
+      }, this.completionTimeoutMs);
+      void result.then(
+        (candidates) => {
+          clearTimeout(timer);
+          resolve([filterByPrefix(candidates), current]);
+        },
+        () => {
+          clearTimeout(timer);
+          resolve([[], current]);
+        },
+      );
+    });
   }
 
   /**
@@ -233,6 +273,7 @@ export class ShellCompleter {
     if (this.hasVersion) names.push("--version", "-V");
     const seen = new Set<string>();
     for (const cmd of this.registry.allTopLevel()) {
+      if (cmd.hidden) continue;
       if (!seen.has(cmd.name)) {
         seen.add(cmd.name);
         names.push(cmd.name);
@@ -246,6 +287,8 @@ export class ShellCompleter {
         }
       }
     }
+    if (!this.registry.resolve(["exit"])) names.push("exit");
+    if (!this.registry.resolve(["quit"])) names.push("quit");
     return names;
   }
 
@@ -253,6 +296,7 @@ export class ShellCompleter {
     const names: string[] = [];
     const seen = new Set<string>();
     for (const sub of new Set(command.subcommands.values())) {
+      if (sub.hidden) continue;
       for (const name of [sub.name, ...(sub.aliases ?? [])]) {
         if (!seen.has(name)) {
           seen.add(name);
@@ -335,7 +379,7 @@ export class ShellCompleter {
 
     if (autocomplete) {
       if (Array.isArray(autocomplete)) {
-        const candidates = autocomplete.filter((v) => v.startsWith(current));
+        const candidates = formatCompletionCandidates(autocomplete, current);
         return [candidates, current];
       }
       // Function-based autocomplete
@@ -348,17 +392,17 @@ export class ShellCompleter {
       if (result instanceof Promise) {
         return result
           .then((candidates) => {
-            const filtered = candidates.filter((v) => v.startsWith(current));
+            const filtered = formatCompletionCandidates(candidates, current);
             return [filtered, current] as CompletionResult;
           })
           .catch(() => [[], current] as CompletionResult);
       }
-      const filtered = result.filter((v) => v.startsWith(current));
+      const filtered = formatCompletionCandidates(result, current);
       return [filtered, current];
     }
 
     if (choices) {
-      const candidates = choices.map(String).filter((v) => v.startsWith(current));
+      const candidates = formatCompletionCandidates(choices.map(String), current);
       return [candidates, current];
     }
 
@@ -366,17 +410,29 @@ export class ShellCompleter {
   }
 
   /** Tokenizes a line under active editing by synthetically closing its quote. */
-  private tokenizeIncomplete(line: string): string[] {
+  private tokenizeIncomplete(
+    line: string,
+  ): { tokens: string[]; incompleteQuote: boolean } | undefined {
     try {
-      return tokenize(line);
+      return { tokens: tokenize(line), incompleteQuote: false };
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.startsWith("Unclosed ")) return [];
-      const closer = error.message.includes("single") ? "'" : '"';
+      if (!(error instanceof ParseError) || !error.quote) return undefined;
+      const closer = error.quote === "single" ? "'" : '"';
       try {
-        return tokenize(`${line}${closer}`);
+        return { tokens: tokenize(`${line}${closer}`), incompleteQuote: true };
       } catch {
-        return [];
+        return undefined;
       }
     }
   }
+}
+
+/**
+ * Filters candidates against their semantic value, then quotes whitespace and
+ * shell-sensitive characters so readline can insert a single valid argv token.
+ */
+function formatCompletionCandidates(candidates: string[], current: string): string[] {
+  return (
+    current ? candidates.filter((candidate) => candidate.startsWith(current)) : candidates
+  ).map((candidate) => candidate.replace(/([\\\s'"`])/g, "\\$1"));
 }

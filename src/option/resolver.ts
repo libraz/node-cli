@@ -1,4 +1,3 @@
-import { buildAliasMap } from "../command/parser.js";
 import { InvalidOptionError, MissingOptionError, ValidationError } from "../errors.js";
 import type { CommandContext, OptionDef } from "../types.js";
 
@@ -25,26 +24,17 @@ export function resolveOptions(
 ): Record<string, unknown> {
   const resolved: Record<string, unknown> = Object.create(null);
 
-  // Build alias → long mapping (shared with the parser so both resolve aliases
-  // identically).
-  const aliasMap = buildAliasMap(defs);
-
-  // Normalize aliases in raw
-  const normalized: Record<string, unknown> = Object.create(null);
-  for (const [key, value] of Object.entries(raw)) {
-    const long = aliasMap.get(key) ?? key;
-    normalized[long] = value;
-  }
-
-  // Make raw cross-option values visible during custom parsing. Each canonical
+  // The parser is the sole alias-normalization point. Keeping this function on
+  // canonical keys avoids a second, divergent mapping path. Make raw
+  // cross-option values visible during custom parsing; each canonical
   // value replaces its raw counterpart as the first pass progresses.
-  Object.assign(resolved, normalized);
+  Object.assign(resolved, raw);
   ctx.options = resolved;
 
   // First pass: parse/coerce/default/required for every option.
   for (const [, def] of defs) {
     const { long, schema } = def;
-    const rawValue = normalized[long];
+    const rawValue = raw[long];
     // Presence is tracked from the raw (pre-parse) value so it is decoupled from
     // the resolved value: a flag the user explicitly passed whose custom `parse`
     // returns `undefined` is still present. Default application and the required
@@ -62,11 +52,13 @@ export function resolveOptions(
             ? value.map((v) => schema.parse?.(String(v), ctx))
             : schema.parse(String(value), ctx);
         } catch (err) {
-          if (err instanceof Error) throw new ValidationError(err.message, err);
-          throw new ValidationError(String(err), err);
+          const message = err instanceof Error ? err.message : String(err);
+          throw new ValidationError(`Invalid value for --${long}: ${message}`, err, {
+            optionName: long,
+          });
         }
       } else {
-        value = coerce(value, schema.type, long);
+        value = coerceOptionValue(value, schema.type, long);
       }
     } else if (schema.required) {
       throw new MissingOptionError(long);
@@ -76,7 +68,7 @@ export function resolveOptions(
       // matches (e.g. a string default on a `number` option becomes a number).
       // A default already in its final type is left unchanged. Custom `parse` is
       // not re-applied: a default is an already-resolved value, not raw input.
-      value = coerce(schema.default, schema.type, long);
+      value = coerceOptionValue(schema.default, schema.type, long);
     }
 
     // Keep the flag present whenever it was supplied — even if its resolved
@@ -94,7 +86,7 @@ export function resolveOptions(
     // Choices check (compare leniently so declared string choices match
     // coerced numeric values and vice versa). For array-typed options each
     // element is validated individually rather than the joined array.
-    if (value !== undefined && schema.choices) {
+    if (Object.hasOwn(resolved, long) && schema.choices) {
       const allowed = schema.choices;
       const allowedStrings = allowed.map(String);
       const isAllowed = (v: unknown) => allowed.includes(v) || allowedStrings.includes(String(v));
@@ -110,20 +102,20 @@ export function resolveOptions(
     }
 
     // Validate
-    if (value !== undefined && schema.validate) {
+    if (Object.hasOwn(resolved, long) && schema.validate) {
       try {
         schema.validate(value, ctx);
       } catch (err) {
-        if (err instanceof Error) {
-          throw new ValidationError(err.message, err);
-        }
-        throw new ValidationError(String(err), err);
+        const message = err instanceof Error ? err.message : String(err);
+        throw new ValidationError(`Invalid value for --${long}: ${message}`, err, {
+          optionName: long,
+        });
       }
     }
   }
 
   // Pass through unknown options (not defined in schema)
-  for (const [key, value] of Object.entries(normalized)) {
+  for (const [key, value] of Object.entries(raw)) {
     if (!defs.has(key) && !Object.hasOwn(resolved, key)) {
       resolved[key] = value;
     }
@@ -147,13 +139,23 @@ export function resolveOptions(
  * silently producing 0 or accepting Infinity.
  */
 function toNumber(value: unknown): number | null {
-  if (typeof value === "string" && value.trim() === "") return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER ? value : null;
+  }
+  if (typeof value !== "string") return null;
+  // Accept ordinary decimal notation (including scientific notation), but not
+  // JavaScript's hexadecimal/octal/binary forms, padded integers, or strings
+  // whose precision Number cannot represent safely.
+  if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?(?:0|[1-9]\d*))?$/.test(value)) {
+    return null;
+  }
   const num = Number(value);
-  return Number.isFinite(num) ? num : null;
+  return Number.isFinite(num) && Math.abs(num) <= Number.MAX_SAFE_INTEGER ? num : null;
 }
 
-function coerce(value: unknown, type: string | undefined, name: string): unknown {
-  if (type === undefined || type === "string") return value;
+export function coerceOptionValue(value: unknown, type: string | undefined, name: string): unknown {
+  if (type === undefined) return value;
+  if (type === "string") return String(value);
 
   if (type === "boolean") {
     if (typeof value === "boolean") return value;

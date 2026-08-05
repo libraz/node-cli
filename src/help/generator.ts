@@ -46,8 +46,14 @@ export class HelpGenerator {
    * @returns A formatted multi-line string with command names and descriptions.
    */
   generateIndex(): string {
-    const commands = this.registry.allTopLevel();
-    if (commands.length === 0) return "No commands available.\n";
+    const commands = this.registry
+      .allTopLevel()
+      .filter((command) => !command.hidden)
+      // The framework's own help command is registered before application
+      // commands. Keep application registration order while listing that helper
+      // last, so it does not occupy the first, most prominent command slot.
+      .sort((left, right) => (left.name === "help" ? 1 : right.name === "help" ? -1 : 0));
+    if (commands.length === 0) return "No commands available.\n\nShell commands: exit, quit";
 
     const lines: string[] = [];
 
@@ -74,14 +80,12 @@ export class HelpGenerator {
       return [usage, `${cmd.description ?? ""}${aliasNote}`];
     });
 
-    const maxWidth = Math.max(...entries.map(([usage]) => stringWidth(usage)));
+    appendAlignedEntries(lines, entries);
 
-    for (const [usage, desc] of entries) {
-      const padding = " ".repeat(maxWidth - stringWidth(usage) + 4);
-      lines.push(`  ${usage}${desc ? padding + desc : ""}`);
+    if (version) {
+      lines.push("", "Options:", "  -V, --version    Show the CLI version");
     }
-
-    lines.push("", 'Type "help <command>" for more information.');
+    lines.push("", "Shell commands: exit, quit", 'Type "help <command>" for more information.');
 
     return lines.join("\n");
   }
@@ -98,6 +102,9 @@ export class HelpGenerator {
    *   message if the path cannot be resolved.
    */
   generateCommand(commandPath: string[]): string {
+    if (commandPath.length === 1 && (commandPath[0] === "exit" || commandPath[0] === "quit")) {
+      return `Usage: ${commandPath[0]}\n\nExit the interactive shell.`;
+    }
     const command = this.registry.resolve(commandPath);
     if (!command) return `Unknown command: ${commandPath.join(" ")}`;
 
@@ -139,11 +146,13 @@ export class HelpGenerator {
     if (helpForms.length > 0) {
       optionEntries.push([helpForms.join(", "), "Show help for this command"]);
     }
-    lines.push("", "Options:");
-    const maxWidth = Math.max(...optionEntries.map(([flags]) => stringWidth(flags)));
-    for (const [flags, desc] of optionEntries) {
-      const padding = " ".repeat(maxWidth - stringWidth(flags) + 4);
-      lines.push(`  ${flags}${desc ? padding + desc : ""}`);
+    if (optionEntries.length > 0) {
+      lines.push("", "Options:");
+      const maxWidth = Math.max(...optionEntries.map(([flags]) => stringWidth(flags)));
+      for (const [flags, desc] of optionEntries) {
+        const padding = " ".repeat(maxWidth - stringWidth(flags) + 4);
+        lines.push(`  ${flags}${desc ? padding + desc : ""}`);
+      }
     }
 
     // Subcommands — omitted when the command itself takes positional arguments,
@@ -152,20 +161,16 @@ export class HelpGenerator {
     if (command.subcommands.size > 0 && !hasUnreachableSubcommands(command)) {
       lines.push("", "Commands:");
       // Deduplicate: aliases point to the same definition object
-      const subEntries: [string, string][] = [...new Set(command.subcommands.values())].map(
-        (sub) => {
+      const subEntries: [string, string][] = [...new Set(command.subcommands.values())]
+        .filter((sub) => !sub.hidden)
+        .map((sub) => {
           const usage = formatCommandUsage(sub);
           const aliasNote =
             sub.aliases && sub.aliases.length > 0 ? ` (alias: ${sub.aliases.join(", ")})` : "";
           return [usage, `${sub.description ?? ""}${aliasNote}`];
-        },
-      );
-      const maxWidth = Math.max(...subEntries.map(([u]) => stringWidth(u)));
-
-      for (const [usage, desc] of subEntries) {
-        const padding = " ".repeat(maxWidth - stringWidth(usage) + 4);
-        lines.push(`  ${usage}${desc ? padding + desc : ""}`);
-      }
+        });
+      if (subEntries.length === 0) return lines.join("\n");
+      appendAlignedEntries(lines, subEntries);
 
       lines.push("", `Type "help ${commandPath.join(" ")} <command>" for more information.`);
     }
@@ -174,10 +179,43 @@ export class HelpGenerator {
   }
 }
 
+/** Adds a two-column help listing, wrapping descriptions when terminal width is known. */
+function appendAlignedEntries(lines: string[], entries: [string, string][]): void {
+  const maxUsageWidth = Math.max(...entries.map(([usage]) => stringWidth(usage)));
+  const descriptionIndent = maxUsageWidth + 6;
+  const columns = process.stdout.columns;
+  const descriptionWidth = columns === undefined ? undefined : columns - descriptionIndent;
+
+  for (const [usage, description] of entries) {
+    const padding = " ".repeat(maxUsageWidth - stringWidth(usage) + 4);
+    if (!description || descriptionWidth === undefined || descriptionWidth < 10) {
+      lines.push(`  ${usage}${description ? padding + description : ""}`);
+      continue;
+    }
+    const words = description.split(/\s+/);
+    const wrapped: string[] = [];
+    let current = "";
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (current && stringWidth(candidate) > descriptionWidth) {
+        wrapped.push(current);
+        current = word;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current) wrapped.push(current);
+    lines.push(`  ${usage}${padding}${wrapped[0] ?? ""}`);
+    for (const continuation of wrapped.slice(1)) {
+      lines.push(`${" ".repeat(descriptionIndent)}${continuation}`);
+    }
+  }
+}
+
 /**
  * Builds a full usage string for a command: its path, an optional `<command>`
  * placeholder for actionless groups, its positional arguments, and an `[options]`
- * marker when it declares any. Shared by the help generator and the router so a
+ * marker. Shared by the help generator and the router so a
  * single definition drives every usage string.
  *
  * @param commandPath - The command path to prefix (canonical or as typed).
@@ -250,7 +288,7 @@ function formatOptionEntries(options: OptionDef[]): [string, string][] {
     // Long name
     let longPart = `--${opt.long}`;
     if (opt.takesValue) {
-      longPart += ` <${opt.long}>`;
+      longPart += ` <${opt.valueName ?? opt.long}>`;
     }
     parts.push(longPart);
 
@@ -266,7 +304,7 @@ function formatOptionEntries(options: OptionDef[]): [string, string][] {
       opt.schema.default !== undefined &&
       !(opt.schema.type === "boolean" && opt.schema.default === false)
     ) {
-      descParts.push(`(default: ${JSON.stringify(opt.schema.default)})`);
+      descParts.push(`(default: ${formatDefaultValue(opt.schema.default)})`);
     }
     if (opt.schema.choices) {
       descParts.push(`[${opt.schema.choices.join(", ")}]`);
@@ -279,4 +317,14 @@ function formatOptionEntries(options: OptionDef[]): [string, string][] {
 
     return [flags, descParts.join(" ")] as [string, string];
   });
+}
+
+/** Formats arbitrary option defaults without letting help rendering throw. */
+function formatDefaultValue(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized ?? String(value);
+  } catch {
+    return String(value);
+  }
 }

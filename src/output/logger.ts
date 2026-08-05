@@ -1,6 +1,6 @@
 import type { Writable } from "node:stream";
 import { format } from "node:util";
-import { createColorizer, isColorEnabled } from "./color.js";
+import { createColorizer, isColorEnabled, sanitizeTerminalText } from "./color.js";
 
 // ── Types ──
 
@@ -127,6 +127,7 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
   }>();
   let backpressured = false;
   let streamFailure: Error | undefined;
+  const children = new Set<Logger>();
 
   const removeBackpressureListeners = () => {
     stream.off("drain", flushBuffered);
@@ -231,7 +232,7 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
     }
 
     // Message
-    parts.push(formatted);
+    parts.push(sanitizeTerminalText(formatted, { singleLine: false }));
 
     writeLine(`${parts.join(" ")}\n`);
   }
@@ -259,12 +260,19 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
       // No explicit level → the child inherits this logger's effective level
       // dynamically (so later parent.setLevel calls still reach it).
-      return logger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
+      const child = logger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
+      children.add(child);
+      return child;
     },
     flush() {
-      if (streamFailure) return Promise.reject(streamFailure);
-      if (!backpressured && bufferedLines.length === 0) return Promise.resolve();
-      return new Promise<void>((resolve, reject) => flushWaiters.add({ resolve, reject }));
+      const ownFlush = streamFailure
+        ? Promise.reject(streamFailure)
+        : !backpressured && bufferedLines.length === 0
+          ? Promise.resolve()
+          : new Promise<void>((resolve, reject) => flushWaiters.add({ resolve, reject }));
+      return Promise.all([ownFlush, ...[...children].map((child) => child.flush())]).then(
+        () => undefined,
+      );
     },
   };
 

@@ -9,6 +9,7 @@ export type CLIErrorCode =
   | "INVALID_OPTION"
   | "UNKNOWN_OPTION"
   | "VALIDATION_ERROR"
+  | "PARSE_ERROR"
   | "PROMPT_CANCELLED";
 
 /**
@@ -44,14 +45,20 @@ export class CLIError extends Error {
 export class CommandNotFoundError extends CLIError {
   /** The unrecognized command string. */
   readonly input: string;
+  /** Available subcommands at the point the lookup failed, when known. */
+  readonly available?: readonly string[];
 
   /**
    * @param input - The unrecognized command string.
    */
-  constructor(input: string) {
-    super(`Command not found: "${input}"`, "COMMAND_NOT_FOUND");
+  constructor(input: string, options: { available?: readonly string[] } = {}) {
+    const available = options.available?.length
+      ? `\nAvailable subcommands: ${options.available.join(", ")}`
+      : "";
+    super(`Command not found: "${input}"${available}`, "COMMAND_NOT_FOUND");
     this.name = "CommandNotFoundError";
     this.input = input;
+    this.available = options.available;
   }
 }
 
@@ -157,19 +164,19 @@ export class UnknownOptionError extends CLIError {
 export class ValidationError extends CLIError {
   /** The original error that triggered validation failure, if any. */
   readonly cause?: unknown;
+  /** The long option name whose custom parser or validator failed, if known. */
+  readonly optionName?: string;
 
   /**
    * @param message - Description of the validation failure.
    * @param cause - The original error that caused the failure, if any.
+   * @param details - Structured context for the validation failure.
    */
-  constructor(message: string, cause?: unknown) {
+  constructor(message: string, cause?: unknown, details?: { optionName?: string }) {
     super(message, "VALIDATION_ERROR");
     this.name = "ValidationError";
     this.cause = cause;
-    // Preserve the original stack trace when wrapping an Error.
-    if (cause instanceof Error && cause.stack) {
-      this.stack = cause.stack;
-    }
+    this.optionName = details?.optionName;
   }
 }
 
@@ -183,23 +190,35 @@ export class PromptCancelError extends CLIError {
   }
 }
 
+/** Thrown when a command line cannot be tokenized or split into pipeline stages. */
+export class ParseError extends CLIError {
+  /** Quote left open by the input, when applicable. */
+  readonly quote?: "single" | "double";
+
+  constructor(message: string, options: { quote?: "single" | "double" } = {}) {
+    super(message, "PARSE_ERROR");
+    this.name = "ParseError";
+    this.quote = options.quote;
+  }
+}
+
 /**
  * Reports whether an error represents a user-initiated cancellation rather than
- * a genuine failure: a {@link PromptCancelError}, or an abort surfaced through
- * `AbortSignal` (e.g. SIGINT aborting `ctx.signal`, which makes `fetch`/timers
- * reject with an `AbortError`). Used to present a clean "Cancelled" message and
- * the conventional 130 exit code instead of an `Error:` line and exit 1.
+ * a genuine failure: a {@link PromptCancelError}, or an `AbortError` associated
+ * with the command's aborted signal. Used to present a clean "Cancelled"
+ * message and the conventional 130 exit code instead of an `Error:` line and
+ * exit 1.
  */
-export function isCancellationError(err: unknown): boolean {
+export function isCancellationError(err: unknown, signal?: AbortSignal): boolean {
   if (err instanceof PromptCancelError) return true;
-  return err instanceof Error && err.name === "AbortError";
+  return signal?.aborted === true && err instanceof Error && err.name === "AbortError";
 }
 
 /**
  * Formats an unknown error value for user-facing CLI output.
  */
-export function formatErrorMessage(err: unknown): string {
-  if (isCancellationError(err)) {
+export function formatErrorMessage(err: unknown, signal?: AbortSignal): string {
+  if (isCancellationError(err, signal)) {
     return "Cancelled";
   }
   return err instanceof Error ? err.message : String(err);

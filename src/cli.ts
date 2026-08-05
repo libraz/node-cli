@@ -11,6 +11,7 @@ import {
   isCancellationError,
 } from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
+import { streamIsTTY } from "./output/color.js";
 import { Shell } from "./shell/repl.js";
 import type { CatchContext, CLIEventMap, CLIOptions } from "./types.js";
 
@@ -50,10 +51,12 @@ export class CLI {
   private descriptionStr?: string;
   private bannerStr?: string;
   private historyFile: string;
-  private historySize: number;
+  private historySizeLimit: number;
   private historyFilterFn?: (line: string) => string | null;
   private started = false;
   private readonly pendingPlugins: Promise<void>[] = [];
+  /** Serializes plugin bodies so async registration preserves use() order. */
+  private pluginTail: Promise<void> = Promise.resolve();
   private pluginInitialization?: Promise<void>;
   private pluginInitializationError?: unknown;
   // A separate flag rather than testing `pluginInitializationError !== undefined`:
@@ -72,7 +75,7 @@ export class CLI {
     this.descriptionStr = options.description;
     this.bannerStr = options.banner;
     this.historyFile = options.historyFile ?? join(homedir(), `.${this.name}_history`);
-    this.historySize = options.historySize ?? 1000;
+    this.historySizeLimit = options.historySize ?? 1000;
     this.historyFilterFn = options.historyFilter;
 
     this.registry = new CommandRegistry();
@@ -145,6 +148,16 @@ export class CLI {
   }
 
   /**
+   * Sets the maximum number of interactive history entries to retain.
+   * @param size - Maximum retained entries.
+   * @returns The CLI instance for method chaining.
+   */
+  historySize(size: number): this {
+    this.historySizeLimit = size;
+    return this;
+  }
+
+  /**
    * Sets a filter that can redact or omit lines before shell history is saved.
    * Return `null` to omit a line entirely.
    */
@@ -204,17 +217,16 @@ export class CLI {
         this.catch(handler);
       },
     };
-    // Run the plugin. Synchronous plugins register immediately; asynchronous
-    // ones are queued so command entry points can await them before running.
-    const result = plugin(context);
-    if (result instanceof Promise) {
-      this.pendingPlugins.push(result);
-      // Attach a no-op catch to the original promise so a rejection that is never
-      // drained (the consumer never starts the CLI) does not surface as an
-      // unhandledRejection. The error is still reported on drain, which inspects
-      // settlement results rather than relying on this promise's resolution.
-      result.catch(() => {});
-    }
+    // Invoke plugin bodies through one serial queue. This makes registration
+    // order deterministic even when an earlier plugin awaits I/O, and turns a
+    // synchronous throw into the same initialization failure path as a rejected
+    // async plugin.
+    const result = this.pluginTail.then(() => plugin(context));
+    this.pluginTail = result;
+    this.pendingPlugins.push(result);
+    // A consumer may never start/exec this CLI. Mark the rejection handled here;
+    // drainPendingPlugins still observes and reports the original failure.
+    result.catch(() => {});
     return this;
   }
 
@@ -256,7 +268,9 @@ export class CLI {
   async exec(input: string, options: ExecOptions = {}): Promise<void> {
     await this.drainPendingPlugins();
     const { stdin = null, stdout = process.stdout, stderr = process.stderr, signal } = options;
-    await this.router.execute(input, { stdin, stdout, stderr, signal });
+    await this.router.runWithSigintCancel(async () => {
+      await this.router.execute(input, { stdin, stdout, stderr, signal });
+    });
   }
 
   /**
@@ -276,26 +290,49 @@ export class CLI {
       await this.drainPendingPlugins();
     } catch (err) {
       this.reportFatal(err);
+      await this.router.emit("exit");
       return;
     }
 
-    const args = argv ?? process.argv.slice(2);
+    const suppliedArgs = argv ?? process.argv.slice(2);
+    const args = suppliedArgs.filter((arg) => arg !== "");
+    // An explicitly supplied empty argument or a bare end-of-options marker has
+    // no command to execute. Show the index instead of silently succeeding (or
+    // unexpectedly starting a REPL when attached to a terminal).
+    if (suppliedArgs.length > 0 && (args.length === 0 || (args.length === 1 && args[0] === "--"))) {
+      process.stdout.write(`${this.helpGenerator.generateIndex()}\n`);
+      await this.router.emit("exit");
+      return;
+    }
 
     if (args.length > 0) {
       // Direct CLI mode. Route SIGINT to the running command's cancel handler so
       // Ctrl-C cleanup (e.g. removing a lock file) works the same as in the REPL.
+      let interrupted = false;
       try {
-        await this.router.runWithSigintCancel(async () => {
-          await this.router.execute(args, {
-            stdin: process.stdin,
-            stdout: process.stdout,
-            stderr: process.stderr,
-          });
-        });
+        interrupted = await this.router.runWithSigintCancel(
+          async () => {
+            await this.router.execute(args, {
+              stdin: process.stdin,
+              stdout: process.stdout,
+              stderr: process.stderr,
+            });
+          },
+          {
+            onForceQuit: () => void this.router.emit("exit"),
+            onInterrupt: () => {
+              interrupted = this.router.triggerCancel();
+              return interrupted;
+            },
+          },
+        );
+        if (interrupted) process.exitCode = 130;
       } catch (err) {
-        this.reportFatal(err);
+        this.reportFatal(err, interrupted);
+      } finally {
+        await this.router.emit("exit");
       }
-    } else if (process.stdin.isTTY && process.stdout.isTTY) {
+    } else if (streamIsTTY(process.stdin) && streamIsTTY(process.stdout)) {
       // Interactive shell mode
       let banner: string;
       if (this.bannerStr !== undefined) {
@@ -312,7 +349,7 @@ export class CLI {
         prompt: this.promptStr,
         banner,
         historyFile: this.historyFile,
-        historySize: this.historySize,
+        historySize: this.historySizeLimit,
         historyFilter: this.historyFilterFn,
         version: this.version,
         beforeExecute: () => this.drainPendingPlugins(),
@@ -323,6 +360,7 @@ export class CLI {
       // No arguments and either standard stream is not a terminal (e.g. piped
       // input or redirected output): avoid an interactive REPL and print help.
       process.stdout.write(`${this.helpGenerator.generateIndex()}\n`);
+      await this.router.emit("exit");
     }
   }
 
@@ -333,13 +371,17 @@ export class CLI {
    * the interactive shell reports the same event — rather than an `Error:` line
    * and exit 1.
    */
-  private reportFatal(err: unknown): void {
-    if (isCancellationError(err)) {
-      process.stderr.write(`${formatErrorMessage(err)}\n`);
+  private reportFatal(err: unknown, interrupted = false): void {
+    if (interrupted || isCancellationError(err)) {
+      process.stderr.write(`${interrupted ? "Cancelled" : formatErrorMessage(err)}\n`);
       process.exitCode = 130;
       return;
     }
-    process.stderr.write(`Error: ${formatErrorMessage(err)}\n`);
+    if (process.env.NODE_CLI_DEBUG === "1" && err instanceof Error && err.stack) {
+      process.stderr.write(`${err.stack}\n`);
+    } else {
+      process.stderr.write(`Error: ${formatErrorMessage(err)}\n`);
+    }
     process.exitCode = err instanceof CLIError ? err.exitCode : 1;
   }
 
@@ -349,6 +391,18 @@ export class CLI {
 
     new CommandBuilder(this.registry, "help [...command]")
       .description("Show help information")
+      .complete(({ args, current }) => {
+        const path = (args.command as string[] | undefined) ?? [];
+        const parentPath = current ? path.slice(0, -1) : path;
+        const parent = parentPath.length === 0 ? undefined : registry.resolve(parentPath);
+        const commands = parent
+          ? [...new Set(parent.subcommands.values())]
+          : registry.allTopLevel();
+        return commands
+          .filter((command) => !command.hidden)
+          .flatMap((command) => [command.name, ...(command.aliases ?? [])])
+          .filter((name) => name.startsWith(current));
+      })
       .action((ctx) => {
         const commandParts = ctx.args.command as string[] | undefined;
 

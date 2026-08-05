@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { createColorizer, sanitizeTerminalText, stringWidth } from "./color.js";
+import { createColorizer, sanitizeTerminalText, streamIsTTY, stringWidth } from "./color.js";
 
 // ── Progress Bar ──
 
@@ -55,6 +55,8 @@ export interface Bar {
   finish(): void;
   /** Stops the bar and writes a newline without completing it. */
   stop(): void;
+  /** Releases the bar when leaving a `using` scope. */
+  [Symbol.dispose](): void;
 }
 
 // ── Spinner ──
@@ -91,6 +93,8 @@ export interface Spinner {
   warn(message?: string): void;
   /** Stops the spinner and clears the line. */
   stop(): void;
+  /** Releases the spinner when leaving a `using` scope. */
+  [Symbol.dispose](): void;
 }
 
 // ── MultiBar ──
@@ -105,6 +109,8 @@ export interface MultiBar {
   finish(): void;
   /** Stops all bars and writes a trailing newline. */
   stop(): void;
+  /** Releases the multi-bar when leaving a `using` scope. */
+  [Symbol.dispose](): void;
 }
 
 // ── Patterns ──
@@ -120,10 +126,6 @@ const patterns = {
 /**
  * Checks whether the given stream is a TTY (terminal).
  */
-function isTTY(stream: Writable): boolean {
-  return "isTTY" in stream && (stream as NodeJS.WriteStream).isTTY === true;
-}
-
 function singleLine(text: string): string {
   return sanitizeTerminalText(text);
 }
@@ -168,6 +170,22 @@ type TerminalSession = { users: number };
 
 const terminalSessions = new WeakMap<Writable, TerminalSession>();
 const visualOwners = new WeakMap<Writable, symbol>();
+const activeIndicators = new Set<() => void>();
+
+/**
+ * Stops every active progress indicator. Command execution calls this from its
+ * finalizer so a thrown action cannot strand a terminal session or cursor.
+ */
+export function releaseAll(): void {
+  for (const release of [...activeIndicators]) {
+    try {
+      release();
+    } catch {
+      // Keep cleaning the remaining indicators even if one stream has failed.
+    }
+  }
+  restoreCursor();
+}
 
 /**
  * Streams that currently have their cursor hidden. Tracked separately from the
@@ -176,6 +194,8 @@ const visualOwners = new WeakMap<Writable, symbol>();
  */
 const cursorHiddenStreams = new Set<Writable>();
 let exitRestoreRegistered = false;
+const cursorRestoreSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+const cursorSignalHandlers = new Map<NodeJS.Signals, () => void>();
 
 /**
  * Re-shows the cursor on every stream that currently has it hidden and forgets
@@ -193,6 +213,38 @@ export function restoreCursor(): void {
     }
   }
   cursorHiddenStreams.clear();
+  removeSignalRestore();
+}
+
+/** Removes the standalone signal handlers installed for hidden cursors. */
+function removeSignalRestore(): void {
+  for (const [signal, handler] of cursorSignalHandlers) {
+    process.removeListener(signal, handler);
+  }
+  cursorSignalHandlers.clear();
+}
+
+/**
+ * Restores a cursor for standalone progress renderers before reproducing the
+ * terminating signal. CLI command execution installs its own cancellation
+ * handlers first, so it remains responsible for cooperative cancellation.
+ */
+function registerSignalRestore(): void {
+  if (cursorSignalHandlers.size > 0) return;
+  // Do not supersede an embedding application's signal policy, or the router's
+  // cooperative Ctrl-C handler installed around command execution.
+  if (cursorRestoreSignals.some((signal) => process.listenerCount(signal) > 0)) return;
+
+  for (const signal of cursorRestoreSignals) {
+    const handler = () => {
+      restoreCursor();
+      // Signal delivery is asynchronous; re-send only after our listeners have
+      // been removed so Node performs its normal default termination.
+      setImmediate(() => process.kill(process.pid, signal));
+    };
+    cursorSignalHandlers.set(signal, handler);
+    process.once(signal, handler);
+  }
 }
 
 /**
@@ -210,7 +262,7 @@ function registerExitRestore(): void {
 
 /** Shares cursor ownership between every indicator writing to the same stream. */
 function acquireTerminal(stream: Writable): () => void {
-  if (!isTTY(stream)) return () => {};
+  if (!streamIsTTY(stream)) return () => {};
 
   let session = terminalSessions.get(stream);
   if (!session) {
@@ -222,6 +274,7 @@ function acquireTerminal(stream: Writable): () => void {
     stream.write("\x1b[?25l");
     cursorHiddenStreams.add(stream);
     registerExitRestore();
+    registerSignalRestore();
   }
 
   let released = false;
@@ -235,6 +288,7 @@ function acquireTerminal(stream: Writable): () => void {
       stream.write("\x1b[?25h");
       cursorHiddenStreams.delete(stream);
       terminalSessions.delete(stream);
+      if (cursorHiddenStreams.size === 0) removeSignalRestore();
     }
   };
 }
@@ -245,7 +299,7 @@ function acquireTerminal(stream: Writable): () => void {
  * callers that need concurrent bars should use progress.multi().
  */
 function acquireVisualTerminal(stream: Writable, owner: symbol): () => void {
-  if (!isTTY(stream)) return () => {};
+  if (!streamIsTTY(stream)) return () => {};
   const currentOwner = visualOwners.get(stream);
   if (currentOwner && currentOwner !== owner) {
     throw new Error(
@@ -275,6 +329,53 @@ function clearStandaloneFrame(renderedRows: number): string {
   return `${frame}\r`;
 }
 
+/** Normalizes an invalid total to a completed, zero-unit operation. */
+function normalizeProgressTotal(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+/** Ignores invalid updates instead of allowing NaN to poison future renders. */
+function clampProgressValue(value: number, total: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(value, total));
+}
+
+function progressPercent(current: number, total: number): number {
+  return total === 0 ? 100 : Math.min(100, Math.round((current / total) * 100));
+}
+
+function progressEta(current: number, total: number, rate: number): number {
+  if (current >= total) return 0;
+  return rate > 0 ? Math.max(0, ((total - current) / rate) * 1000) : Number.POSITIVE_INFINITY;
+}
+
+/** Renders the shared single-line representation used by standalone and multi bars. */
+function renderBarLine(
+  state: BarState,
+  options: Pick<BarOptions, "label" | "width" | "filled" | "empty" | "format" | "color">,
+  colorizer: Record<string, (text: string) => string>,
+): string {
+  if (options.format) return singleLine(options.format(state));
+
+  const width = options.width ?? 30;
+  const filled = options.filled ?? "█";
+  const empty = options.empty ?? "░";
+  const filledCount = Math.round((state.percent / 100) * width);
+  let bar = filled.repeat(filledCount) + empty.repeat(width - filledCount);
+  if (options.color) {
+    try {
+      bar = colorizer[options.color](bar);
+    } catch {
+      // An unrecognized color must not stop progress reporting.
+    }
+  }
+
+  const parts: string[] = [];
+  if (options.label) parts.push(singleLine(options.label));
+  parts.push(`[${bar}]`, `${state.percent}%`, `${state.current}/${state.total}`);
+  return parts.join("  ");
+}
+
 // ── Bar Implementation ──
 
 /**
@@ -282,7 +383,7 @@ function clearStandaloneFrame(renderedRows: number): string {
  */
 function createBar(options: BarOptions): Bar {
   const {
-    total,
+    total: requestedTotal,
     label = "",
     width = 30,
     filled = "█",
@@ -291,23 +392,25 @@ function createBar(options: BarOptions): Bar {
     stream = process.stderr,
     color: barColor,
   } = options;
+  const total = normalizeProgressTotal(requestedTotal);
 
   let current = 0;
   let finished = false;
   let started = false;
   let renderedRows = 0;
   let releaseTerminal: (() => void) | null = null;
+  let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-bar");
   const startTime = Date.now();
-  const tty = isTTY(stream);
+  const tty = streamIsTTY(stream);
   const col = createColorizer(stream);
   const frameWriter = createFrameWriter(stream);
 
   function getState(): BarState {
     const elapsed = Date.now() - startTime;
-    const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+    const percent = progressPercent(current, total);
     const rate = elapsed > 0 ? (current / elapsed) * 1000 : 0;
-    const eta = rate > 0 ? Math.max(0, ((total - current) / rate) * 1000) : 0;
+    const eta = progressEta(current, total, rate);
     return { current, total, percent, elapsed, eta, rate };
   }
 
@@ -316,34 +419,17 @@ function createBar(options: BarOptions): Bar {
     if (!started) {
       releaseTerminal = acquireVisualTerminal(stream, visualOwner);
       started = true;
+      activeIndicators.add(stop);
+      unregister = () => activeIndicators.delete(stop);
     }
 
     try {
       const state = getState();
-      let line: string;
-
-      if (customFormat) {
-        line = singleLine(customFormat(state));
-      } else {
-        const filledCount = Math.round((state.percent / 100) * width);
-        const emptyCount = width - filledCount;
-        let bar = filled.repeat(filledCount) + empty.repeat(emptyCount);
-
-        if (barColor) {
-          try {
-            bar = (col as Record<string, (s: string) => string>)[barColor](bar);
-          } catch {
-            // ignore unknown color
-          }
-        }
-
-        const parts: string[] = [];
-        if (label) parts.push(singleLine(label));
-        parts.push(`[${bar}]`);
-        parts.push(`${state.percent}%`);
-        parts.push(`${state.current}/${state.total}`);
-        line = parts.join("  ");
-      }
+      const line = renderBarLine(
+        state,
+        { label, width, filled, empty, format: customFormat, color: barColor },
+        col as Record<string, (text: string) => string>,
+      );
 
       const frame = `${clearStandaloneFrame(renderedRows)}${line}`;
       if (final) frameWriter.final(frame);
@@ -362,18 +448,27 @@ function createBar(options: BarOptions): Bar {
   function cleanup(): void {
     releaseTerminal?.();
     releaseTerminal = null;
+    unregister?.();
+    unregister = null;
     frameWriter.clear();
+  }
+
+  function stop(): void {
+    if (finished) return;
+    finished = true;
+    cleanup();
+    if (tty) stream.write("\n");
   }
 
   return {
     update(value: number) {
       if (finished) return;
-      current = Math.max(0, Math.min(value, total));
+      current = clampProgressValue(value, total, current);
       render();
     },
     tick(delta = 1) {
       if (finished) return;
-      current = Math.max(0, Math.min(current + delta, total));
+      current = clampProgressValue(current + delta, total, current);
       render();
     },
     finish() {
@@ -387,12 +482,8 @@ function createBar(options: BarOptions): Bar {
         if (tty) stream.write("\n");
       }
     },
-    stop() {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      if (tty) stream.write("\n");
-    },
+    stop,
+    [Symbol.dispose]: stop,
   };
 }
 
@@ -410,13 +501,25 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     color: spinnerColor,
   } = options;
 
+  if (
+    !Array.isArray(frames) ||
+    frames.length === 0 ||
+    !frames.every((frame) => typeof frame === "string")
+  ) {
+    throw new RangeError("Spinner frames must be a non-empty array of strings");
+  }
+  if (!Number.isFinite(interval) || interval <= 0) {
+    throw new RangeError("Spinner interval must be a positive finite number");
+  }
+
   let label = initialLabel;
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let done = false;
   let releaseTerminal: (() => void) | null = null;
+  let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-spinner");
-  const tty = isTTY(stream);
+  const tty = streamIsTTY(stream);
   const col = createColorizer(stream);
   const frameWriter = createFrameWriter(stream);
 
@@ -445,13 +548,24 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     }
     releaseTerminal?.();
     releaseTerminal = null;
+    unregister?.();
+    unregister = null;
     frameWriter.clear();
+  }
+
+  function stop(): void {
+    if (done) return;
+    done = true;
+    cleanup();
+    clearLine();
   }
 
   return {
     start() {
       if (timer || done) return;
       releaseTerminal = acquireVisualTerminal(stream, visualOwner);
+      activeIndicators.add(stop);
+      unregister = () => activeIndicators.delete(stop);
       render();
       // Keep the interval from holding the event loop open on its own.
       timer = setInterval(render, interval);
@@ -489,12 +603,8 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       stream.write(`${col.yellow("⚠")} ${msg}\n`);
     },
 
-    stop() {
-      if (done) return;
-      done = true;
-      cleanup();
-      clearLine();
-    },
+    stop,
+    [Symbol.dispose]: stop,
   };
 }
 
@@ -506,7 +616,8 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
 function createMultiBar(): MultiBar {
   const bars: { options: BarOptions; current: number; startTime: number; finished: boolean }[] = [];
   // The whole group renders to a single stream, fixed by the first bar that
-  // actually provides one (a later add() can supply it if the first omits it).
+  // provides one. Later per-bar stream values are intentionally ignored: a
+  // multi-bar frame cannot be split safely across terminal regions.
   let stream: Writable = process.stderr;
   let streamSet = false;
   // Number of physical rows written by the previous renderAll, used to move the
@@ -514,18 +625,30 @@ function createMultiBar(): MultiBar {
   let renderedRows = 0;
   let closed = false;
   let releaseTerminal: (() => void) | null = null;
+  let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-multi");
   let frameWriter = createFrameWriter(stream);
 
   function startTerminalSession(): void {
-    if (releaseTerminal || !isTTY(stream)) return;
+    if (releaseTerminal || !streamIsTTY(stream)) return;
     releaseTerminal = acquireVisualTerminal(stream, visualOwner);
+    activeIndicators.add(stop);
+    unregister = () => activeIndicators.delete(stop);
   }
 
   function cleanup(): void {
     releaseTerminal?.();
     releaseTerminal = null;
+    unregister?.();
+    unregister = null;
     frameWriter.clear();
+  }
+
+  function stop(): void {
+    if (closed) return;
+    closed = true;
+    cleanup();
+    if (streamIsTTY(stream)) stream.write("\n");
   }
 
   return {
@@ -538,7 +661,12 @@ function createMultiBar(): MultiBar {
         frameWriter = createFrameWriter(stream);
         streamSet = true;
       }
-      const entry = { options, current: 0, startTime: Date.now(), finished: false };
+      const entry = {
+        options: { ...options, total: normalizeProgressTotal(options.total) },
+        current: 0,
+        startTime: Date.now(),
+        finished: false,
+      };
       bars.push(entry);
 
       const total = options.total;
@@ -546,24 +674,27 @@ function createMultiBar(): MultiBar {
       const wrapper: Bar = {
         update(value: number) {
           if (closed || entry.finished) return;
-          entry.current = Math.max(0, Math.min(value, total));
-          if (isTTY(stream)) renderAll();
+          entry.current = clampProgressValue(value, total, entry.current);
+          if (streamIsTTY(stream)) renderAll();
         },
         tick(delta = 1) {
           if (closed || entry.finished) return;
-          entry.current = Math.max(0, Math.min(entry.current + delta, total));
-          if (isTTY(stream)) renderAll();
+          entry.current = clampProgressValue(entry.current + delta, total, entry.current);
+          if (streamIsTTY(stream)) renderAll();
         },
         finish() {
           if (closed || entry.finished) return;
           entry.current = total;
           entry.finished = true;
-          if (isTTY(stream)) renderAll();
+          if (streamIsTTY(stream)) renderAll();
         },
         stop() {
           if (closed || entry.finished) return;
           entry.finished = true;
-          if (isTTY(stream)) renderAll();
+          if (streamIsTTY(stream)) renderAll();
+        },
+        [Symbol.dispose]() {
+          this.stop();
         },
       };
 
@@ -576,7 +707,7 @@ function createMultiBar(): MultiBar {
         entry.current = entry.options.total;
         entry.finished = true;
       }
-      if (isTTY(stream)) {
+      if (streamIsTTY(stream)) {
         renderAll(true);
         cleanup();
         stream.write("\n");
@@ -584,12 +715,8 @@ function createMultiBar(): MultiBar {
       closed = true;
     },
 
-    stop() {
-      if (closed) return;
-      closed = true;
-      cleanup();
-      if (isTTY(stream)) stream.write("\n");
-    },
+    stop,
+    [Symbol.dispose]: stop,
   };
 
   function renderAll(final = false): void {
@@ -607,39 +734,15 @@ function createMultiBar(): MultiBar {
     for (const entry of bars) {
       const { options: opts, current, startTime } = entry;
       const total = opts.total;
-      const width = opts.width ?? 30;
-      const filled = opts.filled ?? "█";
-      const empty = opts.empty ?? "░";
-      const label = singleLine(opts.label ?? "");
-
-      const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+      const percent = progressPercent(current, total);
       const elapsed = Date.now() - startTime;
       const rate = elapsed > 0 ? (current / elapsed) * 1000 : 0;
-      const eta = rate > 0 ? Math.max(0, ((total - current) / rate) * 1000) : 0;
-
-      let line: string;
-      if (opts.format) {
-        line = singleLine(opts.format({ current, total, percent, elapsed, eta, rate }));
-      } else {
-        const filledCount = Math.round((percent / 100) * width);
-        const emptyCount = width - filledCount;
-        let bar = filled.repeat(filledCount) + empty.repeat(emptyCount);
-
-        if (opts.color) {
-          try {
-            bar = (col as Record<string, (s: string) => string>)[opts.color](bar);
-          } catch {
-            // ignore unknown color
-          }
-        }
-
-        const parts: string[] = [];
-        if (label) parts.push(label);
-        parts.push(`[${bar}]`);
-        parts.push(`${percent}%`);
-        parts.push(`${current}/${total}`);
-        line = parts.join("  ");
-      }
+      const eta = progressEta(current, total, rate);
+      const line = renderBarLine(
+        { current, total, percent, elapsed, eta, rate },
+        opts,
+        col as Record<string, (text: string) => string>,
+      );
 
       frame += `\r\x1b[K${line}\n`;
       rows += Math.max(1, Math.ceil(stringWidth(line) / columns));
@@ -666,4 +769,6 @@ export const progress = {
   spinner: createSpinner,
   /** Creates a multi-bar manager for simultaneous progress bars. */
   multi: createMultiBar,
+  /** Stops all indicators that are still active. */
+  releaseAll,
 };

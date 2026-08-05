@@ -57,6 +57,12 @@ export class CommandRegistry {
       mergeDefinition(existing, def);
       return existing;
     } else {
+      if (current.action && current.argDefs.length > 0) {
+        process.emitWarning(
+          `Subcommand "${def.name}" below "${current.name}" cannot be dispatched because its action consumes positional arguments`,
+          { code: "NODE_CLI_UNREACHABLE_SUBCOMMAND" },
+        );
+      }
       this.assertNoAliasCollision(def.name, parentPath);
       def.parent = current;
       current.subcommands.set(def.name, def);
@@ -312,11 +318,9 @@ function mergeDefinition(target: CommandDefinition, source: CommandDefinition): 
   for (const [k, v] of source.options) {
     target.options.set(k, v);
   }
-  // Replace the argument list wholesale when the source declares its own, so a
-  // redefinition with fewer args does not leave stale trailing arguments behind.
-  if (source.argDefs.length > 0) {
-    target.argDefs = [...source.argDefs];
-  }
+  // Replace the argument list wholesale, including an empty list. A command
+  // redefined without arguments must not retain stale required arguments.
+  target.argDefs = [...source.argDefs];
   for (const [k, v] of source.subcommands) {
     const existingSub: CommandDefinition | undefined = target.subcommands.get(k);
     if (existingSub) {

@@ -21,6 +21,8 @@ const STALE_LOCK_MS = 10_000;
  * where it degrades to a plain read.
  */
 const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+const APPEND_FLAGS =
+  constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0);
 
 /**
  * Matches C0 control characters (including `\n`, `\r`, and DEL) and C1 control
@@ -58,6 +60,10 @@ export class History {
   private readonly filter?: (line: string) => string | null;
   private lines: string[] = [];
   private pending: string[] = [];
+  /** A full rewrite is needed only after an over-limit load or append. */
+  private needsCompaction = false;
+  /** True after a symlink path has been rejected for this shell session. */
+  private symlinkRejected = false;
 
   /**
    * Creates a new History instance.
@@ -124,12 +130,16 @@ export class History {
    */
   async load(): Promise<string[]> {
     try {
-      this.lines = this.limit(await this.readSafeLines());
+      const diskLines = await this.readSafeLines();
+      this.needsCompaction = diskLines.length > this.maxSize;
+      this.lines = this.limit(diskLines);
       this.pending = [];
     } catch (error) {
       // File doesn't exist or can't be read — start fresh
       this.lines = [];
       this.pending = [];
+      this.needsCompaction = false;
+      if (isNodeError(error, "ELOOP")) this.symlinkRejected = true;
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`Warning: Could not load history from ${this.filePath}: ${message}\n`);
     }
@@ -156,6 +166,7 @@ export class History {
       return;
     }
 
+    if (this.lines.length >= this.maxSize) this.needsCompaction = true;
     this.lines.push(trimmed);
     this.pending.push(trimmed);
 
@@ -187,17 +198,21 @@ export class History {
 
   /**
    * Removes a lock file only when it is safe to conclude no live session holds
-   * it: its mtime is older than {@link STALE_LOCK_MS} and, if a PID is recorded,
-   * that process is no longer running.
+   * it: a recorded dead PID is sufficient immediately; an unowned lock must have
+   * an mtime older than {@link STALE_LOCK_MS}.
    * @param lockPath - Path to the `.lock` file.
    * @returns `true` if a stale lock was removed and acquisition should be retried.
    */
   private async breakStaleLock(lockPath: string): Promise<boolean> {
     try {
       const stats = await lstat(lockPath);
-      if (Date.now() - stats.mtimeMs < STALE_LOCK_MS) return false;
       const owner = await this.readLockOwner(lockPath);
-      if (owner !== undefined && this.isProcessAlive(owner)) return false;
+      if (owner !== undefined) {
+        if (this.isProcessAlive(owner)) return false;
+        await rm(lockPath, { force: true });
+        return true;
+      }
+      if (Date.now() - stats.mtimeMs < STALE_LOCK_MS) return false;
       await rm(lockPath, { force: true });
       return true;
     } catch {
@@ -241,12 +256,39 @@ export class History {
    * Writes a warning to stderr if saving fails.
    */
   async save(): Promise<void> {
+    // readSafeLines has already rejected this path as a symlink and reported it
+    // once. Retrying for every command cannot make persistence succeed and only
+    // floods stderr, while following it would weaken the security guarantee.
+    if (this.symlinkRejected) return;
     let lock: Awaited<ReturnType<typeof open>> | undefined;
     const lockPath = `${this.filePath}.lock`;
     let tempPath: string | undefined;
     try {
       await mkdir(dirname(this.filePath), { recursive: true });
       lock = await this.acquireLock();
+
+      // The common interactive path appends just the newly accepted command.
+      // A snapshot is only needed to enforce a size limit after it is exceeded.
+      if (!this.needsCompaction) {
+        const append = await open(this.filePath, APPEND_FLAGS, PRIVATE_FILE_MODE);
+        try {
+          const stats = await append.stat();
+          if (!stats.isFile()) throw new Error("history path is not a regular file");
+          if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
+            throw new Error("history file is owned by another user");
+          }
+          if ((stats.mode & 0o777) !== PRIVATE_FILE_MODE) await append.chmod(PRIVATE_FILE_MODE);
+          if (this.pending.length > 0) {
+            await append.writeFile(`${this.pending.join("\n")}\n`, "utf-8");
+          }
+        } finally {
+          await append.close();
+        }
+        this.pending = [];
+        return;
+      }
+
+      if (!this.needsCompaction) return;
 
       const diskLines = await this.readSafeLines();
       const merged = [...diskLines];
@@ -267,7 +309,9 @@ export class History {
       await rename(tempPath, this.filePath);
       tempPath = undefined;
       this.pending = [];
+      this.needsCompaction = false;
     } catch (err) {
+      if (isNodeError(err, "ELOOP")) this.symlinkRejected = true;
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Warning: Could not save history to ${this.filePath}: ${message}\n`);
     } finally {

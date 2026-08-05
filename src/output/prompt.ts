@@ -7,6 +7,7 @@ import {
   sanitizeTerminalText,
   splitAnsi,
   splitGraphemes,
+  streamIsTTY,
 } from "./color.js";
 
 // ── Types ──
@@ -14,33 +15,39 @@ import {
 /**
  * Base options shared by all prompt types.
  */
-export interface PromptBaseOptions {
+export interface PromptBaseOptions<T = unknown> {
   /** Validation function; throw an Error to reject the value. */
-  validate?: (value: unknown) => void;
+  validate?: (value: T) => void;
   /** Whether a non-empty value is required. Defaults to true for text/password prompts. */
   required?: boolean;
   /** Prefix symbol displayed before the prompt message. Defaults to "?". */
   prefix?: string;
   /** Writable stream for output. Defaults to process.stdout. */
   stdout?: Writable;
+  /** Writable stream for interactive prompts when stdout is redirected. Defaults to process.stderr. */
+  stderr?: Writable;
   /** Readable stream for input. Defaults to process.stdin. */
   stdin?: Readable;
+  /** Cancels the pending prompt when aborted. */
+  signal?: AbortSignal;
 }
 
 /**
  * Options for a text input prompt.
  */
-export interface TextOptions extends PromptBaseOptions {
+export interface TextOptions extends PromptBaseOptions<string> {
   /** Default text value. */
   default?: string;
   /** Placeholder text displayed as a hint. */
   placeholder?: string;
+  /** Whether to trim leading/trailing whitespace. Defaults to true. */
+  trim?: boolean;
 }
 
 /**
  * Options for a yes/no confirmation prompt.
  */
-export interface ConfirmOptions extends PromptBaseOptions {
+export interface ConfirmOptions extends PromptBaseOptions<boolean> {
   /** Default boolean value. Defaults to false. */
   default?: boolean;
 }
@@ -60,7 +67,7 @@ export interface SelectChoice<T> {
 /**
  * Options for a single-select prompt.
  */
-export interface SelectOptions<T> extends PromptBaseOptions {
+export interface SelectOptions<T> extends PromptBaseOptions<T> {
   /** Default selected value, returned when the user presses Enter with no input. */
   default?: T;
 }
@@ -68,7 +75,7 @@ export interface SelectOptions<T> extends PromptBaseOptions {
 /**
  * Options for a multiselect prompt.
  */
-export interface MultiselectOptions<T> extends PromptBaseOptions {
+export interface MultiselectOptions<T> extends PromptBaseOptions<T[]> {
   /** Pre-selected default values. */
   default?: T[];
   /** Minimum number of items that must be selected. */
@@ -78,10 +85,15 @@ export interface MultiselectOptions<T> extends PromptBaseOptions {
 }
 
 /** Options for a password prompt. Passwords intentionally have no default value. */
-export type PasswordOptions = PromptBaseOptions;
+export interface PasswordOptions extends PromptBaseOptions<string> {
+  /** Whether to trim leading/trailing whitespace. Defaults to false. */
+  trim?: boolean;
+}
 
 /**
- * A choice can be either a raw value or a SelectChoice object with label/value/hint.
+ * A choice can be either a raw value or a descriptor object that has both
+ * `label` and `value`. Objects with only a `label` are rejected at runtime so
+ * ordinary domain objects are never silently converted to `undefined`.
  */
 export type Choice<T> = T | SelectChoice<T>;
 
@@ -96,6 +108,9 @@ export type Choice<T> = T | SelectChoice<T>;
 function normalizeChoices<T>(choices: Choice<T>[]): SelectChoice<T>[] {
   return choices.map((ch) => {
     if (typeof ch === "object" && ch !== null && "label" in (ch as Record<string, unknown>)) {
+      if (!("value" in (ch as Record<string, unknown>))) {
+        throw new TypeError("Choice descriptors must include both label and value");
+      }
       const choice = ch as SelectChoice<T>;
       return {
         ...choice,
@@ -163,6 +178,8 @@ interface CancelableRl {
   dispose: () => void;
 }
 
+const activePromptInputs = new WeakSet<Readable>();
+
 /**
  * Creates a readline interface plus a cancellation signal that is aborted when
  * the user presses Ctrl+C (SIGINT). Callers pass `signal` to `rl.question` so a
@@ -174,12 +191,19 @@ interface CancelableRl {
  * @param stdout - Output stream. Defaults to process.stdout.
  * @returns The readline interface, an abort signal, a closed flag, and teardown.
  */
-function createCancelableRl(stdin?: Readable, stdout?: Writable): CancelableRl {
+function createCancelableRl(
+  stdin?: Readable,
+  stdout?: Writable,
+  terminalOverride?: boolean,
+  externalSignal?: AbortSignal,
+): CancelableRl {
   const input = stdin ?? process.stdin;
+  if (activePromptInputs.has(input)) {
+    throw new Error("Another prompt is already reading from this input stream");
+  }
+  activePromptInputs.add(input);
   const output = stdout ?? process.stdout;
-  const terminal =
-    (input as Partial<NodeJS.ReadStream>).isTTY === true &&
-    (output as Partial<NodeJS.WriteStream>).isTTY === true;
+  const terminal = terminalOverride ?? (streamIsTTY(input) && streamIsTTY(output));
   const rl = createInterface({
     input,
     output,
@@ -187,7 +211,10 @@ function createCancelableRl(stdin?: Readable, stdout?: Writable): CancelableRl {
   });
   const controller = new AbortController();
   const onSigint = () => controller.abort();
+  const onAbort = () => controller.abort(externalSignal?.reason);
   rl.on("SIGINT", onSigint);
+  if (externalSignal?.aborted) onAbort();
+  else externalSignal?.addEventListener("abort", onAbort, { once: true });
 
   let closed = false;
   const onClose = () => {
@@ -198,6 +225,8 @@ function createCancelableRl(stdin?: Readable, stdout?: Writable): CancelableRl {
   const dispose = () => {
     rl.off("SIGINT", onSigint);
     rl.off("close", onClose);
+    externalSignal?.removeEventListener("abort", onAbort);
+    activePromptInputs.delete(input);
     rl.close();
   };
 
@@ -255,11 +284,16 @@ async function ask(
  * @throws PromptCancelError if the user cancels (e.g., Ctrl+C).
  */
 async function text(message: string, options: TextOptions = {}): Promise<string> {
-  const { default: defaultValue, validate, required = true, prefix = "?" } = options;
+  const { default: defaultValue, validate, required = true, prefix = "?", trim = true } = options;
   const stdout = options.stdout ?? process.stdout;
   const col = createColorizer(stdout);
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(
+    options.stdin,
+    stdout,
+    undefined,
+    options.signal,
+  );
   const hint =
     defaultValue !== undefined
       ? col.dim(` (${defaultValue})`)
@@ -276,7 +310,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
         isClosed,
       );
 
-      let value = answer.trim();
+      let value = trim ? answer.trim() : answer;
       // An explicit default (including an empty string) fills an empty
       // submission and bypasses the required-empty check below.
       const usedDefault = value === "" && defaultValue !== undefined;
@@ -321,7 +355,12 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
   const stdout = options.stdout ?? process.stdout;
   const col = createColorizer(stdout);
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(
+    options.stdin,
+    stdout,
+    undefined,
+    options.signal,
+  );
   const hint = defaultValue ? col.dim(" (Y/n)") : col.dim(" (y/N)");
 
   try {
@@ -333,6 +372,10 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
         isClosed,
       );
       const trimmed = answer.trim().toLowerCase();
+      if (trimmed !== "" && !["y", "yes", "n", "no"].includes(trimmed)) {
+        stdout.write(`${col.red("✖")} Please enter yes or no\n`);
+        continue;
+      }
       const value = trimmed === "" ? defaultValue : trimmed === "y" || trimmed === "yes";
       if (options.validate) {
         try {
@@ -379,7 +422,12 @@ async function select<T = string>(
   }
   const defaultIndex = findDefaultIndex(normalized, defaultValue);
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(
+    options.stdin,
+    stdout,
+    undefined,
+    options.signal,
+  );
 
   try {
     stdout.write(`${col.green(prefix)} ${col.bold(message)}\n`);
@@ -483,7 +531,12 @@ async function multiselect<T = string>(
     (defaults ?? []).map((d) => findDefaultIndex(normalized, d)).filter((i) => i >= 0),
   );
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, stdout);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(
+    options.stdin,
+    stdout,
+    undefined,
+    options.signal,
+  );
 
   try {
     stdout.write(
@@ -607,9 +660,16 @@ export function maskInput(chunk: string): string {
  * @throws PromptCancelError if the user cancels.
  */
 async function password(message: string, options: PasswordOptions = {}): Promise<string> {
-  const { validate, required = true, prefix = "?" } = options;
+  const { validate, required = true, prefix = "?", trim = false } = options;
   const stdout = options.stdout ?? process.stdout;
-  const col = createColorizer(stdout);
+  const stdin = options.stdin ?? process.stdin;
+  const stdinIsTTY = streamIsTTY(stdin);
+  const stdoutIsTTY = streamIsTTY(stdout);
+  // A password prompt must keep using raw mode when its input is a terminal,
+  // even when command output is redirected. Send the prompt to stderr in that
+  // case so stdout remains suitable for machine-readable output and logs.
+  const promptOutput = stdinIsTTY && !stdoutIsTTY ? (options.stderr ?? process.stderr) : stdout;
+  const col = createColorizer(promptOutput);
 
   // Masking is scoped to this prompt: readline echoes to a private wrapper
   // stream that masks visible characters and forwards everything to the real
@@ -627,7 +687,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
     write(chunk: string | Buffer, _encoding, callback) {
       const text = typeof chunk === "string" ? chunk : chunk.toString();
       if (!masking) {
-        stdout.write(text);
+        promptOutput.write(text);
         callback();
         return;
       }
@@ -649,20 +709,25 @@ async function password(message: string, options: PasswordOptions = {}): Promise
       if (trustedPrompt) {
         const boundary = idx + promptQuery.length;
         promptRendered = true;
-        stdout.write(text.slice(0, boundary) + maskInput(text.slice(boundary)));
+        promptOutput.write(text.slice(0, boundary) + maskInput(text.slice(boundary)));
       } else {
-        stdout.write(maskInput(text));
+        promptOutput.write(maskInput(text));
       }
       callback();
     },
   });
   // Mirror TTY status/size so readline keeps terminal echo behavior.
-  const ttyStdout = stdout as Partial<NodeJS.WriteStream>;
-  (maskingOutput as unknown as Record<string, unknown>).isTTY = ttyStdout.isTTY === true;
-  (maskingOutput as unknown as Record<string, unknown>).columns = ttyStdout.columns ?? 80;
-  (maskingOutput as unknown as Record<string, unknown>).rows = ttyStdout.rows ?? 24;
+  const ttyPromptOutput = promptOutput as Partial<NodeJS.WriteStream>;
+  (maskingOutput as unknown as Record<string, unknown>).isTTY = stdinIsTTY;
+  (maskingOutput as unknown as Record<string, unknown>).columns = ttyPromptOutput.columns ?? 80;
+  (maskingOutput as unknown as Record<string, unknown>).rows = ttyPromptOutput.rows ?? 24;
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(options.stdin, maskingOutput);
+  const { rl, signal, isClosed, dispose } = createCancelableRl(
+    stdin,
+    maskingOutput,
+    stdinIsTTY,
+    options.signal,
+  );
 
   try {
     while (true) {
@@ -680,10 +745,10 @@ async function password(message: string, options: PasswordOptions = {}): Promise
         promptRendered = false;
       }
 
-      const value = answer;
+      const value = trim ? answer.trim() : answer;
 
       if (required && value === "") {
-        stdout.write(`${col.red("✖")} Value is required\n`);
+        promptOutput.write(`${col.red("✖")} Value is required\n`);
         continue;
       }
 
@@ -692,7 +757,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
           validate(value);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          stdout.write(`${col.red("✖")} ${msg}\n`);
+          promptOutput.write(`${col.red("✖")} ${msg}\n`);
           continue;
         }
       }

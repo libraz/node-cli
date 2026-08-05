@@ -1,4 +1,4 @@
-import { InvalidOptionError, UnknownOptionError } from "../errors.js";
+import { InvalidOptionError, ParseError, UnknownOptionError } from "../errors.js";
 import type { ArgDef, CommandDefinition, OptionDef, ParseResult } from "../types.js";
 import type { CommandRegistry } from "./registry.js";
 
@@ -145,7 +145,8 @@ function splitRespectingQuotes(
     current += "\\";
   }
   if (inSingle || inDouble) {
-    throw new Error(`Unclosed ${inSingle ? "single" : "double"} quote in input`);
+    const quote = inSingle ? "single" : "double";
+    throw new ParseError(`Unclosed ${quote} quote in input`, { quote });
   }
 
   flush();
@@ -270,23 +271,43 @@ function parseArgToken(token: string): ArgDef {
 export function parseOptionFlags(flags: string): {
   long: string;
   aliases: string[];
+  longAliases: string[];
   takesValue: boolean;
+  valueName?: string;
 } {
-  const parts = flags.split(",").map((p) => p.trim());
+  const parts: string[] = [];
+  let part = "";
+  let placeholderDepth = 0;
+  for (const ch of flags) {
+    if (ch === "<" || ch === "[") placeholderDepth++;
+    if (ch === ">" || ch === "]") placeholderDepth = Math.max(0, placeholderDepth - 1);
+    if (ch === "," && placeholderDepth === 0) {
+      parts.push(part.trim());
+      part = "";
+    } else {
+      part += ch;
+    }
+  }
+  parts.push(part.trim());
   let long = "";
   const aliases: string[] = [];
+  const longAliases: string[] = [];
   let takesValue = false;
+  let valueName: string | undefined;
 
   for (let part of parts) {
     // Check for value placeholder
-    const valueMatch = part.match(/\s+<[^>]+>$/);
+    const valueMatch = part.match(/\s+(?:<([^>\s]+)>|\[([^\]\s]+)\])$/);
     if (valueMatch) {
       takesValue = true;
+      valueName = valueMatch[1] ?? valueMatch[2];
       part = part.slice(0, -valueMatch[0].length);
     }
 
     if (part.startsWith("--")) {
-      long = part.slice(2);
+      const name = part.slice(2);
+      if (long) longAliases.push(long);
+      long = name;
     } else if (part.startsWith("-")) {
       aliases.push(part.slice(1));
     }
@@ -296,7 +317,7 @@ export function parseOptionFlags(flags: string): {
     long = aliases[0];
   }
 
-  return { long, aliases, takesValue };
+  return { long, aliases, longAliases, takesValue, valueName };
 }
 
 /**
@@ -381,6 +402,10 @@ function extractOptionsAndArgs(
       continue;
     }
 
+    if (token === "<" || token === ">") {
+      throw new ParseError(`Redirection operator "${token}" is not supported`);
+    }
+
     if (token === "--") {
       pastDoubleDash = true;
       i++;
@@ -388,8 +413,16 @@ function extractOptionsAndArgs(
     }
 
     // Negated boolean (--no-x), unless an option is literally named "no-x".
-    if (token.startsWith("--no-") && token.indexOf("=") === -1 && !optionDefs.has(token.slice(2))) {
-      const name = token.slice(5);
+    const negatedEqIndex = token.indexOf("=");
+    const negatedLiteralName = token.slice(2, negatedEqIndex === -1 ? undefined : negatedEqIndex);
+    if (token.startsWith("--no-") && !optionDefs.has(negatedLiteralName)) {
+      const name = token.slice(5, negatedEqIndex === -1 ? undefined : negatedEqIndex);
+      if (negatedEqIndex !== -1) {
+        throw new InvalidOptionError(`Option --no-${name} does not accept a value`, {
+          optionName: name,
+          value: token.slice(negatedEqIndex + 1),
+        });
+      }
       const def = optionDefs.get(name);
       if (!def) {
         throw new UnknownOptionError(`--no-${name}`);
@@ -439,7 +472,10 @@ function extractOptionsAndArgs(
           appendOption(options, name, nextToken, def);
           i += 2;
         } else {
-          throw new InvalidOptionError(`Option --${name} expects a value`, { optionName: name });
+          throw new InvalidOptionError(
+            `Option --${name} expects a value; use --${name}=<value> for values starting with "-"`,
+            { optionName: name },
+          );
         }
       }
       continue;
@@ -499,7 +535,10 @@ function extractOptionsAndArgs(
             appendOption(options, name, nextToken, def);
             i += 2;
           } else {
-            throw new InvalidOptionError(`Option -${chars} expects a value`, { optionName: name });
+            throw new InvalidOptionError(
+              `Option -${chars} expects a value; use --${name}=<value> for values starting with "-"`,
+              { optionName: name },
+            );
           }
         }
       } else {
@@ -633,6 +672,7 @@ export function splitPipes(input: string): string[] {
     // (matching splitRespectingQuotes), so quote state stays balanced.
     if (ch === "\\" && !inSingle) {
       escaped = true;
+      previousPipe = false;
       continue;
     }
     if (ch === "'" && !inDouble) {
@@ -646,14 +686,14 @@ export function splitPipes(input: string): string[] {
       continue;
     }
     if (ch === "|" && !inSingle && !inDouble) {
-      if (previousPipe) throw new Error("Invalid empty pipe segment");
+      if (previousPipe) throw new ParseError("Invalid empty pipe segment");
       previousPipe = true;
       continue;
     }
     if (!/\s/.test(ch)) previousPipe = false;
   }
   if (previousPipe && input.trim() !== "") {
-    throw new Error("Invalid trailing pipe");
+    throw new ParseError("Invalid trailing pipe");
   }
   // Preserve quotes/escapes so each segment can be tokenized again downstream.
   return splitRespectingQuotes(input, (ch) => ch === "|", true);
