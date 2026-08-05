@@ -141,6 +141,9 @@ while True:
         break
     output += chunk
 os.close(master)
+# Linux raises EIO on the master once the last slave closes, so the read loop
+# above can break before poll() observed the exit. Reap explicitly.
+child.wait()
 sys.stdout.buffer.write(output)
 if child.returncode < 0:
     raise SystemExit(128 + -child.returncode)
@@ -282,9 +285,11 @@ stderr += remaining_stderr
 screen = b""
 os.set_blocking(master, False)
 while True:
+    # BlockingIOError once the echo buffer is drained, EIO on Linux once the
+    # child released the slave; both end the drain.
     try:
         chunk = os.read(master, 4096)
-    except BlockingIOError:
+    except OSError:
         break
     if not chunk:
         break
@@ -432,7 +437,10 @@ def read_until(marker):
     while marker not in output and time.time() < deadline:
         ready, _, _ = select.select([master], [], [], 0.05)
         if master in ready:
-            chunk = os.read(master, 4096)
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
             if not chunk:
                 break
             output += chunk
@@ -459,6 +467,9 @@ while True:
         break
     output += chunk
 os.close(master)
+# Linux raises EIO on the master once the last slave closes, so the read loop
+# above can break before poll() observed the exit. Reap explicitly.
+child.wait()
 sys.stdout.buffer.write(output)
 raise SystemExit(child.returncode)
 `;
