@@ -8,8 +8,10 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -30,12 +32,13 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "pretest": "yarn build",
-    "test": "vitest",
+    "test": "yarn build && vitest",
     "test:coverage": "vitest --coverage",
     "test:examples": "node scripts/examples-smoke.mjs",
     "test:git-install": "node scripts/git-install-smoke.mjs",
     "test:pack": "node scripts/pack-smoke.mjs",
     "typecheck:examples": "tsc -p tsconfig.examples.json",
+    "typecheck:node22": "yarn dlx --package @types/node@22 --package typescript@6.0.3 tsc --noEmit",
     "lint": "biome check src tests examples scripts",
     "lint:fix": "biome check --write src tests examples scripts",
     "format": "biome format --write src tests examples scripts",
@@ -43,9 +46,6 @@
     "prepare": "tsc",
     "prepack": "yarn build && node scripts/pack-readme.mjs prepare",
     "postpack": "node scripts/pack-readme.mjs restore"
-  },
-  "volta": {
-    "node": "24.18.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",
@@ -62,5 +62,5 @@
       "optional": true
     }
   },
-  "packageManager": "yarn@4.17.0"
+  "packageManager": "yarn@4.18.0"
 }
