@@ -430,9 +430,11 @@ const password = await prompt.password("パスワードを入力:");
 
 パスワード値の先頭・末尾の空白は保持されます。既定の `required: true` で拒否されるのは完全な空文字列だけです。
 
+stdin が TTY で stdout がリダイレクトされている場合でも、パスワード入力はマスクされ、プロンプトは stderr に出力されます。別の対話ストリームを使うには `stderr` オプションを指定してください。
+
 ### 共通プロンプトオプション
 
-すべてのプロンプトは options object で `prefix`、`stdin`、`stdout`、`validate` を受け取ります。テキストとパスワードは `required`、confirm/select/multiselect は `default`、multiselect はさらに `min` と `max` を利用できます。
+すべてのプロンプトは options object で `prefix`、`stdin`、`stdout`、`validate` を受け取ります。password は stdout がリダイレクトされている場合の対話出力先として `stderr` も受け取ります。テキストとパスワードは `required`、confirm/select/multiselect は `default`、multiselect はさらに `min` と `max` を利用できます。
 
 ### キャンセル処理
 

@@ -89,7 +89,7 @@ interface OptionSchema {
 | `--tag v2` | `{ tag: "v2" }` |
 | `--tag=v2` | `{ tag: "v2" }` |
 | `-t 5000` | オプション解決後は `{ timeout: 5000 }` |
-| `-abc` | `{ a: true, b: true, c: true }` |
+| `-abc` | すべてのフラグが boolean の場合は `{ a: true, b: true, c: true }` |
 | `-- --not-an-option` | 位置引数として扱われる |
 
 明示的に渡したオプション値は定義順に解決されます。カスタム `parse` は生の文字列を
@@ -388,6 +388,9 @@ cli.command("deploy <env>")
 ### カスタムコマンド補完
 
 `.complete()` でコマンドの引数に対するカスタム補完を提供できます:
+
+返した候補は表示・挿入前に現在のトークン接頭辞でフィルタされます。候補は事前に
+絞り込んだ文字列ではなく、完全な値として返してください。
 
 ```typescript
 cli.command("connect <host>")

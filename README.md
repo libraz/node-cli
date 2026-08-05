@@ -11,22 +11,13 @@ Zero-dependency, batteries-included CLI framework for Node.js / TypeScript.
 
 **node-cli** is a lightweight interactive CLI shell framework that provides everything you need to build rich command-line applications — with no external production dependencies.
 
-| Feature | node-cli | Commander | Vorpal |
-|---------|---------|-----------|--------|
-| Interactive Shell (REPL) | Yes | No | Yes |
-| Subcommand Hierarchy | Yes | Yes | Yes |
-| Tab Completion | Yes | No | Yes |
-| Color Output | Built-in | External | External |
-| Table Display | Built-in | External | External |
-| Progress Bar / Spinner | Built-in | External | External |
-| Interactive Prompts | Built-in | External | External |
-| Logger | Built-in | External | External |
-| Pipe Commands | Yes | No | Yes |
-| Plugin System | Yes | No | Yes |
-| Event System | Yes | No | Yes |
-| Zero Dependencies | Yes | Yes | No |
-| TypeScript-first | Yes | Partial | No |
-| ESM-first | Yes | Yes | No |
+| Capability | Availability |
+|------------|--------------|
+| Interactive shell, subcommands, and tab completion | Built in |
+| Color, tables, progress indicators, prompts, and logging | Built in |
+| Pipes, plugins, and lifecycle events | Built in |
+| Production dependencies | None |
+| TypeScript and ESM | First-class support |
 
 ## Installation
 
@@ -179,7 +170,7 @@ const env = await prompt.select("Environment:", ["dev", "staging", "prod"]);
 ```typescript
 import { logger } from "@libraz/node-cli";
 
-const log = logger({ prefix: "app", timestamp: true });
+const log = logger({ prefix: "app", timestamp: true, level: "debug" });
 log.info("Server started on port %d", 3000);
 log.success("Deployment complete");
 log.error("Connection failed");

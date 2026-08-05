@@ -57,6 +57,10 @@ cli.command("deploy <env> [region]")
 
 履歴ファイルパスを設定。
 
+#### `historySize(size: number): this`
+
+対話モードで保持する履歴エントリ数の上限を設定。
+
 #### `historyFilter(filter: (line: string) => string | null): this`
 
 private な履歴ファイルへ書く前にコマンドを編集または除外します。資格情報などの秘密を含むコマンドは `null` を返して保存対象から外せます。
@@ -172,7 +176,7 @@ type Action = (ctx: CommandContext) => void | Promise<void>
 
 #### `complete(fn: Completer): this`
 
-カスタムタブ補完プロバイダを設定。`CompletionContext` には連続 Tab 押下回数を示す `iteration`（1始まり）が含まれ、段階的な補完候補の提示が可能。
+カスタムタブ補完プロバイダを設定。`CompletionContext` には連続 Tab 押下回数を示す `iteration`（1始まり）が含まれ、段階的な補完候補の提示が可能です。非同期プロバイダの期限は1秒で、期限切れ時は `signal` で進行中の処理をキャンセルできます。
 
 ```typescript
 type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>
@@ -183,8 +187,9 @@ interface CompletionContext {
   current: string;        // 補完中の単語
   commandPath: string[];  // 解決済みコマンドパス
   args: Record<string, unknown>;
-  options: Record<string, unknown>;
+  options: Record<string, unknown>; // 生の値。coerce/default/validation は未適用
   iteration: number;      // 連続 Tab 押下回数（1始まり）
+  signal: AbortSignal;    // 1秒の補完期限切れ時に abort される
 }
 ```
 
@@ -360,6 +365,8 @@ interface ModeConfig {
 モード action 実行中の最初の Ctrl+C は `ctx.signal` を abort します。長時間処理では
 この signal を `fetch` や abort 対応 timer へ渡してください。2回目の Ctrl+C は
 プロセスを強制終了します。
+
+SIGTERM も同じ協調キャンセル経路を通り、200ms の猶予後にシェル履歴を保存し、`exit` を emit して終了コード 143 で終了します。
 
 ```typescript
 shell.enterMode({
@@ -588,6 +595,7 @@ function prompt.text(message: string, options?: TextOptions): Promise<string>
 | `placeholder` | `string` | — | プレースホルダーテキスト |
 | `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
 | `required` | `boolean` | `true` | 空でないことを要求 |
+| `trim` | `boolean` | `true` | 先頭・末尾の空白を除去 |
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
@@ -650,12 +658,13 @@ function prompt.multiselect<T>(
 function prompt.password(message: string, options?: PasswordOptions): Promise<string>
 ```
 
-入力はアスタリスクでマスクされ、先頭・末尾の空白も保持されます。
+入力はアスタリスクでマスクされ、既定では先頭・末尾の空白も保持されます。`trim: true` を指定すると空白を取り除けます。
 
 | オプション | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
 | `required` | `boolean` | `true` | 空でないことを要求 |
+| `trim` | `boolean` | `false` | 先頭・末尾の空白を除去 |
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
@@ -734,3 +743,21 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "silent"
 | `InvalidOptionError` | 任意の `optionName`、任意の `value` |
 | `UnknownOptionError` | `flag` |
 | `ValidationError` | 任意の `cause` |
+
+## パースと端末ユーティリティ
+
+CLI 本体と同じパース・端末安全化の挙動が必要な統合向けに、次のヘルパーを公開しています。
+
+```typescript
+tokenize(input: string): string[]
+splitPipes(input: string): string[]
+stripOptionPrefix(flag: string): string
+sanitizeTerminalText(text: string, options?): string
+splitGraphemes(text: string): string[]
+streamIsTTY(stream: object): boolean
+restoreCursor(): void
+isCancellationError(error: unknown, signal?: AbortSignal): boolean
+formatErrorMessage(error: unknown, signal?: AbortSignal): string
+```
+
+カスタム shell / mode completer 向けに `CompletionResult` 型も公開しています。

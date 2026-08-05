@@ -89,7 +89,7 @@ interface OptionSchema {
 | `--tag v2` | `{ tag: "v2" }` |
 | `--tag=v2` | `{ tag: "v2" }` |
 | `-t 5000` | `{ timeout: 5000 }` after option resolution |
-| `-abc` | `{ a: true, b: true, c: true }` |
+| `-abc` | `{ a: true, b: true, c: true }` when every flag is boolean |
 | `-- --not-an-option` | Treated as positional arg |
 
 Explicit option values are resolved in declaration order. A custom `parse`
@@ -389,6 +389,9 @@ cli.command("deploy <env>")
 ### Custom Command Completer
 
 Use `.complete()` to provide custom completions for a command's arguments:
+
+Returned candidates are filtered against the current token prefix before they
+are shown or inserted. Return the full candidate values, not pre-filtered text.
 
 ```typescript
 cli.command("connect <host>")

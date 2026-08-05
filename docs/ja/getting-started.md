@@ -94,9 +94,13 @@ myapp v1.0.0
 
 Available commands:
 
-  greet <name>    名前で挨拶する
+  greet <name>         名前で挨拶する
   help [...command]    Show help information
 
+Options:
+  -V, --version    Show the CLI version
+
+Shell commands: exit, quit
 Type "help <command>" for more information.
 > exit
 ```
@@ -112,13 +116,15 @@ REPL を開かず、ヘルプを表示して終了します。
 ## CLI 設定
 
 ```typescript
+import { homedir } from "node:os";
+
 const cli = createCLI({
   name: "myapp",         // アプリケーション名 (デフォルト: "cli")
   version: "1.0.0",      // バージョン文字列
   description: "素晴らしい CLI ツール",  // ヘルプヘッダーに表示
   banner: "myapp へようこそ!",           // シェル起動時に表示 ("" で抑制)
   prompt: "myapp> ",     // シェルプロンプト (デフォルト: "> ")
-  historyFile: ".myapp_history",  // 履歴ファイルパス
+  historyFile: join(homedir(), ".myapp_history"),  // 履歴ファイルパス
   historySize: 500,      // 最大履歴エントリ数 (デフォルト: 1000)
 });
 ```

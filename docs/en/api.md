@@ -57,6 +57,10 @@ Every command supports `--help` and `-h` unless those flags are explicitly decla
 
 Set the history file path.
 
+#### `historySize(size: number): this`
+
+Set the maximum number of history entries retained in interactive mode.
+
 #### `historyFilter(filter: (line: string) => string | null): this`
 
 Redact or reject commands before they are written to the private history file. Return `null` for commands containing credentials or other secrets.
@@ -172,7 +176,7 @@ type Action = (ctx: CommandContext) => void | Promise<void>
 
 #### `complete(fn: Completer): this`
 
-Set a custom tab-completion provider. The `CompletionContext` includes an `iteration` counter (1-based) that tracks consecutive Tab presses, allowing progressive completions.
+Set a custom tab-completion provider. The `CompletionContext` includes an `iteration` counter (1-based) that tracks consecutive Tab presses, allowing progressive completions. Async providers have a 1-second deadline; use `signal` to cancel outstanding work when it expires.
 
 ```typescript
 type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>
@@ -183,8 +187,9 @@ interface CompletionContext {
   current: string;        // Current word being completed
   commandPath: string[];  // Resolved command path
   args: Record<string, unknown>;
-  options: Record<string, unknown>;
+  options: Record<string, unknown>; // Raw values; no coercion/defaults/validation
   iteration: number;      // Consecutive Tab press count (1-based)
+  signal: AbortSignal;    // Aborted when the 1-second completion deadline expires
 }
 ```
 
@@ -362,6 +367,9 @@ Mode completion is disabled unless `completer` is provided. Mode history is isol
 The first Ctrl+C during a mode action aborts `ctx.signal`; long-running work
 should observe it (for example, pass it to `fetch` or abortable timers). A second
 Ctrl+C force-quits the process.
+
+SIGTERM follows the same cooperative cancellation path, then saves shell history,
+emits `exit`, and exits with status 143 after a 200ms grace period.
 
 ```typescript
 shell.enterMode({
@@ -590,6 +598,7 @@ function prompt.text(message: string, options?: TextOptions): Promise<string>
 | `placeholder` | `string` | — | Placeholder text |
 | `validate` | `(v: unknown) => void` | — | Throw on invalid |
 | `required` | `boolean` | `true` | Require non-empty |
+| `trim` | `boolean` | `true` | Trim leading and trailing whitespace |
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
@@ -652,12 +661,13 @@ function prompt.multiselect<T>(
 function prompt.password(message: string, options?: PasswordOptions): Promise<string>
 ```
 
-Input is masked with asterisks. Leading and trailing whitespace is preserved.
+Input is masked with asterisks. Leading and trailing whitespace is preserved by default; set `trim: true` to remove it.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `validate` | `(v: unknown) => void` | — | Throw on invalid |
 | `required` | `boolean` | `true` | Require non-empty |
+| `trim` | `boolean` | `false` | Trim leading and trailing whitespace |
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
@@ -736,3 +746,22 @@ Additional structured fields:
 | `InvalidOptionError` | optional `optionName`, optional `value` |
 | `UnknownOptionError` | `flag` |
 | `ValidationError` | optional `cause` |
+
+## Parsing and terminal utilities
+
+The following helpers are exported for integrations that need the same parsing
+and terminal-safety behavior as the CLI:
+
+```typescript
+tokenize(input: string): string[]
+splitPipes(input: string): string[]
+stripOptionPrefix(flag: string): string
+sanitizeTerminalText(text: string, options?): string
+splitGraphemes(text: string): string[]
+streamIsTTY(stream: object): boolean
+restoreCursor(): void
+isCancellationError(error: unknown, signal?: AbortSignal): boolean
+formatErrorMessage(error: unknown, signal?: AbortSignal): string
+```
+
+`CompletionResult` is also exported for custom shell and mode completers.

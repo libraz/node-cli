@@ -11,22 +11,13 @@
 
 **node-cli** は、リッチなコマンドラインアプリケーションの構築に必要な機能をすべて備えた軽量インタラクティブ CLI シェルフレームワークです。外部の本番依存パッケージは一切不要です。
 
-| 機能 | node-cli | Commander | Vorpal |
-|------|---------|-----------|--------|
-| インタラクティブシェル (REPL) | Yes | No | Yes |
-| サブコマンド階層 | Yes | Yes | Yes |
-| タブ補完 | Yes | No | Yes |
-| カラー出力 | 内蔵 | 外部 | 外部 |
-| テーブル表示 | 内蔵 | 外部 | 外部 |
-| プログレスバー / スピナー | 内蔵 | 外部 | 外部 |
-| インタラクティブプロンプト | 内蔵 | 外部 | 外部 |
-| ロガー | 内蔵 | 外部 | 外部 |
-| パイプコマンド | Yes | No | Yes |
-| プラグインシステム | Yes | No | Yes |
-| イベントシステム | Yes | No | Yes |
-| 依存パッケージゼロ | Yes | Yes | No |
-| TypeScript ファースト | Yes | 一部 | No |
-| ESM ファースト | Yes | Yes | No |
+| 機能 | 提供状況 |
+|------|----------|
+| インタラクティブシェル、サブコマンド、タブ補完 | 内蔵 |
+| カラー、テーブル、進捗表示、プロンプト、ロガー | 内蔵 |
+| パイプ、プラグイン、ライフサイクルイベント | 内蔵 |
+| 本番依存パッケージ | なし |
+| TypeScript と ESM | 第一級サポート |
 
 ## インストール
 
@@ -179,7 +170,7 @@ const env = await prompt.select("環境:", ["dev", "staging", "prod"]);
 ```typescript
 import { logger } from "@libraz/node-cli";
 
-const log = logger({ prefix: "app", timestamp: true });
+const log = logger({ prefix: "app", timestamp: true, level: "debug" });
 log.info("サーバーがポート %d で起動しました", 3000);
 log.success("デプロイ完了");
 log.error("接続に失敗しました");

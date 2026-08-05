@@ -95,9 +95,13 @@ myapp v1.0.0
 
 Available commands:
 
-  greet <name>    Greet someone by name
+  greet <name>         Greet someone by name
   help [...command]    Show help information
 
+Options:
+  -V, --version    Show the CLI version
+
+Shell commands: exit, quit
 Type "help <command>" for more information.
 > exit
 ```
@@ -113,13 +117,15 @@ The interactive shell provides:
 ## CLI Configuration
 
 ```typescript
+import { homedir } from "node:os";
+
 const cli = createCLI({
   name: "myapp",         // Application name (default: "cli")
   version: "1.0.0",      // Version string
   description: "My awesome CLI tool",  // Shown in help header
   banner: "Welcome to myapp!",         // Shown when shell starts ("" to suppress)
   prompt: "myapp> ",     // Shell prompt (default: "> ")
-  historyFile: ".myapp_history",  // History file path
+  historyFile: join(homedir(), ".myapp_history"),  // History file path
   historySize: 500,      // Max history entries (default: 1000)
 });
 ```

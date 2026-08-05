@@ -430,9 +430,11 @@ const password = await prompt.password("Enter password:");
 
 Password values preserve leading and trailing whitespace; only the exact empty string fails the default `required: true` check.
 
+When stdin is a TTY but stdout is redirected, password input remains masked and the prompt is written to stderr. Pass `stderr` in the options to choose a different interactive stream.
+
 ### Prompt Options
 
-All prompt methods accept `prefix`, `stdin`, `stdout`, and `validate` through their options object. Text and password prompts also support `required`; confirm/select/multiselect support `default`; multiselect additionally supports `min` and `max`.
+All prompt methods accept `prefix`, `stdin`, `stdout`, and `validate` through their options object. Password also accepts `stderr` for its interactive prompt when stdout is redirected. Text and password prompts support `required`; confirm/select/multiselect support `default`; multiselect additionally supports `min` and `max`.
 
 ### Cancellation
 
