@@ -65,7 +65,24 @@ await cli.start();
 }
 ```
 
-`npx tsc --module Node16 --moduleResolution Node16 --target ES2023 --outDir dist src/cli.ts` でコンパイルし、POSIXでは `chmod +x dist/cli.js` を実行します。`npm link`（またはパッケージのインストール）後に `$ myapp` として起動できます。
+`tsconfig.json` を追加します。`types: ["node"]` は必須です。配布される型定義が `NodeJS` と `node:stream` を参照しているため、指定しないとビルドがこれらを解決できません。
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
+```
+
+`npm run build` でビルドし、POSIXでは `chmod +x dist/cli.js` を実行します。`npm link`（またはパッケージのインストール）後に `$ myapp` として起動できます。
 
 **ダイレクトモード:**
 

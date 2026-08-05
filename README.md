@@ -65,7 +65,24 @@ Save this as `src/cli.ts`, then use a minimal ESM package setup:
 }
 ```
 
-Compile with `npx tsc --module Node16 --moduleResolution Node16 --target ES2023 --outDir dist src/cli.ts`, run `chmod +x dist/cli.js` on POSIX, and use `npm link` (or install the package) to make `$ myapp` available.
+Add a `tsconfig.json`. `types: ["node"]` is required: the published type declarations reference `NodeJS` and `node:stream`, so a build without it fails to resolve them.
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
+```
+
+Run `npm run build`, run `chmod +x dist/cli.js` on POSIX, and use `npm link` (or install the package) to make `$ myapp` available.
 
 **Direct mode:**
 

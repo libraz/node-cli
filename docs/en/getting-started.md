@@ -50,7 +50,26 @@ Save the file as `src/cli.ts`. Configure ESM, build output, and the executable n
 }
 ```
 
-Run `npm run build`, then `chmod +x dist/cli.js` on POSIX. `npm link` exposes the configured `myapp` command for local testing. Applications using the public Node stream types should install a compatible `@types/node` (22 or newer).
+Add a `tsconfig.json` so `npm run build` has a project to compile:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
+```
+
+`types: ["node"]` is required: the published type declarations reference `NodeJS` and `node:stream`, so a build without it fails to resolve them. Applications using the public Node stream types should install a compatible `@types/node` (22 or newer).
+
+Run `npm run build`, then `chmod +x dist/cli.js` on POSIX. `npm link` exposes the configured `myapp` command for local testing.
 
 ## Dual Execution Modes
 
@@ -118,6 +137,7 @@ The interactive shell provides:
 
 ```typescript
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 const cli = createCLI({
   name: "myapp",         // Application name (default: "cli")

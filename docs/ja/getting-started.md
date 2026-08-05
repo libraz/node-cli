@@ -50,7 +50,26 @@ await cli.start();
 }
 ```
 
-`npm run build` を実行し、POSIXでは `chmod +x dist/cli.js` を実行します。`npm link` によりローカルで `myapp` コマンドを確認できます。公開Node stream型を利用するアプリケーションは互換性のある `@types/node`（22以上）も導入してください。
+`npm run build` がコンパイル対象を見つけられるよう、`tsconfig.json` を追加します。
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
+```
+
+`types: ["node"]` は必須です。配布される型定義が `NodeJS` と `node:stream` を参照しているため、指定しないとビルドがこれらを解決できません。公開 Node stream 型を利用するアプリケーションは互換性のある `@types/node`（22以上）も導入してください。
+
+`npm run build` を実行し、POSIXでは `chmod +x dist/cli.js` を実行します。`npm link` によりローカルで `myapp` コマンドを確認できます。
 
 ## デュアル実行モード
 
@@ -117,6 +136,7 @@ REPL を開かず、ヘルプを表示して終了します。
 
 ```typescript
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 const cli = createCLI({
   name: "myapp",         // アプリケーション名 (デフォルト: "cli")
