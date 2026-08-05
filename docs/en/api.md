@@ -780,6 +780,19 @@ trailing pipe, and an unsupported redirection operator. It is raised before a
 command is resolved, so a registered `catch()` fallback handler receives the input
 instead of the error being thrown.
 
+### Debug output
+
+When an error reaches `start()` in direct argv mode, only its message is printed
+as `Error: <message>`. Set `NODE_CLI_DEBUG=1` to print the full stack trace
+instead, which is useful when the message alone does not identify the origin.
+
+```bash
+NODE_CLI_DEBUG=1 myapp deploy prod
+```
+
+This affects the direct argv path only. Command failures inside the interactive
+shell always print the message, since the shell keeps running afterwards.
+
 ## Parsing and terminal utilities
 
 The following helpers are exported for integrations that need the same parsing

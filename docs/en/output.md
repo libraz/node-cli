@@ -58,7 +58,7 @@ cli.command("emit").action((ctx) => {
 ```typescript
 import { setColorEnabled, splitAnsi, stripAnsi, stringWidth } from "@libraz/node-cli";
 
-// Disable color globally (also respects NO_COLOR env var)
+// Disable color globally (overrides environment detection)
 setColorEnabled(false);
 
 // Remove ANSI escape codes from a string
@@ -72,6 +72,21 @@ stringWidth("こんにちは"); // 10
 splitAnsi("\x1b[31mred\x1b[0m");
 // [{ ansi: true, text: "\x1b[31m" }, { ansi: false, text: "red" }, { ansi: true, text: "\x1b[0m" }]
 ```
+
+When no explicit override is set, color is resolved from the environment in this
+order. The first matching rule wins.
+
+| Rule | Result |
+|------|--------|
+| `setColorEnabled(true \| false)` was called | Forced on or off |
+| `NO_COLOR` is set to a non-empty value | Off |
+| `FORCE_COLOR` is `0` or `false` | Off |
+| `FORCE_COLOR` is any other non-empty value | On, even for `TERM=dumb` or a non-TTY stream |
+| `TERM` is `dumb` | Off |
+| Otherwise | On only when the target stream is a TTY |
+
+Call `resetColorEnabled()` to drop a `setColorEnabled` override and return to
+environment detection.
 
 ## Table
 

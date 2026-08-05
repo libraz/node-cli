@@ -58,7 +58,7 @@ cli.command("emit").action((ctx) => {
 ```typescript
 import { setColorEnabled, splitAnsi, stripAnsi, stringWidth } from "@libraz/node-cli";
 
-// グローバルにカラーを無効化 (NO_COLOR 環境変数にも対応)
+// グローバルにカラーを無効化 (環境変数による判定より優先される)
 setColorEnabled(false);
 
 // 文字列から ANSI エスケープコードを除去
@@ -72,6 +72,21 @@ stringWidth("こんにちは"); // 10
 splitAnsi("\x1b[31mred\x1b[0m");
 // [{ ansi: true, text: "\x1b[31m" }, { ansi: false, text: "red" }, { ansi: true, text: "\x1b[0m" }]
 ```
+
+明示的な上書きがない場合、カラー出力の可否は次の順序で環境から判定されます。
+最初に一致した規則が採用されます。
+
+| 規則 | 結果 |
+|------|------|
+| `setColorEnabled(true \| false)` を呼び出し済み | 指定どおりに強制 |
+| `NO_COLOR` が空でない値 | 無効 |
+| `FORCE_COLOR` が `0` または `false` | 無効 |
+| `FORCE_COLOR` がそれ以外の空でない値 | 有効。`TERM=dumb` や非 TTY でも有効 |
+| `TERM` が `dumb` | 無効 |
+| 上記以外 | 対象ストリームが TTY のときのみ有効 |
+
+`resetColorEnabled()` を呼ぶと `setColorEnabled` による上書きが解除され、環境からの
+判定に戻ります。
 
 ## テーブル
 
