@@ -1,7 +1,11 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { CLI } from "../src/cli.js";
 import { createCLI } from "../src/index.js";
-import { createMockStdout } from "./helpers.js";
+import { createMockStdout, createMockTTY } from "./helpers.js";
 
 describe("CLI (integration)", () => {
   it("creates CLI via factory function", () => {
@@ -21,6 +25,88 @@ describe("CLI (integration)", () => {
     await cli.start(["greet", "world"]);
     expect(action).toHaveBeenCalledOnce();
     expect(action.mock.calls[0][0].args.name).toBe("world");
+  });
+
+  it("emits exit once for direct and non-interactive start paths", async () => {
+    const direct = createCLI();
+    const directExit = vi.fn();
+    direct.on("exit", directExit);
+    direct.command("run").action(() => {});
+    await direct.start(["run"]);
+    expect(directExit).toHaveBeenCalledOnce();
+
+    const originalIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    const help = createCLI();
+    const helpExit = vi.fn();
+    help.on("exit", helpExit);
+    try {
+      await help.start([]);
+      expect(helpExit).toHaveBeenCalledOnce();
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+    }
+  });
+
+  it("uses exit status 130 after a cooperative SIGINT cancellation", async () => {
+    const cli = createCLI();
+    let started: () => void = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    cli.command("wait").action(
+      (ctx) =>
+        new Promise<void>((resolve) => {
+          ctx.signal.addEventListener("abort", resolve, { once: true });
+          started();
+        }),
+    );
+
+    try {
+      const execution = cli.start(["wait"]);
+      await running;
+      process.emit("SIGINT");
+      await execution;
+      expect(process.exitCode).toBe(130);
+    } finally {
+      process.exitCode = 0;
+    }
+  });
+
+  it("uses exit status 130 when a SIGINT-aborted action rejects", async () => {
+    const cli = createCLI();
+    let started: () => void = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    cli.command("abort").action(
+      (ctx) =>
+        new Promise<void>((_resolve, reject) => {
+          ctx.signal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+          started();
+        }),
+    );
+
+    const stderr = createMockStdout();
+    const originalWrite = process.stderr.write;
+    process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
+    try {
+      const execution = cli.start(["abort"]);
+      await running;
+      process.emit("SIGINT");
+      await execution;
+      expect(process.exitCode).toBe(130);
+      expect(stderr.getOutput()).toBe(
+        "\nInterrupted. Press Ctrl-C again to force quit.\nCancelled\n",
+      );
+    } finally {
+      process.stderr.write = originalWrite;
+      process.exitCode = 0;
+    }
   });
 
   it("handles command not found in direct mode", async () => {
@@ -128,7 +214,40 @@ describe("CLI (integration)", () => {
 
   it("prompt and history methods are chainable", () => {
     const cli = createCLI({ name: "test" });
-    const result = cli.prompt("$ ").history("/tmp/test_history");
+    const result = cli.prompt("$ ").history("test-history");
     expect(result).toBe(cli);
+  });
+
+  it("passes historyFilter from CLI through Shell to persisted history", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "node-cli-history-filter-"));
+    const historyFile = join(directory, "history");
+    const originalStdin = process.stdin;
+    const originalStdout = process.stdout;
+    const originalStderr = process.stderr;
+    const stdin = new PassThrough() as PassThrough & { isTTY: true };
+    stdin.isTTY = true;
+    const stdout = createMockTTY();
+    const stderr = createMockTTY();
+    const cli = createCLI({ historyFile });
+    cli.command("login <token>").action(() => {});
+    cli.historyFilter((line) => line.replace(/secret/g, "[redacted]"));
+
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
+    Object.defineProperty(process, "stdout", { configurable: true, value: stdout });
+    Object.defineProperty(process, "stderr", { configurable: true, value: stderr });
+    try {
+      const started = cli.start([]);
+      setTimeout(() => stdin.end("login secret\nquit\n"), 10);
+      await started;
+
+      const savedHistory = await readFile(historyFile, "utf8");
+      expect(savedHistory).toContain("login [redacted]");
+      expect(savedHistory).not.toContain("login secret");
+    } finally {
+      Object.defineProperty(process, "stdin", { configurable: true, value: originalStdin });
+      Object.defineProperty(process, "stdout", { configurable: true, value: originalStdout });
+      Object.defineProperty(process, "stderr", { configurable: true, value: originalStderr });
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

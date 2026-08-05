@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { CLI } from "../src/cli.js";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { ShellCompleter } from "../src/shell/completion.js";
@@ -18,11 +19,29 @@ describe("ShellCompleter", () => {
     completer = new ShellCompleter(registry);
   });
 
+  it("completes command paths for the built-in help command", () => {
+    const cli = new CLI();
+    cli
+      .command("user create")
+      .alias("new")
+      .action(() => {});
+    const privateCli = cli as unknown as { registry: CommandRegistry };
+    const comp = new ShellCompleter(privateCli.registry);
+
+    expect(comp.complete("help us")).toEqual([["user"], "us"]);
+    expect(comp.complete("help user ")).toEqual([["create", "new"], ""]);
+  });
+
   it("completes top-level commands from empty", () => {
     const [candidates] = completer.complete("") as [string[], string];
     expect(candidates).toContain("deploy");
     expect(candidates).toContain("destroy");
     expect(candidates).toContain("user");
+  });
+
+  it("does not list commands while the current line has an unclosed quote", () => {
+    expect(completer.complete("'")).toEqual([[], ""]);
+    expect(completer.complete("'unterminated")).toEqual([[], "unterminated"]);
   });
 
   it("completes partial command names", () => {
@@ -115,6 +134,16 @@ describe("ShellCompleter", () => {
     expect(candidates).toContain("prod");
     expect(candidates).toContain("stage");
     expect(candidates).toContain("dev");
+  });
+
+  it("escapes whitespace in option-value candidates before readline inserts them", () => {
+    const registry2 = new CommandRegistry();
+    new CommandBuilder(registry2, "deploy <env>").option("--region <region>", {
+      autocomplete: ["New York"],
+    });
+    const completer2 = new ShellCompleter(registry2);
+
+    expect(completer2.complete("deploy prod --region N")).toEqual([["New\\ York"], "N"]);
   });
 
   it("returns empty for no match", () => {
@@ -325,6 +354,23 @@ describe("ShellCompleter", () => {
       expect(result).toBeInstanceOf(Promise);
       const [candidates] = (await result) as [string[], string];
       expect(candidates).toEqual(["localhost", "example.com"]);
+    });
+
+    it("times out a stalled custom completer and aborts its signal", async () => {
+      const reg = new CommandRegistry();
+      let aborted = false;
+      new CommandBuilder(reg, "connect <host>")
+        .complete(({ signal }) => {
+          signal.addEventListener("abort", () => {
+            aborted = true;
+          });
+          return new Promise<string[]>(() => {});
+        })
+        .action(() => {});
+      const comp = new ShellCompleter(reg, { completionTimeoutMs: 1 });
+
+      await expect(comp.complete("connect ")).resolves.toEqual([[], ""]);
+      expect(aborted).toBe(true);
     });
 
     it("tolerates incomplete quotes and isolates custom provider failures", async () => {

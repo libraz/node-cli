@@ -68,4 +68,18 @@ describe("command removal", () => {
     expect(() => stale.command("child")).toThrow(/detached/);
     expect(registry.resolve(["parent", "child"])).toBeUndefined();
   });
+
+  it("rejects every configuration method after removal", () => {
+    const registry = new CommandRegistry();
+    const builder = new CommandBuilder(registry, "task");
+    builder.remove();
+
+    expect(() => builder.description("x")).toThrow(/detached/);
+    expect(() => builder.hidden()).toThrow(/detached/);
+    expect(() => builder.option("--flag")).toThrow(/detached/);
+    expect(() => builder.action(() => {})).toThrow(/detached/);
+    expect(() => builder.complete(() => [])).toThrow(/detached/);
+    expect(() => builder.validate(() => {})).toThrow(/detached/);
+    expect(() => builder.cancel(() => {})).toThrow(/detached/);
+  });
 });

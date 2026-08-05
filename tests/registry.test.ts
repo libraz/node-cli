@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import type { CommandDefinition } from "../src/types.js";
@@ -61,6 +61,64 @@ describe("CommandRegistry", () => {
     expect(resolved?.description).toBe("Deploy app");
   });
 
+  it("merges every command behavior and nested definitions on redeclaration", () => {
+    const registry = new CommandRegistry();
+    const originalChild = makeDef("child", { description: "original child" });
+    const target = makeDef("deploy", {
+      subcommands: new Map([["child", originalChild]]),
+    });
+    const action = vi.fn();
+    const completer = vi.fn();
+    const validate = vi.fn();
+    const cancelHandler = vi.fn();
+    const replacementChild = makeDef("child", { description: "replacement child" });
+    const addedChild = makeDef("status");
+
+    registry.register(target);
+    registry.register(
+      makeDef("deploy", {
+        action,
+        completer,
+        aliases: ["d"],
+        validate,
+        cancelHandler,
+        argDefs: [{ name: "target", required: true, variadic: false }],
+        subcommands: new Map([
+          ["child", replacementChild],
+          ["status", addedChild],
+        ]),
+      }),
+    );
+
+    const merged = registry.resolve(["deploy"]);
+    expect(merged).toMatchObject({ action, completer, aliases: ["d"], validate, cancelHandler });
+    expect(merged?.argDefs).toEqual([{ name: "target", required: true, variadic: false }]);
+    expect(merged?.subcommands.get("child")).toBe(originalChild);
+    expect(originalChild.description).toBe("replacement child");
+    expect(merged?.subcommands.get("status")).toBe(addedChild);
+    expect(addedChild.parent).toBe(merged);
+  });
+
+  it("replaces stale argument definitions with an empty redefinition", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "deploy <target>");
+    new CommandBuilder(registry, "deploy");
+
+    expect(registry.resolve(["deploy"])?.argDefs).toEqual([]);
+  });
+
+  it("allows a command redefinition to replace one of its options", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "deploy").option("--region <region>", {
+      choices: ["us"],
+    });
+    new CommandBuilder(registry, "deploy").option("--region <region>", {
+      choices: ["jp"],
+    });
+
+    expect(registry.resolve(["deploy"])?.options.get("region")?.schema.choices).toEqual(["jp"]);
+  });
+
   it("matchCommandPath finds longest match", () => {
     const registry = new CommandRegistry();
     registry.register(makeDef("create"), ["user"]);
@@ -121,6 +179,24 @@ describe("CommandRegistry", () => {
     expect(group?.description).toBe("Group command");
     expect(group?.action).toBe(action);
     expect(group?.subcommands.has("sub")).toBe(true);
+  });
+
+  it("warns about unreachable subcommands regardless of definition order", () => {
+    const actionFirst = new CommandRegistry();
+    new CommandBuilder(actionFirst, "task <input>").action(() => {});
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    new CommandBuilder(actionFirst, "task child");
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('Subcommand "child"'), {
+      code: "NODE_CLI_UNREACHABLE_SUBCOMMAND",
+    });
+
+    const childFirst = new CommandRegistry();
+    new CommandBuilder(childFirst, "task child");
+    new CommandBuilder(childFirst, "task <input>").action(() => {});
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('Command "task"'), {
+      code: "NODE_CLI_UNREACHABLE_SUBCOMMAND",
+    });
+    warning.mockRestore();
   });
 
   it("does not delete an independent command whose name matches another command alias", () => {

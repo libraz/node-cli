@@ -61,6 +61,33 @@ describe("CommandRouter", () => {
     expect(action).not.toHaveBeenCalled();
   });
 
+  it("does not classify an unrelated AbortError as a user cancellation", async () => {
+    const { registry, router } = setup();
+    const onError = vi.fn();
+    router.on("error", onError);
+    new CommandBuilder(registry, "abort").action(() => {
+      throw Object.assign(new Error("internal abort"), { name: "AbortError" });
+    });
+
+    await expect(router.execute("abort")).rejects.toThrow("internal abort");
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
+  it("normalizes a non-Error action throw for both events and callers", async () => {
+    const { registry, router } = setup();
+    const onError = vi.fn();
+    const onCommandError = vi.fn();
+    router.on("error", onError);
+    router.on("commandError", onCommandError);
+    new CommandBuilder(registry, "broken").action(() => {
+      throw "failure";
+    });
+
+    await expect(router.execute("broken")).rejects.toThrow("failure");
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onCommandError).toHaveBeenCalledWith(expect.any(Error), expect.anything());
+  });
+
   it("shows help for group commands without action", async () => {
     const { registry, router } = setup();
     new CommandBuilder(registry, "user create <name>").action(() => {});
@@ -90,10 +117,14 @@ describe("CommandRouter", () => {
     expect(action.mock.calls[0][0].options.help).toBe(true);
   });
 
-  it("rejects an unknown child instead of showing successful group help", async () => {
+  it("reports an unknown child instead of showing successful group help", async () => {
     const { registry, router } = setup();
     new CommandBuilder(registry, "user create").action(() => {});
-    await expect(router.execute("user typo")).rejects.toThrow(ExtraArgumentError);
+    await expect(router.execute("user typo")).rejects.toMatchObject({
+      code: "COMMAND_NOT_FOUND",
+      input: "user typo",
+      available: ["create"],
+    });
   });
 
   it("resolves options with defaults", async () => {

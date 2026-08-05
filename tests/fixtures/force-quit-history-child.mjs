@@ -8,6 +8,7 @@ const cli = new CLI({
   banner: "FORCE_QUIT_READY",
   historyFile,
 });
+cli.on("exit", () => process.stdout.write("EXIT_EVENT\n"));
 
 cli.command("normal").action((ctx) => {
   ctx.stdout.write("NORMAL_DONE\n");

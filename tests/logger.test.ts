@@ -16,6 +16,14 @@ describe("logger", () => {
     expect(stream.getOutput()).toContain("[INFO]");
   });
 
+  it("removes terminal control sequences from untrusted log messages", () => {
+    const stream = createMockStdout();
+    logger({ stream }).info("\x1b]2;spoofed\x07hello\rworld");
+    expect(stream.getOutput()).not.toContain("\x1b]2;");
+    expect(stream.getOutput()).toContain("helloworld");
+    expect(stream.getOutput()).not.toContain("\r");
+  });
+
   it("suppresses debug at info level", () => {
     const stream = createMockStdout();
     const log = logger({ stream, level: "info" });
@@ -166,6 +174,36 @@ describe("logger", () => {
     expect(output).toContain("first");
     expect(output).toContain("latest");
     expect(output).not.toContain("dropped");
+  });
+
+  it("waits for buffered child logger output when flushing the parent", async () => {
+    let writes = 0;
+    let onDrain: (() => void) | undefined;
+    const stream = {
+      write() {
+        writes++;
+        return writes !== 1;
+      },
+      once(event: string, handler: () => void) {
+        if (event === "drain") onDrain = handler;
+        return stream;
+      },
+      off() {
+        return stream;
+      },
+    } as unknown as Writable;
+    const parent = logger({ stream });
+    const child = parent.child("db");
+    child.info("connecting");
+
+    let settled = false;
+    const flushed = parent.flush().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    onDrain?.();
+    await flushed;
   });
 
   it("validates bufferLimit", () => {

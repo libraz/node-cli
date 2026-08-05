@@ -104,6 +104,32 @@ describe("History", () => {
     expect(await readFile(target, "utf8")).toBe("do-not-read\n");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "warns once and skips repeated saves for a rejected symlink",
+    async () => {
+      const target = join(tempDir, "target");
+      await writeFile(target, "do-not-read\n");
+      await symlink(target, filePath);
+      const writes: string[] = [];
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        writes.push(String(chunk));
+        return true;
+      });
+
+      try {
+        const history = new History({ filePath });
+        await history.load();
+        history.add("ignored");
+        await history.save();
+        await history.save();
+        expect(writes).toHaveLength(1);
+        expect(await readFile(target, "utf8")).toBe("do-not-read\n");
+      } finally {
+        stderr.mockRestore();
+      }
+    },
+  );
+
   it("merges concurrent session additions under a lock", async () => {
     const first = new History({ filePath });
     const second = new History({ filePath });
@@ -115,6 +141,19 @@ describe("History", () => {
     const loaded = await new History({ filePath }).load();
     expect(loaded).toHaveLength(2);
     expect(loaded).toEqual(expect.arrayContaining(["from-first", "from-second"]));
+  });
+
+  it("appends ordinary additions and compacts only after exceeding maxSize", async () => {
+    const history = new History({ filePath, maxSize: 2 });
+    history.add("first");
+    await history.save();
+    history.add("second");
+    await history.save();
+    expect(await readFile(filePath, "utf8")).toBe("first\nsecond\n");
+
+    history.add("third");
+    await history.save();
+    expect(await readFile(filePath, "utf8")).toBe("second\nthird\n");
   });
 
   it("merges stale snapshots saved concurrently by separate processes", async () => {
@@ -178,6 +217,17 @@ describe("History", () => {
     expect(existsSync(lockPath)).toBe(false);
     const loaded = await new History({ filePath }).load();
     expect(loaded).toEqual(["after-stale-lock"]);
+  });
+
+  it("breaks a fresh lock whose recorded owner is already dead", async () => {
+    const lockPath = `${filePath}.lock`;
+    await writeFile(lockPath, String(Number.MAX_SAFE_INTEGER), { mode: 0o600 });
+    const history = new History({ filePath });
+    history.add("after-dead-owner");
+
+    await history.save();
+    expect(existsSync(lockPath)).toBe(false);
+    expect(await new History({ filePath }).load()).toEqual(["after-dead-owner"]);
   });
 
   it("strips embedded newlines so one entry stays one line", async () => {

@@ -34,6 +34,31 @@ describe("catch/fallback command", () => {
     expect(stream.getOutput()).toContain("caught: unknown foo bar");
   });
 
+  it("passes unparseable free input to the catch handler", async () => {
+    const router = createRouter();
+    const stream = createMockStdout();
+    const handler = vi.fn((input, ctx) => {
+      ctx.stdout.write(`caught: ${input}\n`);
+    });
+    router.setCatchHandler(handler);
+
+    await router.execute("what's the weather", { stdout: stream, stderr: stream });
+    expect(handler).toHaveBeenCalledWith("what's the weather", expect.anything());
+    expect(stream.getOutput()).toContain("caught: what's the weather");
+  });
+
+  it("invokes catch handlers for unknown nested commands", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "user create").action(() => {});
+    const router = new CommandRouter(registry);
+    const stream = createMockStdout();
+    const handler = vi.fn((input, ctx) => ctx.stdout.write(`caught: ${input}\n`));
+    router.setCatchHandler(handler);
+
+    await router.execute("user typo", { stdout: stream, stderr: stream });
+    expect(handler).toHaveBeenCalledWith("user typo", expect.anything());
+  });
+
   it("does not invoke catch handler for known commands", async () => {
     const router = createRouter();
     const stream = createMockStdout();

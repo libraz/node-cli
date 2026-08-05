@@ -8,7 +8,7 @@ import {
   tokenize,
 } from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
-import { InvalidOptionError, UnknownOptionError } from "../src/errors.js";
+import { InvalidOptionError, ParseError, UnknownOptionError } from "../src/errors.js";
 
 describe("tokenize", () => {
   it("splits by spaces", () => {
@@ -56,7 +56,12 @@ describe("tokenize", () => {
   });
 
   it("throws on unclosed quotes", () => {
-    expect(() => tokenize("echo 'hello")).toThrow(/Unclosed single quote/);
+    expect(() => tokenize("echo 'hello")).toThrow(ParseError);
+    try {
+      tokenize("echo 'hello");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "PARSE_ERROR", quote: "single" });
+    }
   });
 });
 
@@ -64,6 +69,11 @@ describe("splitPipes", () => {
   it("throws on trailing and empty pipe segments", () => {
     expect(() => splitPipes("echo hi |")).toThrow(/trailing pipe/);
     expect(() => splitPipes("echo hi || grep hi")).toThrow(/empty pipe/);
+  });
+
+  it("does not mistake a final escaped character for a trailing pipe", () => {
+    const input = ["echo", "\\"].join(" ");
+    expect(splitPipes(input)).toEqual([input]);
   });
 });
 
@@ -139,6 +149,26 @@ describe("parseOptionFlags", () => {
     expect(result.aliases).toEqual(["p"]);
     expect(result.takesValue).toBe(true);
   });
+
+  it("keeps placeholders with commas intact and recognizes square brackets", () => {
+    expect(parseOptionFlags("--range <start,end>")).toMatchObject({
+      long: "range",
+      takesValue: true,
+      valueName: "start,end",
+    });
+    expect(parseOptionFlags("--port [port]")).toMatchObject({
+      long: "port",
+      takesValue: true,
+      valueName: "port",
+    });
+  });
+
+  it("keeps an additional long flag as an alias", () => {
+    expect(parseOptionFlags("--verbose, --loud")).toMatchObject({
+      long: "loud",
+      longAliases: ["verbose"],
+    });
+  });
 });
 
 describe("parse", () => {
@@ -192,9 +222,8 @@ describe("parse", () => {
   it("parses short alias", () => {
     const registry = createRegistry();
     const result = parse("deploy prod -t v2", registry);
-    // Short alias -t is stored under the raw alias key;
-    // alias resolution happens in OptionResolver, not in the parser.
-    expect(result.options.tag ?? result.options.t).toBe("v2");
+    expect(result.options).toMatchObject({ tag: "v2" });
+    expect(result.options).not.toHaveProperty("t");
   });
 
   it("parses short-only options under their short key", () => {
@@ -270,7 +299,7 @@ describe("parse", () => {
 
   it("does not consume the next unknown option as a string value", () => {
     const registry = createRegistry();
-    expect(() => parse("deploy prod --tag --unknown", registry)).toThrow(InvalidOptionError);
+    expect(() => parse("deploy prod --tag --unknown", registry)).toThrow(/--tag=<value>/);
   });
 
   it("accepts negative numeric option values", () => {
@@ -290,9 +319,20 @@ describe("parse", () => {
     expect(() => parse("deploy prod --no-tag", registry)).toThrow(InvalidOptionError);
   });
 
+  it("reports a value supplied to a negated boolean as invalid syntax", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod --no-force=false", registry)).toThrow(InvalidOptionError);
+  });
+
   it("tracks extra positional args", () => {
     const registry = createRegistry();
     const result = parse("deploy prod extra", registry);
     expect(result.extraArgs).toEqual(["extra"]);
+  });
+
+  it("rejects unsupported redirection operators", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod > output.txt", registry)).toThrow(ParseError);
+    expect(() => parse("deploy < input.txt", registry)).toThrow(ParseError);
   });
 });

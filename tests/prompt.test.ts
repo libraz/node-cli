@@ -1,7 +1,16 @@
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { PromptCancelError } from "../src/errors.js";
-import type { Choice, PromptBaseOptions, SelectChoice, TextOptions } from "../src/index.js";
+import type {
+  Choice,
+  ConfirmOptions,
+  MultiselectOptions,
+  PasswordOptions,
+  PromptBaseOptions,
+  SelectChoice,
+  SelectOptions,
+  TextOptions,
+} from "../src/index.js";
 import { resetColorEnabled } from "../src/output/color.js";
 
 function createPromptStreams() {
@@ -26,6 +35,22 @@ function feedLines(stdin: PassThrough, lines: string[]): void {
 }
 
 describe("prompt", () => {
+  it("types each validator with its prompt value", () => {
+    expectTypeOf<TextOptions["validate"]>().toEqualTypeOf<((value: string) => void) | undefined>();
+    expectTypeOf<PasswordOptions["validate"]>().toEqualTypeOf<
+      ((value: string) => void) | undefined
+    >();
+    expectTypeOf<ConfirmOptions["validate"]>().toEqualTypeOf<
+      ((value: boolean) => void) | undefined
+    >();
+    expectTypeOf<SelectOptions<number>["validate"]>().toEqualTypeOf<
+      ((value: number) => void) | undefined
+    >();
+    expectTypeOf<MultiselectOptions<number>["validate"]>().toEqualTypeOf<
+      ((value: number[]) => void) | undefined
+    >();
+  });
+
   it("exports prompt functions", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     expect(prompt.text).toBeTypeOf("function");
@@ -108,6 +133,36 @@ describe("prompt", () => {
     expect(streams.getOutput()).not.toContain("\x1b[");
   });
 
+  it("rejects a pending prompt when its AbortSignal is aborted", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const controller = new AbortController();
+    const pending = prompt.text("Name", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it("rejects concurrent prompts reading from the same input", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const controller = new AbortController();
+    const first = prompt.text("First", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      signal: controller.signal,
+    });
+    await expect(
+      prompt.text("Second", { stdin: streams.stdin, stdout: streams.stdout }),
+    ).rejects.toThrow("already reading");
+    controller.abort();
+    await expect(first).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
   it("re-prompts text until validation succeeds", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
@@ -148,6 +203,20 @@ describe("prompt", () => {
     await expect(explicitNo).resolves.toBe(false);
   });
 
+  it("re-prompts confirm for unknown input without discarding its default", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const confirmation = prompt.confirm("Continue?", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      default: true,
+    });
+    feedLines(streams.stdin, ["perhaps", ""]);
+
+    await expect(confirmation).resolves.toBe(true);
+    expect(streams.getOutput()).toContain("Please enter yes or no");
+  });
+
   it("applies confirm validation and re-prompts", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
@@ -179,6 +248,53 @@ describe("prompt", () => {
 
     await expect(promise).resolves.toBe("staging");
     expect(streams.getOutput()).toContain("Please enter a number between 1 and 2");
+  });
+
+  it("rejects a label-only object instead of returning undefined", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+
+    await expect(
+      prompt.select<{ label: string }>("Pick", [{ label: "Not a descriptor" }]),
+    ).rejects.toThrow(/both label and value/);
+  });
+
+  it("returns a descriptor's value when both label and value are present", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.select("Pick", [{ label: "One", value: 1 }], {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+    });
+    streams.stdin.end("1\n");
+
+    await expect(promise).resolves.toBe(1);
+  });
+
+  it("re-prompts select and multiselect when their validators reject", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const selectStreams = createPromptStreams();
+    const selected = prompt.select("Pick", ["a", "b"], {
+      stdin: selectStreams.stdin,
+      stdout: selectStreams.stdout,
+      validate(value) {
+        if (value !== "b") throw new Error("pick b");
+      },
+    });
+    feedLines(selectStreams.stdin, ["1", "2"]);
+    await expect(selected).resolves.toBe("b");
+    expect(selectStreams.getOutput()).toContain("pick b");
+
+    const multiStreams = createPromptStreams();
+    const selectedMany = prompt.multiselect("Pick", ["a", "b"], {
+      stdin: multiStreams.stdin,
+      stdout: multiStreams.stdout,
+      validate(values) {
+        if ((values as string[]).length !== 2) throw new Error("pick both");
+      },
+    });
+    feedLines(multiStreams.stdin, ["1", "1,2"]);
+    await expect(selectedMany).resolves.toEqual(["a", "b"]);
+    expect(multiStreams.getOutput()).toContain("pick both");
   });
 
   it("multiselect enforces min and max before returning selected values", async () => {
@@ -264,6 +380,34 @@ describe("prompt", () => {
     expect(streams.getOutput()).not.toContain("secret");
   });
 
+  it("masks password input from a TTY even when stdout is redirected", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let stdoutText = "";
+    let stderrText = "";
+    stdout.on("data", (chunk) => {
+      stdoutText += chunk.toString();
+    });
+    stderr.on("data", (chunk) => {
+      stderrText += chunk.toString();
+    });
+    (stdin as unknown as { isTTY: boolean }).isTTY = true;
+    (stderr as unknown as { isTTY: boolean; columns: number; rows: number }).isTTY = true;
+    (stderr as unknown as { columns: number }).columns = 80;
+    (stderr as unknown as { rows: number }).rows = 24;
+
+    const result = prompt.password("Password", { stdin, stdout, stderr });
+    stdin.end("secret\n");
+
+    await expect(result).resolves.toBe("secret");
+    expect(stdoutText).not.toContain("Password");
+    expect(stdoutText).not.toContain("secret");
+    expect(stderrText).toContain("Password");
+    expect(stderrText).not.toContain("secret");
+  });
+
   it("never treats prompt text inside a password as a trusted redraw prefix", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
@@ -291,6 +435,23 @@ describe("prompt", () => {
     });
     streams.stdin.end("  secret  \n");
     await expect(promise).resolves.toBe("  secret  ");
+  });
+
+  it("re-prompts password for required and validation failures", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const password = prompt.password("Password", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      validate(value) {
+        if (value !== "secret") throw new Error("invalid password");
+      },
+    });
+    feedLines(streams.stdin, ["", "wrong", "secret"]);
+
+    await expect(password).resolves.toBe("secret");
+    expect(streams.getOutput()).toContain("Value is required");
+    expect(streams.getOutput()).toContain("invalid password");
   });
 
   it("password renders the prompt as readline query while masking typed input", async () => {
@@ -422,6 +583,32 @@ describe("prompt", () => {
     streams.stdin.end("\n");
 
     await expect(promise).resolves.toBe("");
+  });
+
+  it("allows text whitespace trimming to be disabled", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const value = prompt.text("Name", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      trim: false,
+    });
+    streams.stdin.end("  Ada  \n");
+
+    await expect(value).resolves.toBe("  Ada  ");
+  });
+
+  it("trims password whitespace only when requested", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const value = prompt.password("Password", {
+      stdin: streams.stdin,
+      stdout: streams.stdout,
+      trim: true,
+    });
+    streams.stdin.end("  secret  \n");
+
+    await expect(value).resolves.toBe("secret");
   });
 
   it("select is selectable by index when a choice has a numeric label", async () => {

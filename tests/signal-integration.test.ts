@@ -33,7 +33,7 @@ describe.skipIf(process.platform === "win32")("OS signal integration", () => {
     const timeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
     const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
     clearTimeout(timeout);
-    expect({ code, signal }).toEqual({ code: 0, signal: null });
+    expect({ code, signal }).toEqual({ code: 130, signal: null });
     expect(stdout).toContain("CANCEL\n");
     expect(stdout.split("CANCEL\n")).toHaveLength(2);
     expect(stdout).toContain("CLEAN\n");

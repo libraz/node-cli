@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetColorEnabled, setColorEnabled, stripAnsi } from "../src/output/color.js";
@@ -43,6 +44,34 @@ describe("progress.bar", () => {
     const output = stripAnsi(stream.getOutput());
     expect(output).toContain("100%");
     bar.finish();
+  });
+
+  it("keeps progress state finite and reports zero-total work as complete", () => {
+    const stream = createMockTTY();
+    const states: { current: number; total: number; percent: number; eta: number }[] = [];
+    const bar = progress.bar({
+      total: 10,
+      stream,
+      format(state) {
+        states.push(state);
+        return "progress";
+      },
+    });
+    bar.update(Number.NaN);
+    expect(states.at(-1)).toMatchObject({ current: 0, total: 10, percent: 0, eta: Infinity });
+    bar.stop();
+
+    const empty = progress.bar({
+      total: 0,
+      stream,
+      format(state) {
+        states.push(state);
+        return "empty";
+      },
+    });
+    empty.update(Number.NaN);
+    expect(states.at(-1)).toMatchObject({ current: 0, total: 0, percent: 100, eta: 0 });
+    empty.finish();
   });
 
   it("uses custom format", () => {
@@ -252,6 +281,12 @@ describe("progress.spinner", () => {
     spinner.stop();
   });
 
+  it("rejects empty frames and non-positive animation intervals", () => {
+    expect(() => progress.spinner({ frames: [] })).toThrow(/non-empty/);
+    expect(() => progress.spinner({ interval: 0 })).toThrow(/positive finite/);
+    expect(() => progress.spinner({ interval: Number.NaN })).toThrow(/positive finite/);
+  });
+
   it("applies color to frames", () => {
     const stream = createMockTTY();
     const spinner = progress.spinner({ stream, color: "cyan" });
@@ -264,7 +299,9 @@ describe("progress.spinner", () => {
     const stream = createMockTTY();
     const spinner = progress.spinner({ stream });
     spinner.start();
-    spinner.start(); // Should not throw
+    const outputAfterFirstStart = stream.getOutput();
+    spinner.start();
+    expect(stream.getOutput()).toBe(outputAfterFirstStart);
     spinner.stop();
   });
 
@@ -314,11 +351,11 @@ describe("progress.spinner signal ownership", () => {
     resetColorEnabled();
   });
 
-  it("does not take ownership of SIGINT", () => {
+  it("installs a temporary SIGINT cursor-restoration handler", () => {
     const stream = createMockTTY();
     const spinner = progress.spinner({ stream });
     spinner.start();
-    expect(process.listenerCount("SIGINT")).toBe(baseline);
+    expect(process.listenerCount("SIGINT")).toBe(baseline + 1);
     spinner.stop();
     expect(process.listenerCount("SIGINT")).toBe(baseline);
   });
@@ -370,6 +407,30 @@ describe("progress.spinner signal ownership", () => {
   });
 });
 
+describe("progress process cleanup", () => {
+  it("restores hidden cursors through the process exit handler", () => {
+    const program = String.raw`
+      import { progress } from "./dist/output/progress.js";
+      let output = "";
+      const stream = {
+        isTTY: true,
+        columns: 80,
+        write(chunk) { output += chunk; return true; },
+        once() { return this; },
+      };
+      progress.bar({ total: 1, stream }).update(0);
+      process.emit("exit", 0);
+      if (!output.includes("\x1b[?25l") || !output.includes("\x1b[?25h")) process.exitCode = 1;
+    `;
+
+    expect(() =>
+      execFileSync(process.execPath, ["--input-type=module", "--eval", program], {
+        cwd: process.cwd(),
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe("progress.multi", () => {
   beforeEach(() => setColorEnabled(false));
   afterEach(() => resetColorEnabled());
@@ -386,6 +447,18 @@ describe("progress.multi", () => {
     expect(output).toContain("File 1");
     expect(output).toContain("File 2");
     multi.finish();
+  });
+
+  it("keeps the first configured stream for every bar in the group", () => {
+    const firstStream = createMockTTY();
+    const ignoredStream = createMockTTY();
+    const multi = progress.multi();
+    multi.add({ total: 10, label: "first", stream: firstStream }).update(1);
+    multi.add({ total: 10, label: "second", stream: ignoredStream }).update(2);
+
+    expect(firstStream.getOutput()).toContain("second");
+    expect(ignoredStream.getOutput()).toBe("");
+    multi.stop();
   });
 
   it("hides and restores the cursor on TTY", () => {

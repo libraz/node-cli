@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { CLI } from "../src/cli.js";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { HelpGenerator } from "../src/help/generator.js";
+import { ShellCompleter } from "../src/shell/completion.js";
+import { createMockStdout } from "./helpers.js";
 
 describe("HelpGenerator", () => {
   let registry: CommandRegistry;
@@ -41,6 +44,7 @@ describe("HelpGenerator", () => {
       expect(output).toContain("myapp v1.2.3");
       expect(output).toContain("A cool CLI tool");
       expect(output).toContain("Available commands:");
+      expect(output).toContain("-V, --version");
     });
 
     it("shows name without version", () => {
@@ -65,6 +69,16 @@ describe("HelpGenerator", () => {
 
       const output = help.generateIndex();
       expect(output).toMatch(/^Available commands:/);
+    });
+
+    it("lists application commands before the framework help command", async () => {
+      const cli = new CLI();
+      cli.command("deploy").action(() => {});
+      const stdout = createMockStdout();
+
+      await cli.exec("help", { stdout });
+      const output = stdout.getOutput();
+      expect(output.indexOf("deploy")).toBeLessThan(output.indexOf("help [...command]"));
     });
   });
 
@@ -104,11 +118,33 @@ describe("HelpGenerator", () => {
       expect(output).toContain("--force");
     });
 
+    it("renders BigInt and circular defaults without throwing", () => {
+      new CommandBuilder(registry, "inspect").option("--value <value>", { type: "string" });
+      const option = registry.resolve(["inspect"])?.options.get("value");
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+
+      if (!option) throw new Error("expected option definition");
+      option.schema.default = 1n;
+      expect(help.generateCommand(["inspect"])).toContain("default: 1");
+
+      option.schema.default = circular;
+      expect(() => help.generateCommand(["inspect"])).not.toThrow();
+    });
+
     it("hides hidden options", () => {
       new CommandBuilder(registry, "deploy <env>").option("--secret", { hidden: true });
 
       const output = help.generateCommand(["deploy"]);
       expect(output).not.toContain("--secret");
+    });
+
+    it("omits the options section when only hidden options bind both help flags", () => {
+      new CommandBuilder(registry, "deploy")
+        .option("-h", { type: "boolean", hidden: true })
+        .option("--help", { type: "boolean", hidden: true });
+
+      expect(help.generateCommand(["deploy"])).not.toContain("Options:");
     });
 
     it("shows subcommands", () => {
@@ -156,5 +192,64 @@ describe("built-in help option rendering", () => {
 
     expect(help).toContain("Usage: run [options]");
     expect(help).toContain("Options:");
+  });
+});
+
+describe("hidden commands", () => {
+  it("excludes hidden commands from index, subcommand help, and completion", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "visible").action(() => {});
+    new CommandBuilder(registry, "secret").hidden().action(() => {});
+    new CommandBuilder(registry, "admin visible").action(() => {});
+    new CommandBuilder(registry, "admin secret").hidden().action(() => {});
+    const help = new HelpGenerator(registry);
+
+    expect(help.generateIndex()).toContain("visible");
+    expect(help.generateIndex()).not.toContain("secret");
+    expect(help.generateCommand(["admin"])).toContain("visible");
+    expect(help.generateCommand(["admin"])).not.toContain("secret");
+
+    const { ShellCompleter } = await import("../src/shell/completion.js");
+    const [candidates] = new ShellCompleter(registry).complete("admin ") as [string[], string];
+    expect(candidates).toContain("visible");
+    expect(candidates).not.toContain("secret");
+  });
+});
+
+describe("terminal-width help wrapping", () => {
+  it("wraps descriptions and preserves the description-column indent", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "deploy")
+      .description("Deploys a service with a deliberately long description for narrow terminals")
+      .action(() => {});
+    const originalColumns = process.stdout.columns;
+    Object.defineProperty(process.stdout, "columns", { value: 40, configurable: true });
+    try {
+      const lines = new HelpGenerator(registry).generateIndex().split("\n");
+      const first = lines.findIndex((line) => line.includes("Deploys a service"));
+      expect(first).toBeGreaterThan(-1);
+      expect(lines[first + 1]).toMatch(/^ {12,}\S/);
+    } finally {
+      Object.defineProperty(process.stdout, "columns", {
+        value: originalColumns,
+        configurable: true,
+      });
+    }
+  });
+});
+
+describe("shell commands", () => {
+  it("documents and completes built-in exit commands without shadowing user commands", () => {
+    const registry = new CommandRegistry();
+    const help = new HelpGenerator(registry);
+    expect(help.generateIndex()).toContain("Shell commands: exit, quit");
+    expect(help.generateCommand(["exit"])).toContain("Exit the interactive shell");
+
+    const completer = new ShellCompleter(registry);
+    expect((completer.complete("ex") as [string[], string])[0]).toContain("exit");
+    new CommandBuilder(registry, "exit").action(() => {});
+    expect((new ShellCompleter(registry).complete("ex") as [string[], string])[0]).toEqual([
+      "exit",
+    ]);
   });
 });

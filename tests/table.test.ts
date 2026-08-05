@@ -48,6 +48,18 @@ describe("table", () => {
     expect(result).toContain("Full Name");
   });
 
+  it("uses headerLabels for array input", () => {
+    const result = table(
+      [
+        ["name", "role"],
+        ["alice", "admin"],
+      ],
+      { headerLabels: { name: "Full Name", role: "Access" } },
+    );
+    expect(result).toContain("Full Name");
+    expect(result).toContain("Access");
+  });
+
   it("renders with simple border", () => {
     const result = table(
       [
@@ -84,12 +96,46 @@ describe("table", () => {
     expect(dataLine).toBeDefined();
   });
 
+  it("keeps framed rows equally wide with CJK and status symbols", () => {
+    const result = table(
+      [
+        ["状態", "値"],
+        ["✓", "日本"],
+        ["⭐", "ok"],
+      ],
+      { border: "single" },
+    );
+    const widths = result.split("\n").map(stringWidth);
+    expect(new Set(widths).size).toBe(1);
+  });
+
   it("returns empty string for empty data", () => {
     expect(table([])).toBe("");
   });
 
-  it("returns empty string for a header-only array", () => {
-    expect(table([["Name", "Role"]], { border: "single" })).toBe("");
+  it("treats null rows as empty rows instead of throwing", () => {
+    const result = table([null, { name: "alice" }] as unknown as Record<string, unknown>[], {
+      border: "single",
+    });
+    expect(result).toContain("alice");
+
+    expect(table([null] as unknown as Record<string, unknown>[])).toBe("");
+  });
+
+  it("normalizes negative and non-finite padding", () => {
+    expect(() => table([["Name"], ["alice"]], { padding: -1 })).not.toThrow();
+    expect(() =>
+      table([["Name"], ["alice"]], {
+        border: "single",
+        style: { "padding-left": -1, "padding-right": Number.POSITIVE_INFINITY },
+      }),
+    ).not.toThrow();
+  });
+
+  it("renders the header for a header-only array", () => {
+    const result = table([["Name", "Role"]], { border: "single" });
+    expect(result).toContain("Name");
+    expect(result).toContain("Role");
   });
 
   it("keeps every array row as data when explicit columns are supplied", () => {
@@ -348,7 +394,7 @@ describe("table", () => {
       border: "single",
     });
     expect(explicit).not.toContain("\x1b]2;");
-    expect(explicit).toContain("value");
+    expect(explicit).toContain("ignored");
   });
 
   it("preserves SGR color sequences in cell content while sanitizing controls", () => {
@@ -357,6 +403,32 @@ describe("table", () => {
     expect(result).toContain("\x1b[31m"); // SGR color kept
     expect(result).not.toContain("\x07"); // BEL stripped
     expect(stripAnsi(result)).toContain("hi");
+  });
+
+  it("closes an unclosed SGR sequence before the table frame", () => {
+    const result = table([{ value: "\x1b[31mred" }], { border: "single" });
+    const open = result.indexOf("\x1b[31m");
+    const reset = result.indexOf("\x1b[0m", open);
+    const borderAfterReset = result.indexOf("│", reset);
+
+    expect(open).toBeGreaterThan(-1);
+    expect(reset).toBeGreaterThan(-1);
+    expect(borderAfterReset).toBeGreaterThan(reset);
+    expect(result.slice(reset + "\x1b[0m".length, borderAfterReset)).not.toContain("\x1b");
+  });
+
+  it("closes an unclosed OSC 8 hyperlink before the table frame", () => {
+    const openLink = "\x1b]8;;https://example.invalid\x1b\\linked";
+    const result = table([{ value: openLink }], { border: "single" });
+    const closeLink = "\x1b]8;;\x1b\\";
+    const openIndex = result.indexOf(openLink);
+    const closeIndex = result.indexOf(closeLink, openIndex + openLink.length);
+    const borderAfterClose = result.indexOf("│", closeIndex);
+
+    expect(openIndex).toBeGreaterThan(-1);
+    expect(closeIndex).toBeGreaterThan(-1);
+    expect(borderAfterClose).toBeGreaterThan(closeIndex);
+    expect(result.slice(closeIndex + closeLink.length, borderAfterClose)).not.toContain("\x1b");
   });
 
   it("handles maxWidth of 0 without throwing or overflowing", () => {

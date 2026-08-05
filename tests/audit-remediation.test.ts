@@ -70,11 +70,12 @@ describe("structured errors", () => {
     expect(err.code).toBe("MISSING_ARGUMENT");
   });
 
-  it("ValidationError preserves the wrapped cause and stack", () => {
+  it("ValidationError preserves the wrapped cause without replacing its own stack", () => {
     const original = new Error("nope");
     const wrapped = new ValidationError("nope", original);
     expect(wrapped.cause).toBe(original);
-    expect(wrapped.stack).toBe(original.stack);
+    expect(wrapped.stack).toContain("ValidationError: nope");
+    expect(wrapped.stack).not.toBe(original.stack);
   });
 });
 
@@ -149,7 +150,8 @@ describe("option schema wiring", () => {
       alias: "p",
     });
     const result = parse(["serve", "-p", "8080"], registry);
-    expect(result.options.port ?? result.options.p).toBeDefined();
+    expect(result.options).toMatchObject({ port: "8080" });
+    expect(result.options).not.toHaveProperty("p");
   });
 
   it("does not mutate the caller's schema object", () => {
@@ -158,6 +160,22 @@ describe("option schema wiring", () => {
     new CommandBuilder(registry, "x").option("--flag", schema);
     expect(schema.type).toBeUndefined();
     expect(schema.default).toBeUndefined();
+  });
+
+  it("rejects invalid defaults while the option is being defined", () => {
+    const registry = new CommandRegistry();
+    expect(() =>
+      new CommandBuilder(registry, "serve").option("--port <port>", {
+        type: "number",
+        default: "not-a-number",
+      }),
+    ).toThrow(/Invalid default for --port/);
+    expect(() =>
+      new CommandBuilder(registry, "mode").option("--env <env>", {
+        choices: ["dev", "prod"],
+        default: "test",
+      }),
+    ).toThrow(/declared choices/);
   });
 });
 
@@ -673,12 +691,15 @@ describe("async plugin failures", () => {
 // ── Cancellation classification ──
 
 describe("cancellation classification", () => {
-  it("treats an AbortError as a cancellation and formats it cleanly", () => {
+  it("classifies AbortError as cancellation only for its aborted command signal", () => {
     const abortError = Object.assign(new Error("This operation was aborted"), {
       name: "AbortError",
     });
-    expect(isCancellationError(abortError)).toBe(true);
-    expect(formatErrorMessage(abortError)).toBe("Cancelled");
+    const controller = new AbortController();
+    expect(isCancellationError(abortError)).toBe(false);
+    controller.abort();
+    expect(isCancellationError(abortError, controller.signal)).toBe(true);
+    expect(formatErrorMessage(abortError, controller.signal)).toBe("Cancelled");
     expect(isCancellationError(new Error("boom"))).toBe(false);
   });
 });

@@ -85,6 +85,38 @@ describe("plugin system", () => {
     expect(registered).toBe(true);
   });
 
+  it("runs asynchronous plugin bodies in use() order", async () => {
+    const cli = new CLI();
+    const order: string[] = [];
+    let releaseFirst: () => void = () => {};
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    cli.use(async () => {
+      await first;
+      order.push("first");
+    });
+    cli.use(() => {
+      order.push("second");
+    });
+    const run = cli.exec("help", { stdout: createMockStdout() });
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    releaseFirst();
+    await run;
+    expect(order).toEqual(["first", "second"]);
+  });
+
+  it("surfaces a synchronous plugin throw through the initialization boundary", async () => {
+    const cli = new CLI();
+    cli.use(() => {
+      throw new Error("sync plugin failed");
+    });
+
+    await expect(cli.exec("help")).rejects.toThrow("sync plugin failed");
+  });
+
   it("shares one initialization barrier across concurrent exec calls", async () => {
     const cli = new CLI();
     const stream = createMockStdout();

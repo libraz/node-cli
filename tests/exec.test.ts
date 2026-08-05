@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { CLI, ExtraArgumentError, UnknownOptionError } from "../src/index.js";
-import { createMockStdout } from "./helpers.js";
+import { CLI, ExtraArgumentError, progress, UnknownOptionError } from "../src/index.js";
+import { createMockStdout, createMockTTY } from "./helpers.js";
 
 describe("programmatic exec", () => {
   it("executes a command programmatically", async () => {
@@ -143,5 +143,21 @@ describe("programmatic exec", () => {
     await expect(cli.exec("outer", { stderr: outerErr })).rejects.toThrow("outer failed");
     expect(outerErr.getOutput()).toContain("Error in error handler: error handler failed");
     expect(innerErr.getOutput()).toBe("");
+  });
+
+  it("releases abandoned progress indicators after a command failure", async () => {
+    const cli = new CLI();
+    const tty = createMockTTY();
+    cli.command("broken").action(() => {
+      progress.spinner({ stream: tty, label: "working" }).start();
+      throw new Error("command failed");
+    });
+
+    await expect(cli.exec("broken")).rejects.toThrow("command failed");
+    expect(tty.getOutput()).toContain("\x1b[?25h");
+
+    const replacement = progress.bar({ total: 1, stream: tty });
+    expect(() => replacement.update(1)).not.toThrow();
+    replacement[Symbol.dispose]();
   });
 });

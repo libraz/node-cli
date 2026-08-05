@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   c,
   color,
+  isColorEnabled,
   resetColorEnabled,
   setColorEnabled,
   stringWidth,
@@ -38,6 +39,11 @@ describe("color", () => {
     expect(stripAnsi(result)).toBe("hello");
   });
 
+  it("closes an inner bold style before restoring an outer dim style", () => {
+    const result = color.dim(`${color.bold("inner")} outer`);
+    expect(result).toBe("\x1b[2m\x1b[1minner\x1b[22m\x1b[2m outer\x1b[22m");
+  });
+
   it("returns plain text when disabled", () => {
     setColorEnabled(false);
     expect(color.red("hello")).toBe("hello");
@@ -46,6 +52,48 @@ describe("color", () => {
   it("throws on unknown style", () => {
     // biome-ignore lint/suspicious/noExplicitAny: testing unknown style access
     expect(() => (color as any).foobar("test")).toThrow("Unknown style");
+  });
+
+  it("does not expose inherited Function or Object members as styles", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: testing proxy property access
+    expect(() => (color.red as any).name).toThrow("Unknown style: name");
+    // biome-ignore lint/suspicious/noExplicitAny: testing proxy property access
+    expect(() => (color as any).toString).toThrow("Unknown style: toString");
+  });
+});
+
+describe("color environment detection", () => {
+  const stream = { isTTY: true } as NodeJS.WritableStream;
+  const saved = {
+    noColor: process.env.NO_COLOR,
+    forceColor: process.env.FORCE_COLOR,
+    term: process.env.TERM,
+  };
+
+  beforeEach(() => {
+    resetColorEnabled();
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+    delete process.env.TERM;
+  });
+
+  afterEach(() => {
+    resetColorEnabled();
+    if (saved.noColor === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = saved.noColor;
+    if (saved.forceColor === undefined) delete process.env.FORCE_COLOR;
+    else process.env.FORCE_COLOR = saved.forceColor;
+    if (saved.term === undefined) delete process.env.TERM;
+    else process.env.TERM = saved.term;
+  });
+
+  it("disables color for NO_COLOR and TERM=dumb", () => {
+    process.env.NO_COLOR = "1";
+    expect(isColorEnabled(stream)).toBe(false);
+
+    delete process.env.NO_COLOR;
+    process.env.TERM = "dumb";
+    expect(isColorEnabled(stream)).toBe(false);
   });
 });
 
@@ -74,6 +122,12 @@ describe("c (template tag)", () => {
     const name = "world";
     const result = c`{red hello} ${name}`;
     expect(stripAnsi(result)).toBe("hello world");
+  });
+
+  it("restores an outer inline style after an ANSI-colored interpolation", () => {
+    const value = color.green("world");
+    const result = c`{red hello ${value} again}`;
+    expect(result).toBe("\x1b[31mhello \x1b[32mworld\x1b[39m\x1b[31m again\x1b[39m");
   });
 
   it("returns plain text when disabled", () => {
@@ -123,6 +177,20 @@ describe("c (template tag)", () => {
       raw: [deeplyNested],
     }) as unknown as TemplateStringsArray;
     expect(() => c(strings)).toThrow(/nesting exceeds/);
+  });
+});
+
+describe("stringWidth", () => {
+  it("distinguishes narrow dingbats from wide emoji and CJK", () => {
+    expect(stringWidth("✓✔✗")).toBe(3);
+    expect(stringWidth("⭐⌚日本")).toBe(8);
+  });
+
+  it("truncates a large cell without materializing every grapheme", () => {
+    const value = "a".repeat(5_000_000);
+    const start = performance.now();
+    expect(truncateAnsi(value, 8)).toBe("aaaaaaa…");
+    expect(performance.now() - start).toBeLessThan(1_000);
   });
 });
 

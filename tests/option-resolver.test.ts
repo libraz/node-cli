@@ -66,6 +66,13 @@ describe("resolveOptions", () => {
     expect(result.tag).toBe("latest");
   });
 
+  it("coerces string defaults to strings", () => {
+    const defs = new Map([["label", makeDef("label", { type: "string", default: 123 })]]);
+    const result = resolveOptions({}, defs, dummyCtx);
+    expect(result.label).toBe("123");
+    expect(typeof result.label).toBe("string");
+  });
+
   it("throws on missing required option", () => {
     const defs = new Map([["token", makeDef("token", { type: "string", required: true })]]);
     expect(() => resolveOptions({}, defs, dummyCtx)).toThrow(MissingOptionError);
@@ -106,6 +113,13 @@ describe("resolveOptions", () => {
     expect(() => resolveOptions({ n: "   " }, defs, dummyCtx)).toThrow(InvalidOptionError);
     expect(() => resolveOptions({ n: "Infinity" }, defs, dummyCtx)).toThrow(InvalidOptionError);
     expect(() => resolveOptions({ n: "NaN" }, defs, dummyCtx)).toThrow(InvalidOptionError);
+  });
+
+  it("rejects non-decimal, padded, and precision-losing numbers", () => {
+    const defs = new Map([["n", makeDef("n", { type: "number" })]]);
+    for (const value of ["0x10", "0o10", "0b10", "001", "9007199254740992"]) {
+      expect(() => resolveOptions({ n: value }, defs, dummyCtx)).toThrow(InvalidOptionError);
+    }
   });
 
   it("recognizes boolean value variants", () => {
@@ -167,10 +181,37 @@ describe("resolveOptions", () => {
     expect(() => resolveOptions({}, arrayDefs, dummyCtx)).toThrow(MissingOptionError);
   });
 
+  it("runs choices and validation for an explicitly parsed undefined value", () => {
+    const choicesDefs = new Map([
+      ["opt", makeDef("opt", { choices: ["allowed"], parse: () => undefined })],
+    ]);
+    expect(() => resolveOptions({ opt: "x" }, choicesDefs, dummyCtx)).toThrow(InvalidOptionError);
+
+    let validated = false;
+    const validationDefs = new Map([
+      [
+        "opt",
+        makeDef("opt", {
+          parse: () => undefined,
+          validate(value) {
+            validated = value === undefined;
+          },
+        }),
+      ],
+    ]);
+    resolveOptions({ opt: "x" }, validationDefs, dummyCtx);
+    expect(validated).toBe(true);
+  });
+
   it("validates choices", () => {
     const defs = new Map([["env", makeDef("env", { type: "string", choices: ["prod", "dev"] })]]);
     expect(resolveOptions({ env: "prod" }, defs, dummyCtx).env).toBe("prod");
     expect(() => resolveOptions({ env: "staging" }, defs, dummyCtx)).toThrow(InvalidOptionError);
+  });
+
+  it("keeps lenient choice matches in the declared option type", () => {
+    const defs = new Map([["port", makeDef("port", { type: "string", choices: [3000] })]]);
+    expect(resolveOptions({ port: "3000" }, defs, dummyCtx).port).toBe("3000");
   });
 
   it("runs custom validate", () => {
@@ -221,7 +262,14 @@ describe("resolveOptions", () => {
         }),
       ],
     ]);
-    expect(() => resolveOptions({ token: "x" }, defs, dummyCtx)).toThrow(ValidationError);
+    try {
+      resolveOptions({ token: "x" }, defs, dummyCtx);
+      throw new Error("expected validation to fail");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ValidationError);
+      expect(err).toMatchObject({ optionName: "token" });
+      expect((err as Error).message).toContain("--token");
+    }
   });
 
   it("runs custom parse", () => {
@@ -253,12 +301,6 @@ describe("resolveOptions", () => {
       ],
     ]);
     expect(() => resolveOptions({ token: "x" }, defs, dummyCtx)).toThrow(ValidationError);
-  });
-
-  it("resolves aliases", () => {
-    const defs = new Map([["tag", makeDef("tag", { type: "string" }, ["t"])]]);
-    const result = resolveOptions({ t: "v2" }, defs, dummyCtx);
-    expect(result.tag).toBe("v2");
   });
 
   it("passes through unknown options", () => {

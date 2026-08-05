@@ -7,7 +7,12 @@ import { CommandBuilder } from "../src/command/builder.js";
 import { activePipeSegment, parse, parseDefinitionString } from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
-import { InvalidOptionError, MissingOptionError, PromptCancelError } from "../src/errors.js";
+import {
+  CLIError,
+  InvalidOptionError,
+  MissingOptionError,
+  PromptCancelError,
+} from "../src/errors.js";
 import { HelpGenerator } from "../src/help/generator.js";
 import { createCLI } from "../src/index.js";
 import { ShellCompleter } from "../src/shell/completion.js";
@@ -120,18 +125,90 @@ describe("direct mode prompt cancellation display", () => {
     });
     const stderr = createMockStdout();
     const originalWrite = process.stderr.write;
+    const originalExitCode = process.exitCode;
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
     try {
       await cli.start(["ask"]);
+      expect(process.exitCode).toBe(130);
     } finally {
       process.stderr.write = originalWrite;
-      process.exitCode = 0;
+      process.exitCode = originalExitCode;
     }
 
     // A user cancellation is presented as a clean "Cancelled" line without the
     // "Error:" prefix, matching how the interactive shell reports the same event.
     expect(stderr.getOutput()).toBe("Cancelled\n");
+  });
+
+  it("uses a CLIError's custom exit code in direct mode", async () => {
+    const cli = createCLI();
+    cli.command("fail").action(() => {
+      throw new CLIError("custom failure", "VALIDATION_ERROR", 42);
+    });
+    const stderr = createMockStdout();
+    const originalWrite = process.stderr.write;
+    const originalExitCode = process.exitCode;
+    process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
+
+    try {
+      await cli.start(["fail"]);
+      expect(process.exitCode).toBe(42);
+    } finally {
+      process.stderr.write = originalWrite;
+      process.exitCode = originalExitCode;
+    }
+    expect(stderr.getOutput()).toBe("Error: custom failure\n");
+  });
+});
+
+describe("empty direct argv", () => {
+  it.each([[[""]], [["--"]]])("shows help for explicit argv %j", async (argv) => {
+    const cli = createCLI();
+    const stdout = createMockStdout();
+    const originalWrite = process.stdout.write;
+    process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
+
+    try {
+      await cli.start(argv);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+    expect(stdout.getOutput()).toContain("Available commands:");
+  });
+});
+
+describe("public CLI lifecycle APIs", () => {
+  it("removes a CLI event listener with off()", async () => {
+    const cli = createCLI();
+    const handler = vi.fn();
+    cli.command("run").action(() => {});
+    cli.on("beforeExecute", handler).off("beforeExecute", handler);
+
+    await cli.exec("run");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("exposes PluginContext.off and catch", async () => {
+    const cli = createCLI();
+    const handler = vi.fn();
+    const stdout = createMockStdout();
+    cli.use((ctx) => {
+      ctx.on("beforeExecute", handler);
+      ctx.off("beforeExecute", handler);
+      ctx.catch((input, context) => context.stdout.write(`caught:${input}`));
+    });
+
+    await cli.exec("unknown", { stdout });
+    expect(handler).not.toHaveBeenCalled();
+    expect(stdout.getOutput()).toBe("caught:unknown");
+  });
+
+  it("rejects a second start call and errors for unknown help targets", async () => {
+    const cli = createCLI();
+    await cli.start(["help"]);
+    await expect(cli.start(["help"])).rejects.toThrow("already been called");
+    await expect(createCLI().exec("help unknown")).rejects.toThrow('Command not found: "unknown"');
   });
 });
 
@@ -275,6 +352,17 @@ describe("option value coercion", () => {
 
     await router.execute("build --cache=off");
     expect(action.mock.calls[0][0].options.cache).toBe(false);
+  });
+
+  it("normalizes schema-declared option aliases to their long key before actions run", async () => {
+    const { registry, router } = setup();
+    const action = vi.fn();
+    new CommandBuilder(registry, "serve").option("--port <port>", { alias: "p" }).action(action);
+
+    await router.execute("serve -p 8080");
+
+    expect(action.mock.calls[0][0].options).toMatchObject({ port: "8080" });
+    expect(action.mock.calls[0][0].options).not.toHaveProperty("p");
   });
 
   it("rejects an unrecognized boolean value instead of silently using true", async () => {
@@ -575,5 +663,39 @@ describe("usage string is shared between help and errors", () => {
       thrown = err as Error;
     });
     expect(thrown?.message).toContain(usageLine);
+  });
+});
+
+describe("CLI history configuration", () => {
+  it("sets historySize through a chainable setter", () => {
+    const cli = createCLI();
+    expect(cli.historySize(25)).toBe(cli);
+    expect((cli as unknown as { historySizeLimit: number }).historySizeLimit).toBe(25);
+  });
+});
+
+describe("fatal error diagnostics", () => {
+  it("prints an error stack when NODE_CLI_DEBUG is enabled", () => {
+    const cli = createCLI();
+    const error = new Error("broken command");
+    error.stack = "Error: broken command\n  at test";
+    const writes: string[] = [];
+    const write = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    const previousDebug = process.env.NODE_CLI_DEBUG;
+    const previousExitCode = process.exitCode;
+
+    try {
+      process.env.NODE_CLI_DEBUG = "1";
+      (cli as unknown as { reportFatal(error: unknown): void }).reportFatal(error);
+      expect(writes.join("")).toContain("  at test");
+    } finally {
+      if (previousDebug === undefined) delete process.env.NODE_CLI_DEBUG;
+      else process.env.NODE_CLI_DEBUG = previousDebug;
+      process.exitCode = previousExitCode;
+      write.mockRestore();
+    }
   });
 });

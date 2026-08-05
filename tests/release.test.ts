@@ -31,4 +31,22 @@ describe("release metadata", () => {
       releaseMetadata(packageJson, actualChangelog, `v${packageJson.version}`).notes,
     ).toContain(`## ${packageJson.version}`);
   });
+
+  it("exposes an ESM fallback and package metadata through exports", async () => {
+    const packageJson = JSON.parse(await readFile("package.json", "utf8"));
+    expect(packageJson.exports["."].default).toBe("./dist/index.js");
+    expect(packageJson.exports["./package.json"]).toBe("./package.json");
+  });
+
+  it("does not expose Shell as a constructible public runtime value", async () => {
+    const api = await import("../src/index.js");
+    expect("Shell" in api).toBe(false);
+  });
+
+  it("does not expose internal command definitions in its type declarations", async () => {
+    const declarations = await readFile("dist/index.d.ts", "utf8");
+    for (const typeName of ["ArgDef", "CommandDefinition", "OptionDef", "ParseResult"]) {
+      expect(declarations).not.toMatch(new RegExp(`\\b${typeName}\\b`));
+    }
+  });
 });
