@@ -27,6 +27,7 @@ backup/
 *.log
 .readme-backup
 .npm-readme-backup
+.pack-readme-active
 *.tgz
 pack-artifact.json
 release-notes.md

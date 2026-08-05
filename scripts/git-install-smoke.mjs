@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 function run(command, args, options = {}) {
@@ -22,16 +22,23 @@ const consumer = resolve(temporaryRoot, "consumer");
 
 try {
   await mkdir(repository);
-  const files = run("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
+  // Test the repository as consumers obtain it: a committed git archive. This
+  // deliberately excludes untracked worktree files, which could otherwise
+  // mask a missing package asset in a real `npm install git+...` invocation.
+  const archive = spawnSync("git", ["archive", "--format=tar", "HEAD"], {
     cwd: root,
-  })
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .filter((file) => !file.startsWith("dist/") && !file.startsWith("coverage/"));
-  for (const file of files) {
-    const destination = resolve(repository, file);
-    await mkdir(dirname(destination), { recursive: true });
-    await copyFile(resolve(root, file), destination);
+    stdio: "pipe",
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  if (archive.status !== 0) {
+    throw new Error(`git archive HEAD failed\n${archive.stderr?.toString() ?? ""}`);
+  }
+  const extraction = spawnSync("tar", ["-x", "-C", repository], {
+    input: archive.stdout,
+    stdio: "pipe",
+  });
+  if (extraction.status !== 0) {
+    throw new Error(`Could not extract git archive\n${extraction.stderr?.toString() ?? ""}`);
   }
 
   run("git", ["init", "--quiet"], { cwd: repository });

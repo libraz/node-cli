@@ -44,9 +44,11 @@ try {
   if (installedPackage.engines?.node !== packageJson.engines.node) {
     throw new Error("Packed Node.js engine does not match package.json");
   }
-  const installedReadme = await readFile(resolve(installedRoot, "README.md"), "utf8");
-  if (!installedReadme.includes("Node.js >= 22") || installedReadme.includes("Node.js >= 20")) {
-    throw new Error("Packed README Node.js requirement does not match package.json");
+  const installedReadme = await readFile(resolve(installedRoot, "README.md"));
+  const npmReadme = await readFile(resolve(root, "README.npm.md"));
+  const developmentReadme = await readFile(resolve(root, "README.md"));
+  if (!installedReadme.equals(npmReadme) || installedReadme.equals(developmentReadme)) {
+    throw new Error("Packed README is not the npm-specific README");
   }
   await writeFile(
     resolve(fixture, "smoke.mjs"),
