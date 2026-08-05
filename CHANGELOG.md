@@ -5,6 +5,78 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-05
+
+New public API for controlling help visibility, history size, and parse
+failures, alongside hardening across plugin registration, cancellation,
+option validation, and terminal output. Some entry-point exports were
+narrowed; see Removed.
+
+### Added
+
+- `CLI.historySize()` sets the interactive history limit after construction,
+  and `CommandBuilder.hidden()` excludes a command from generated help and
+  completion.
+- `ParseError` (code `PARSE_ERROR`) covers an unclosed quote, an empty or
+  trailing pipe, and an unsupported redirection operator. It is raised before a
+  command is resolved, so a registered `catch()` fallback handler receives the
+  input instead of the error being thrown.
+- The package entry point exports `tokenize`, `splitPipes`,
+  `stripOptionPrefix`, `formatErrorMessage`, `isCancellationError`,
+  `sanitizeTerminalText`, `splitGraphemes`, `streamIsTTY`, `releaseAll`,
+  `restoreCursor`, and the `CompletionResult` type.
+- Option flags accept long aliases and an explicit value placeholder, which the
+  generated help then uses.
+- `NODE_CLI_DEBUG=1` prints the full stack trace for an error reaching
+  `start()` in direct argv mode instead of only its message.
+- The exports map gains a `default` condition and a `./package.json` entry.
+- README figures render the real output of the table, progress, prompt, logger,
+  and color APIs, and the docs cover the color-enablement precedence, the
+  completion deadline and signal, cooperative SIGTERM shutdown, and the
+  `[Symbol.dispose]` support on progress indicators.
+
+### Changed
+
+- Plugin bodies run through a single serial queue, so an asynchronous `use()`
+  preserves declaration order and a synchronous throw fails initialization the
+  same way a rejected asynchronous plugin does.
+- The `exit` event fires on every direct-CLI path, not only on shell exit.
+- A supplied empty argument or a bare `--` prints the command index instead of
+  starting the interactive shell.
+- Redefining an option replaces the previous definition, so a plugin can refine
+  a built-in option without removing it first; aliases owned by other options
+  stay protected.
+- Every `CommandBuilder` method rejects a command that has been removed, not
+  only `command()`.
+- Declaring a subcommand under a command whose action consumes positional
+  arguments emits a `NODE_CLI_UNREACHABLE_SUBCOMMAND` warning.
+- Interactive history is appended rather than rewritten unless compaction is
+  needed.
+- The toolchain moves to Yarn 4.18.0, with Node.js and Yarn pinned through
+  `mise.toml` instead of a `volta` block.
+
+### Removed
+
+- `Shell` is exported as a type only; it is no longer a value export.
+- The structural types `ArgDef`, `CommandDefinition`, `OptionDef`, and
+  `ParseResult` are no longer exported from the package entry point.
+
+### Fixed
+
+- SIGINT during a direct argv run reports exit code 130 and prints
+  `Cancelled`, matching the interactive shell.
+- Option names, aliases, and declared defaults are validated when a command is
+  built, and a default outside the declared choices is rejected. Numeric option
+  values that are non-decimal or beyond the safe integer range now error.
+- Progress indicators are released and the cursor restored after every command,
+  and table cell and truncation boundaries close any leftover ANSI state.
+- Password prompts fall back to stderr when stdin is a TTY but stdout is
+  redirected.
+- Custom completion providers are bounded by a timeout and their candidate
+  tokens are escaped.
+- Readline buffers incoming lines, so pasted or partially typed input survives a
+  command run.
+
 ## [1.3.3] - 2026-07-24
 
 A correctness and hardening release across parsing, routing, option
@@ -304,6 +376,7 @@ These correct previously buggy behavior and may be observable:
 Initial public feature set: interactive shell, subcommands, tab completion,
 color, tables, progress, prompts, logger, events, plugins, and pipes.
 
+[1.4.0]: https://github.com/libraz/node-cli/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/libraz/node-cli/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/libraz/node-cli/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/libraz/node-cli/compare/v1.3.0...v1.3.1
