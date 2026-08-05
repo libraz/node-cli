@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="180" viewBox="0 0 560 180" role="img" aria-labelledby="title desc">
+  <title id="title">Interactive prompt output</title>
+  <desc id="desc">Terminal showing a text prompt, a yes-no confirmation with its default hint, and a numbered single-choice selection list.</desc>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: #e6edf3; }
+    .q { fill: #3fb950; }
+    .b { font-weight: 700; }
+    .dim { fill: #8b949e; }
+    .n { fill: #39c5cf; }
+  </style>
+
+  <rect x="0.5" y="0.5" width="559" height="179" rx="8" fill="#0d1117" stroke="#30363d"/>
+
+  <text x="20" y="33" class="t" xml:space="preserve"><tspan class="q">?</tspan> <tspan class="b">Your name:</tspan> Alice</text>
+
+  <text x="20" y="54" class="t" xml:space="preserve"><tspan class="q">?</tspan> <tspan class="b">Are you sure?</tspan><tspan class="dim"> (y/N)</tspan> y</text>
+
+  <text x="20" y="75" class="t" xml:space="preserve"><tspan class="q">?</tspan> <tspan class="b">Environment:</tspan></text>
+  <text x="20" y="96" class="t" xml:space="preserve">  <tspan class="n">1)</tspan> dev</text>
+  <text x="20" y="117" class="t" xml:space="preserve">  <tspan class="n">2)</tspan> staging</text>
+  <text x="20" y="138" class="t" xml:space="preserve">  <tspan class="n">3)</tspan> prod</text>
+  <text x="20" y="159" class="t" xml:space="preserve"><tspan class="dim">Enter number:</tspan> 2</text>
+</svg>

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="142" viewBox="0 0 560 142" role="img" aria-labelledby="title desc">
+  <title id="title">Progress bar and spinner output</title>
+  <desc id="desc">Terminal showing a download progress bar redrawn in place at 30, 50 and 100 percent, followed by a spinner frame and its resolved success line.</desc>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: #e6edf3; }
+    .dim { fill: #8b949e; }
+    .track { fill: #3d444d; }
+    .fill { fill: #e6edf3; }
+  </style>
+
+  <rect x="0.5" y="0.5" width="559" height="141" rx="8" fill="#0d1117" stroke="#30363d"/>
+
+  <!-- 30% -->
+  <text x="20" y="33" class="t">Downloading</text>
+  <text x="118" y="33" class="t dim">[</text>
+  <rect x="126" y="23" width="234" height="10" class="track"/>
+  <rect x="126" y="23" width="70" height="10" class="fill"/>
+  <text x="362" y="33" class="t dim">]</text>
+  <text x="378" y="33" class="t">30%</text>
+  <text x="426" y="33" class="t">30/100</text>
+
+  <!-- 50% -->
+  <text x="20" y="54" class="t">Downloading</text>
+  <text x="118" y="54" class="t dim">[</text>
+  <rect x="126" y="44" width="234" height="10" class="track"/>
+  <rect x="126" y="44" width="117" height="10" class="fill"/>
+  <text x="362" y="54" class="t dim">]</text>
+  <text x="378" y="54" class="t">50%</text>
+  <text x="426" y="54" class="t">50/100</text>
+
+  <!-- 100% -->
+  <text x="20" y="75" class="t">Downloading</text>
+  <text x="118" y="75" class="t dim">[</text>
+  <rect x="126" y="65" width="234" height="10" class="fill"/>
+  <text x="362" y="75" class="t dim">]</text>
+  <text x="378" y="75" class="t">100%</text>
+  <text x="426" y="75" class="t">100/100</text>
+
+  <!-- spinner frame (braille cell) -->
+  <g fill="#e6edf3">
+    <circle cx="22.5" cy="95.5" r="1.15"/>
+    <circle cx="27.5" cy="95.5" r="1.15"/>
+    <circle cx="27.5" cy="98.8" r="1.15"/>
+    <circle cx="27.5" cy="102.1" r="1.15"/>
+  </g>
+  <text x="38" y="104" class="t">Processing...</text>
+
+  <!-- resolved -->
+  <path d="M21 120.5 L23.8 123.5 L29.5 116.5" fill="none" stroke="#3fb950" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="38" y="125" class="t">Done!</text>
+</svg>

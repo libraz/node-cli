@@ -9,6 +9,8 @@
 
 外部依存ゼロ、フル装備の Node.js / TypeScript CLI フレームワーク。
 
+![インタラクティブシェルのセッション。CLI の起動、deploy コマンドの実行、プログレスバーの進行、スピナーが成功行に変わるまで](docs/assets/demo.svg)
+
 ## 概要
 
 **node-cli** は、リッチなコマンドラインアプリケーションの構築に必要な機能をすべて備えた軽量インタラクティブ CLI シェルフレームワークです。外部の本番依存パッケージは一切不要です。
@@ -145,6 +147,8 @@ console.log(color.bold.green("Success!"));
 console.log(c`{red.bold Error}: Something went wrong`);
 ```
 
+![カラー出力。太字の緑の成功行、太字の赤のエラー接頭辞、利用できる色と修飾](docs/assets/color.svg)
+
 ### テーブル表示
 
 ```typescript
@@ -157,6 +161,8 @@ const data = [
 
 console.log(table(data, { border: "rounded", headerStyle: "bold" }));
 ```
+
+![角丸の罫線と太字のヘッダー行を持つテーブル。データ行は 2 行](docs/assets/table.svg)
 
 ### プログレスインジケーター
 
@@ -174,6 +180,8 @@ spinner.start();
 spinner.succeed("完了!");
 ```
 
+![同じ行で 30%、50%、100% と描き直されるプログレスバーと、スピナーおよびその成功行](docs/assets/progress.svg)
+
 ### インタラクティブプロンプト
 
 ```typescript
@@ -184,6 +192,8 @@ const sure = await prompt.confirm("よろしいですか?");
 const env = await prompt.select("環境:", ["dev", "staging", "prod"]);
 ```
 
+![テキスト入力、既定値のヒント付きの Yes/No 確認、番号付きの単一選択リスト](docs/assets/prompt.svg)
+
 ### ロガー
 
 ```typescript
@@ -192,11 +202,14 @@ import { logger } from "@libraz/node-cli";
 const log = logger({ prefix: "app", timestamp: true, level: "debug" });
 log.info("サーバーがポート %d で起動しました", 3000);
 log.success("デプロイ完了");
+log.warn("キャッシュミス率が高くなっています");
 log.error("接続に失敗しました");
 
 const db = log.child("db");
 db.debug("クエリ実行時間: 12ms");
 ```
+
+![レベルごとの色付きアイコン、タイムスタンプ、子ロガーの入れ子接頭辞を含むログ行](docs/assets/logger.svg)
 
 ### イベントシステム
 

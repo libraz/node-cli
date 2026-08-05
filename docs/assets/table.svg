@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="118" viewBox="0 0 560 118" role="img" aria-labelledby="title desc">
+  <title id="title">Table output</title>
+  <desc id="desc">Terminal showing a rounded-border table with a bold header row of name, role and active columns over two data rows.</desc>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: #e6edf3; }
+    .h { font-weight: 700; }
+    .b { fill: none; stroke: #7d8590; stroke-width: 1; }
+  </style>
+
+  <rect x="0.5" y="0.5" width="559" height="117" rx="8" fill="#0d1117" stroke="#30363d"/>
+
+  <path class="b" d="M23.5 20.5 H192.5 A3 3 0 0 1 195.5 23.5 V94.5 A3 3 0 0 1 192.5 97.5 H23.5 A3 3 0 0 1 20.5 94.5 V23.5 A3 3 0 0 1 23.5 20.5 Z"/>
+  <path class="b" d="M76.5 20.5 V97.5 M132.5 20.5 V97.5 M20.5 46.5 H195.5"/>
+
+  <text x="29" y="38" class="t h">name</text>
+  <text x="85" y="38" class="t h">role</text>
+  <text x="141" y="38" class="t h">active</text>
+
+  <text x="29" y="64" class="t">Alice</text>
+  <text x="85" y="64" class="t">Admin</text>
+  <text x="141" y="64" class="t">true</text>
+
+  <text x="29" y="90" class="t">Bob</text>
+  <text x="85" y="90" class="t">User</text>
+  <text x="141" y="90" class="t">false</text>
+</svg>

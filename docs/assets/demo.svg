@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="178" viewBox="0 0 560 178" role="img" aria-labelledby="title desc">
+  <title id="title">node-cli interactive shell session</title>
+  <desc id="desc">Animated terminal session: launching the CLI, running a deploy command in the interactive shell, a progress bar filling to one hundred percent, a spinner resolving to a success line, and the prompt returning.</desc>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: #e6edf3; }
+    .dim { fill: #8b949e; }
+    .cy { fill: #39c5cf; }
+    .track { fill: #3d444d; }
+    .fill { fill: #e6edf3; }
+
+    /* Every animated element renders in its finished state by default, so a
+       renderer that ignores CSS animation still shows the complete session. */
+    .grow { transform-box: fill-box; transform-origin: left center; }
+
+    .l1 { animation: l1 10s infinite both }
+    .l2 { animation: l2 10s infinite both }
+    .l3 { animation: l3 10s infinite both }
+    .l4 { animation: l4 10s infinite both }
+    .l5s { animation: l5s 10s infinite both }
+    .l5d { animation: l5d 10s infinite both }
+    .l6 { animation: l6 10s infinite both }
+    @keyframes l1 { 0%, 1.9% { opacity: 0 } 2%, 95% { opacity: 1 } 100% { opacity: 0 } }
+    @keyframes l2 { 0%, 9.9% { opacity: 0 } 10%, 95% { opacity: 1 } 100% { opacity: 0 } }
+    @keyframes l3 { 0%, 12.9% { opacity: 0 } 13%, 95% { opacity: 1 } 100% { opacity: 0 } }
+    @keyframes l4 { 0%, 26.9% { opacity: 0 } 27%, 95% { opacity: 1 } 100% { opacity: 0 } }
+    @keyframes l5s { 0%, 53.9% { opacity: 0 } 54%, 67.9% { opacity: 1 } 68%, 100% { opacity: 0 } }
+    @keyframes l5d { 0%, 68.9% { opacity: 0 } 69%, 95% { opacity: 1 } 100% { opacity: 0 } }
+    @keyframes l6 { 0%, 71.9% { opacity: 0 } 72%, 95% { opacity: 1 } 100% { opacity: 0 } }
+
+    /* Typed input, revealed one character at a time. */
+    .type1 { animation: type1 10s steps(5, end) infinite both }
+    .type3 { animation: type3 10s steps(24, end) infinite both }
+    @keyframes type1 { 0%, 2% { transform: scaleX(0) } 8%, 100% { transform: scaleX(1) } }
+    @keyframes type3 { 0%, 13% { transform: scaleX(0) } 25%, 100% { transform: scaleX(1) } }
+
+    .bar { animation: bar 10s infinite both }
+    @keyframes bar { 0%, 27% { transform: scaleX(0) } 52%, 100% { transform: scaleX(1) } }
+
+    /* Percent readouts step through five discrete values as the bar fills. */
+    .p0 { animation: p0 10s infinite both }
+    .p1 { animation: p1 10s infinite both }
+    .p2 { animation: p2 10s infinite both }
+    .p3 { animation: p3 10s infinite both }
+    .p4 { animation: p4 10s infinite both }
+    @keyframes p0 { 0%, 26.9% { opacity: 0 } 27%, 31.9% { opacity: 1 } 32%, 100% { opacity: 0 } }
+    @keyframes p1 { 0%, 31.9% { opacity: 0 } 32%, 37.9% { opacity: 1 } 38%, 100% { opacity: 0 } }
+    @keyframes p2 { 0%, 37.9% { opacity: 0 } 38%, 44.9% { opacity: 1 } 45%, 100% { opacity: 0 } }
+    @keyframes p3 { 0%, 44.9% { opacity: 0 } 45%, 51.9% { opacity: 1 } 52%, 100% { opacity: 0 } }
+    @keyframes p4 { 0%, 51.9% { opacity: 0 } 52%, 95% { opacity: 1 } 100% { opacity: 0 } }
+
+    /* Braille spinner frames, one keyframe track per lit dot position. */
+    .s11 { animation: s11 .8s infinite both }
+    .s12 { animation: s12 .8s infinite both }
+    .s13 { animation: s13 .8s infinite both }
+    .s21 { animation: s21 .8s infinite both }
+    .s22 { animation: s22 .8s infinite both }
+    .s23 { animation: s23 .8s infinite both }
+    @keyframes s11 { 0%, 29.9% { opacity: 1 } 30%, 69.9% { opacity: 0 } 70%, 100% { opacity: 1 } }
+    @keyframes s12 { 0%, 9.9% { opacity: 1 } 10%, 59.9% { opacity: 0 } 60%, 100% { opacity: 1 } }
+    @keyframes s13 { 0%, 39.9% { opacity: 0 } 40%, 100% { opacity: 1 } }
+    @keyframes s21 { 0%, 49.9% { opacity: 1 } 50%, 89.9% { opacity: 0 } 90%, 100% { opacity: 1 } }
+    @keyframes s22 { 0%, 9.9% { opacity: 0 } 10%, 59.9% { opacity: 1 } 60%, 100% { opacity: 0 } }
+    @keyframes s23 { 0%, 19.9% { opacity: 0 } 20%, 79.9% { opacity: 1 } 80%, 100% { opacity: 0 } }
+
+    .cur { animation: cur 1s steps(1) infinite }
+    @keyframes cur { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
+
+    /* Reduced motion: hold the finished session, no movement at all. */
+    @media (prefers-reduced-motion: reduce) {
+      .l1, .l2, .l3, .l4, .l5d, .l6, .p4, .type1, .type3, .bar, .cur { animation: none }
+      .l5s, .p0, .p1, .p2, .p3 { animation: none; opacity: 0 }
+    }
+  </style>
+
+  <defs>
+    <clipPath id="type1"><rect class="grow type1" x="35.6" y="26" width="39" height="18"/></clipPath>
+    <clipPath id="type3"><rect class="grow type3" x="35.6" y="70" width="187.2" height="18"/></clipPath>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="559" height="177" rx="8" fill="#0d1117" stroke="#30363d"/>
+
+  <!-- 1. launch -->
+  <g class="l1">
+    <text x="20" y="40" class="t dim">$</text>
+    <g clip-path="url(#type1)"><text x="35.6" y="40" class="t">myapp</text></g>
+  </g>
+
+  <!-- 2. banner -->
+  <text x="20" y="62" class="t dim l2">myapp v1.0.0</text>
+
+  <!-- 3. command -->
+  <g class="l3">
+    <text x="20" y="84" class="t cy">&gt;</text>
+    <g clip-path="url(#type3)"><text x="35.6" y="84" class="t">deploy prod --tag v2.1.0</text></g>
+  </g>
+
+  <!-- 4. progress bar -->
+  <g class="l4">
+    <text x="20" y="106" class="t">Deploying</text>
+    <text x="105.8" y="106" class="t dim">[</text>
+    <rect x="113.6" y="96" width="234" height="10" class="track"/>
+    <rect x="113.6" y="96" width="234" height="10" class="fill grow bar"/>
+    <text x="347.6" y="106" class="t dim">]</text>
+    <g class="t">
+      <g class="p0"><text x="363" y="106">0%</text><text x="411" y="106">0/100</text></g>
+      <g class="p1"><text x="363" y="106">25%</text><text x="411" y="106">25/100</text></g>
+      <g class="p2"><text x="363" y="106">50%</text><text x="411" y="106">50/100</text></g>
+      <g class="p3"><text x="363" y="106">75%</text><text x="411" y="106">75/100</text></g>
+      <g class="p4"><text x="363" y="106">100%</text><text x="411" y="106">100/100</text></g>
+    </g>
+  </g>
+
+  <!-- 5a. spinner -->
+  <g class="l5s">
+    <g fill="#e6edf3">
+      <circle class="s11" cx="22.5" cy="119.5" r="1.15"/>
+      <circle class="s12" cx="22.5" cy="122.8" r="1.15"/>
+      <circle class="s13" cx="22.5" cy="126.1" r="1.15"/>
+      <circle class="s21" cx="27.5" cy="119.5" r="1.15"/>
+      <circle class="s22" cx="27.5" cy="122.8" r="1.15"/>
+      <circle class="s23" cx="27.5" cy="126.1" r="1.15"/>
+    </g>
+    <text x="38" y="128" class="t">Verifying release...</text>
+  </g>
+
+  <!-- 5b. resolved -->
+  <g class="l5d">
+    <path d="M21 123.5 L23.8 126.5 L29.5 119.5" fill="none" stroke="#3fb950" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="38" y="128" class="t">Deployed v2.1.0 to prod</text>
+  </g>
+
+  <!-- 6. prompt returns -->
+  <g class="l6">
+    <text x="20" y="150" class="t cy">&gt;</text>
+    <rect x="35.6" y="139" width="7.8" height="13" fill="#e6edf3" class="cur"/>
+  </g>
+</svg>

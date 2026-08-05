@@ -9,6 +9,8 @@
 
 Zero-dependency, batteries-included CLI framework for Node.js / TypeScript.
 
+![Interactive shell session: launching the CLI, running a deploy command, a progress bar filling, and a spinner resolving to a success line](docs/assets/demo.svg)
+
 ## Overview
 
 **node-cli** is a lightweight interactive CLI shell framework that provides everything you need to build rich command-line applications — with no external production dependencies.
@@ -145,6 +147,8 @@ console.log(color.bold.green("Success!"));
 console.log(c`{red.bold Error}: Something went wrong`);
 ```
 
+![Colored terminal output: a bold green success line, a bold red error prefix, and the available colors and modifiers](docs/assets/color.svg)
+
 ### Table Display
 
 ```typescript
@@ -157,6 +161,8 @@ const data = [
 
 console.log(table(data, { border: "rounded", headerStyle: "bold" }));
 ```
+
+![Table with rounded borders and a bold header row over two data rows](docs/assets/table.svg)
 
 ### Progress Indicators
 
@@ -174,6 +180,8 @@ spinner.start();
 spinner.succeed("Done!");
 ```
 
+![Progress bar redrawn in place at 30, 50 and 100 percent, followed by a spinner frame and its success line](docs/assets/progress.svg)
+
 ### Interactive Prompts
 
 ```typescript
@@ -184,6 +192,8 @@ const sure = await prompt.confirm("Are you sure?");
 const env = await prompt.select("Environment:", ["dev", "staging", "prod"]);
 ```
 
+![Text prompt, yes-no confirmation with its default hint, and a numbered single-choice list](docs/assets/prompt.svg)
+
 ### Logger
 
 ```typescript
@@ -192,11 +202,14 @@ import { logger } from "@libraz/node-cli";
 const log = logger({ prefix: "app", timestamp: true, level: "debug" });
 log.info("Server started on port %d", 3000);
 log.success("Deployment complete");
+log.warn("Cache miss rate is high");
 log.error("Connection failed");
 
 const db = log.child("db");
 db.debug("Query executed in 12ms");
 ```
+
+![Leveled log lines with colored icons, timestamps, and a nested child-logger prefix](docs/assets/logger.svg)
 
 ### Event System
 

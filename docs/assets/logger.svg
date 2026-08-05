@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="140" viewBox="0 0 560 140" role="img" aria-labelledby="title desc">
+  <title id="title">Logger output</title>
+  <desc id="desc">Terminal showing leveled log lines with colored icons, timestamps, and a nested child-logger prefix.</desc>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; }
+    .fg { fill: #e6edf3; }
+    .dim { fill: #8b949e; }
+    .ic { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+
+  <rect x="0.5" y="0.5" width="559" height="139" rx="8" fill="#0d1117" stroke="#30363d"/>
+
+  <!-- info -->
+  <circle cx="26" cy="24.5" r="1.2" fill="#58a6ff"/>
+  <path d="M26 27.5 L26 33" class="ic" stroke="#58a6ff"/>
+  <text x="36" y="33" class="t"><tspan class="dim">09:42:15 [app]</tspan><tspan class="fg" xml:space="preserve"> Server started on port 3000</tspan></text>
+
+  <!-- success -->
+  <path d="M22 49.5 L24.8 52.5 L30.5 45.5" class="ic" stroke="#3fb950"/>
+  <text x="36" y="54" class="t"><tspan class="dim">09:42:15 [app]</tspan><tspan class="fg" xml:space="preserve"> Deployment complete</tspan></text>
+
+  <!-- warn -->
+  <path d="M26 65.5 L31 74.5 L21 74.5 Z" class="ic" stroke="#d29922"/>
+  <path d="M26 69 L26 71.5" class="ic" stroke="#d29922"/>
+  <circle cx="26" cy="73.2" r="0.9" fill="#d29922"/>
+  <text x="36" y="75" class="t"><tspan class="dim">09:42:15 [app]</tspan><tspan class="fg" xml:space="preserve"> Cache miss rate is high</tspan></text>
+
+  <!-- error -->
+  <path d="M22.6 87.9 L29.4 94.7 M29.4 87.9 L22.6 94.7" class="ic" stroke="#f85149"/>
+  <text x="36" y="96" class="t"><tspan class="dim">09:42:15 [app]</tspan><tspan class="fg" xml:space="preserve"> Connection failed</tspan></text>
+
+  <!-- debug -->
+  <circle cx="26" cy="112.3" r="2.6" fill="#8b949e"/>
+  <text x="36" y="117" class="t"><tspan class="dim">09:42:15 [app:db]</tspan><tspan class="fg" xml:space="preserve"> Query executed in 12ms</tspan></text>
+</svg>

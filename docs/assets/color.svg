@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="128" viewBox="0 0 560 128" role="img" aria-labelledby="title desc">
+  <title id="title">Color output</title>
+  <desc id="desc">Terminal showing a bold green success line, a bold red error prefix, the foreground color names rendered in their own colors, and the bold, dim and underline modifiers.</desc>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; fill: #e6edf3; }
+    .b { font-weight: 700; }
+    .u { text-decoration: underline; }
+    .red { fill: #f85149; }
+    .green { fill: #3fb950; }
+    .yellow { fill: #d29922; }
+    .blue { fill: #58a6ff; }
+    .magenta { fill: #bc8cff; }
+    .cyan { fill: #39c5cf; }
+    .gray { fill: #8b949e; }
+  </style>
+
+  <rect x="0.5" y="0.5" width="559" height="127" rx="8" fill="#0d1117" stroke="#30363d"/>
+
+  <text x="20" y="33" class="t b green">Success!</text>
+  <text x="20" y="54" class="t" xml:space="preserve"><tspan class="b red">Error</tspan>: Something went wrong</text>
+
+  <path d="M20 70 H540" stroke="#21262d" stroke-width="1"/>
+
+  <text x="20" y="93" class="t" xml:space="preserve"><tspan class="red">red</tspan>  <tspan class="green">green</tspan>  <tspan class="yellow">yellow</tspan>  <tspan class="blue">blue</tspan>  <tspan class="magenta">magenta</tspan>  <tspan class="cyan">cyan</tspan>  <tspan class="gray">gray</tspan></text>
+  <text x="20" y="114" class="t" xml:space="preserve"><tspan class="b">bold</tspan>  <tspan class="gray">dim</tspan>  <tspan class="u">underline</tspan></text>
+</svg>
