@@ -38,7 +38,7 @@
     "test:git-install": "node scripts/git-install-smoke.mjs",
     "test:pack": "node scripts/pack-smoke.mjs",
     "typecheck:examples": "tsc -p tsconfig.examples.json",
-    "typecheck:node22": "yarn dlx --package @types/node@22 --package typescript@6.0.3 tsc --noEmit",
+    "typecheck:min-types": "node scripts/typecheck-min-types.mjs",
     "lint": "biome check src tests examples scripts",
     "lint:fix": "biome check --write src tests examples scripts",
     "format": "biome format --write src tests examples scripts",
