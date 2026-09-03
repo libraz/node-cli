@@ -485,7 +485,7 @@ interface TableOptions {
   chars?: TableChars;                       // カスタムボーダー文字
   align?: Record<string, "left" | "right" | "center">;
   colAligns?: ("left" | "right" | "center")[];  // インデックス指定のアライメント
-  colWidths?: number[];                     // インデックス指定の固定カラム幅
+  colWidths?: number[];                     // インデックス指定の固定カラム幅（padding 込み）
   maxWidth?: Record<string, number>;
   padding?: number;                         // デフォルト: 2 (ボーダーなし)
   headerStyle?: "bold" | "dim" | "underline" | "none";
@@ -508,6 +508,11 @@ interface TableChars {
   mid?: string;       "mid-mid"?: string;    middle?: string;
 }
 ```
+
+`colWidths[i]` は padding を含むカラム全体の幅を指す。有効な最小値は
+`padding-left + padding-right + 1` で、それを下回る値はこの最小値で描画され、
+`0` 以下は自動幅になる。どのボーダーモードも計算に含めた padding をそのまま
+描画するため、指定した幅がそのまま描画幅になる。
 
 ---
 

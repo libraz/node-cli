@@ -542,3 +542,43 @@ describe("per-column settings from untrusted keys", () => {
     expect(rendered).toContain("value");
   });
 });
+
+describe("borderless and simple modes honour every table option", () => {
+  afterEach(() => {
+    resetColorEnabled();
+  });
+
+  it("renders the padding that explicit column widths were charged for", () => {
+    for (const border of ["none", "simple"] as const) {
+      const out = table([["a"]], {
+        border,
+        header: false,
+        colWidths: [8],
+        style: { "padding-left": 2, "padding-right": 2 },
+      });
+      // colWidths counts padding, so the rendered column must be that wide.
+      expect(stringWidth(out)).toBe(8);
+    }
+  });
+
+  it("colors the separator glyphs of a simple table", () => {
+    setColorEnabled(true);
+    const out = table([["a"]], {
+      border: "simple",
+      style: { border: "red" },
+    });
+    expect(out).toMatch(/\x1b\[31m-+\x1b\[39m/);
+  });
+
+  it("separates data rows of a simple table when not compact", () => {
+    const compact = table([["a"], ["b"]], { border: "simple", header: false });
+    const spaced = table([["a"], ["b"]], {
+      border: "simple",
+      header: false,
+      style: { compact: false },
+    });
+    expect(compact.split("\n")).toHaveLength(2);
+    expect(spaced.split("\n")).toHaveLength(3);
+    expect(spaced.split("\n")[1]).toMatch(/^-+$/);
+  });
+});

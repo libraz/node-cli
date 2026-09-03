@@ -137,7 +137,7 @@ interface TableOptions {
   chars?: TableChars;           // カスタムボーダー文字
   align?: Record<string, "left" | "right" | "center">;
   colAligns?: ("left" | "right" | "center")[];  // インデックス指定のアライメント
-  colWidths?: number[];         // インデックス指定の固定カラム幅
+  colWidths?: number[];         // インデックス指定の固定カラム幅（padding 込み）
   maxWidth?: Record<string, number>;      // カラムの切り詰め
   padding?: number;             // ボーダーなし時のカラム間スペース (デフォルト: 2)
   headerStyle?: "bold" | "dim" | "underline" | "none";

@@ -684,6 +684,18 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
 
 // ── MultiBar Implementation ──
 
+/** A handle whose operations are all no-ops, returned once a group is closed. */
+function inertBar(): Bar {
+  const noop = () => {};
+  return {
+    update: noop,
+    tick: noop,
+    finish: noop,
+    stop: noop,
+    [Symbol.dispose]: noop,
+  };
+}
+
 /**
  * Creates a multi-bar manager that renders multiple progress bars simultaneously.
  */
@@ -738,9 +750,10 @@ function createMultiBar(): MultiBar {
 
   return {
     add(options: BarOptions): Bar {
-      if (closed) {
-        throw new Error("Cannot add a bar after multi progress has been closed");
-      }
+      // Every other operation on a closed group is a silent no-op, so a worker
+      // that adds a bar just after `finally { multi.finish() }` gets an inert
+      // handle rather than an unhandled rejection that fails the command.
+      if (closed) return inertBar();
       if (!streamSet && options.stream) {
         stream = options.stream;
         frameWriter = createFrameWriter(stream);
@@ -808,6 +821,7 @@ function createMultiBar(): MultiBar {
 
   function renderAll(final = false): void {
     startTerminalSession();
+    const previousRows = renderedRows;
     const col = createColorizer(stream);
     // Terminal width used to estimate how many physical rows each logical line
     // occupies once it wraps.
@@ -834,6 +848,13 @@ function createMultiBar(): MultiBar {
       frame += `\r\x1b[K${line}\n`;
       rows += Math.max(1, Math.ceil(stringWidth(line) / columns));
     }
+
+    // A frame that shrank — a line stopped wrapping, or fewer bars are drawn —
+    // leaves the extra physical rows of the previous frame on screen, because
+    // the erase above only clears the row the cursor sits on. Wipe the surplus
+    // and come back to the end of the new frame.
+    const surplus = previousRows - rows;
+    if (surplus > 0) frame += `${"\r\x1b[K\n".repeat(surplus)}\x1b[${surplus}A`;
 
     renderedRows = rows;
     if (final) frameWriter.final(frame);

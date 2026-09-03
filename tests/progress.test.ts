@@ -682,3 +682,22 @@ describe("terminal state ownership", () => {
     expect(after.SIGHUP).toBe(before.SIGHUP);
   });
 });
+
+describe("multi bar after close", () => {
+  it("returns an inert handle instead of throwing", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    multi.add({ total: 10, stream });
+    multi.finish();
+
+    const before = stream.getOutput().length;
+    const late = multi.add({ total: 5, stream });
+    expect(() => {
+      late.update(3);
+      late.tick();
+      late.finish();
+      late.stop();
+    }).not.toThrow();
+    expect(stream.getOutput().length).toBe(before);
+  });
+});

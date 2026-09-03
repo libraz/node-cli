@@ -63,7 +63,12 @@ export interface TableOptions {
   align?: Record<string, "left" | "right" | "center">;
   /** Text alignment per column by index. Takes precedence over `align` by name. */
   colAligns?: ("left" | "right" | "center")[];
-  /** Fixed width per column by index. Takes precedence over auto-calculated widths. */
+  /**
+   * Fixed total width per column by index, padding included. Takes precedence
+   * over auto-calculated widths. The smallest honoured value is
+   * `padding-left + padding-right + 1`; anything below that renders at that
+   * minimum, and a value of `0` or less means "size this column automatically".
+   */
   colWidths?: number[];
   /** Maximum width per column, keyed by column name. */
   maxWidth?: Record<string, number>;
@@ -302,6 +307,8 @@ export function table(
       truncatedWidths,
       colWidths,
       layout.colPadding,
+      layout.padLeft,
+      layout.padRight,
       getAlign,
     );
   }
@@ -312,7 +319,11 @@ export function table(
       truncated,
       truncatedWidths,
       colWidths,
+      layout.padLeft,
+      layout.padRight,
       getAlign,
+      bc,
+      compact,
       layout.chars,
     );
   }
@@ -586,22 +597,25 @@ function renderNone(
   rowWidths: number[][],
   widths: number[],
   padding: number,
+  padLeft: number,
+  padRight: number,
   getAlign: (i: number) => "left" | "right" | "center",
 ): string {
   const lines: string[] = [];
   const pad = " ".repeat(padding);
+  // Width calculation already charged every explicit colWidths entry for the
+  // left and right padding, so the renderer has to put it back; otherwise the
+  // column comes out narrower than the caller asked for.
+  const pl = " ".repeat(padLeft);
+  const pr = " ".repeat(padRight);
+  const cell = (text: string, i: number, width: number | undefined) =>
+    pl + padCell(text, widths[i], getAlign(i), width) + pr;
   if (header) {
-    lines.push(
-      header.map((h, i) => padCell(h, widths[i], getAlign(i), headerWidths?.[i])).join(pad),
-    );
+    lines.push(header.map((h, i) => cell(h, i, headerWidths?.[i])).join(pad));
   }
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
     const row = rows[rowIndex];
-    lines.push(
-      row
-        .map((cell, i) => padCell(cell, widths[i], getAlign(i), rowWidths[rowIndex]?.[i]))
-        .join(pad),
-    );
+    lines.push(row.map((text, i) => cell(text, i, rowWidths[rowIndex]?.[i])).join(pad));
   }
   return lines.join("\n");
 }
@@ -612,26 +626,35 @@ function renderSimple(
   rows: string[][],
   rowWidths: number[][],
   widths: number[],
+  padLeft: number,
+  padRight: number,
   getAlign: (i: number) => "left" | "right" | "center",
+  bc: (s: string) => string,
+  compact: boolean,
   chars?: Required<TableChars>,
 ): string {
   const lines: string[] = [];
-  const middle = chars?.middle ?? " | ";
+  const middle = bc(chars?.middle ?? " | ");
   const separator = chars ? chars.mid : "-";
   const separatorMiddle = chars?.["mid-mid"] ?? "-|-";
+  // Same contract as the other modes: padding charged to the width is rendered,
+  // border glyphs go through the resolved border colorizer, and a non-compact
+  // table separates its data rows.
+  const pl = " ".repeat(padLeft);
+  const pr = " ".repeat(padRight);
+  const cell = (text: string, i: number, width: number | undefined) =>
+    pl + padCell(text, widths[i], getAlign(i), width) + pr;
+  const separatorLine = separator
+    ? bc(widths.map((w) => separator.repeat(w + padLeft + padRight)).join(separatorMiddle))
+    : "";
   if (header) {
-    lines.push(
-      header.map((h, i) => padCell(h, widths[i], getAlign(i), headerWidths?.[i])).join(middle),
-    );
-    lines.push(widths.map((w) => separator.repeat(w)).join(separatorMiddle));
+    lines.push(header.map((h, i) => cell(h, i, headerWidths?.[i])).join(middle));
+    if (separatorLine) lines.push(separatorLine);
   }
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    if (!compact && rowIndex > 0 && separatorLine) lines.push(separatorLine);
     const row = rows[rowIndex];
-    lines.push(
-      row
-        .map((cell, i) => padCell(cell, widths[i], getAlign(i), rowWidths[rowIndex]?.[i]))
-        .join(middle),
-    );
+    lines.push(row.map((text, i) => cell(text, i, rowWidths[rowIndex]?.[i])).join(middle));
   }
   return lines.join("\n");
 }

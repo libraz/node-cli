@@ -488,7 +488,7 @@ interface TableOptions {
   chars?: TableChars;                       // custom border characters
   align?: Record<string, "left" | "right" | "center">;
   colAligns?: ("left" | "right" | "center")[];  // alignment by index
-  colWidths?: number[];                     // fixed column widths by index
+  colWidths?: number[];                     // fixed column widths by index, padding included
   maxWidth?: Record<string, number>;
   padding?: number;                         // default: 2 (borderless)
   headerStyle?: "bold" | "dim" | "underline" | "none";
@@ -511,6 +511,11 @@ interface TableChars {
   mid?: string;       "mid-mid"?: string;    middle?: string;
 }
 ```
+
+`colWidths[i]` is the column's total width, padding included. The smallest
+honoured value is `padding-left + padding-right + 1`; a smaller one renders at
+that minimum, and `0` or less sizes the column automatically. Every border mode
+renders the padding it charged, so the width you ask for is the width you get.
 
 ---
 

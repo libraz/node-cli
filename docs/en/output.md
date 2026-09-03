@@ -137,7 +137,7 @@ interface TableOptions {
   chars?: TableChars;           // Custom border characters
   align?: Record<string, "left" | "right" | "center">;
   colAligns?: ("left" | "right" | "center")[];  // Alignment by index
-  colWidths?: number[];         // Fixed column widths by index
+  colWidths?: number[];         // Fixed column widths by index, padding included
   maxWidth?: Record<string, number>;      // Truncate columns
   padding?: number;             // Column spacing for borderless (default: 2)
   headerStyle?: "bold" | "dim" | "underline" | "none";
