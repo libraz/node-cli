@@ -34,6 +34,10 @@ lost-input paths are closed.
   value reports whether it failed the declared range or the safe integer bound.
 - The toolchain moves to the native TypeScript build; Biome, Vitest, and the
   pinned Node.js, Yarn, and npm versions are updated with it.
+- The documentation is restructured into per-topic guide pages in both
+  languages, with diagrams and a separate API reference; the READMEs are
+  reduced to an overview that links into the guide. The exit-code, subpath
+  export, and quick-start descriptions are corrected to match what ships.
 
 ### Fixed
 
