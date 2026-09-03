@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 464" width="960" height="464" role="img" aria-labelledby="ttl dsc">
   <title id="ttl">How cli.start() picks a mode</title>
-  <desc id="dsc">A decision flow with two questions and four outcomes. First question: were any arguments given? If they were given but every one is empty, or the whole input is just a double dash, the help index is printed and the CLI stops. If arguments were given otherwise, direct mode runs: parse the arguments, run the single matched command, set process.exitCode and exit. If no arguments were given, the second question applies: are stdin and stdout both a real terminal? If yes, the interactive shell starts — banner, then read a line, run it, repeat until exit, quit or Ctrl-D. If no, because output is piped or input is redirected, the help index is printed and the CLI stops; this is the outcome people hit when they pipe the program into a pager. A side note explains that in direct mode a vertical bar is not a pipe.</desc>
+  <desc id="dsc">A decision flow with two questions and four outcomes. First question: were any arguments given? If they were given but every one is empty, or the whole input is just a double dash, the help index is printed and the CLI stops. If arguments were given otherwise, direct mode runs: parse the arguments, run the single matched command, and set process.exitCode only on failure or interruption. If no arguments were given, the second question applies: are stdin and stdout both a real terminal? If yes, the interactive shell starts — banner, then read a line, run it, repeat until exit, quit or Ctrl-D. If no, because output is piped or input is redirected, the help index is printed and the CLI stops; this is the outcome people hit when they pipe the program into a pager. A side note explains that in direct mode a vertical bar is not a pipe.</desc>
 
   <style>
     .bg    { fill:#f6f8fa }
@@ -79,7 +79,7 @@
   <text class="h" x="314" y="126">Direct mode</text>
   <text class="s" x="314" y="146">1. parse the arguments</text>
   <text class="s" x="314" y="162">2. run the single matched command</text>
-  <text class="s" x="314" y="178">3. set <tspan class="monon">process.exitCode</tspan>, then exit</text>
+  <text class="s" x="314" y="178">3. set <tspan class="monon">process.exitCode</tspan> on failure or interrupt</text>
 
   <path class="ln2" d="M 135 184 V 234" marker-end="url(#b)"/>
   <text class="s" x="144" y="214">no arguments</text>

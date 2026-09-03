@@ -178,7 +178,7 @@ In order:
 5. If there are no arguments and both standard input and standard output are terminals, the **interactive shell** opens.
 6. Otherwise — no arguments, with output piped or input redirected — the help index is printed and `start()` returns. No prompt is opened, because there is no terminal to prompt on.
 
-The library sets `process.exitCode` rather than calling `process.exit()`, so pending output is flushed and any `exit` event handler gets to run. The exceptions are a force-quit (a second interrupt, exit code 130) and the interactive shell's shutdown on a termination signal (exit code 143). A direct-mode command interrupted with Ctrl-C exits with code 130. See [Errors](errors.md) for the full list.
+For a direct-mode failure or interruption, the library sets `process.exitCode` rather than calling `process.exit()`, so pending output is flushed and any `exit` event handler gets to run. A successful direct-mode command leaves the exit code unchanged. The exceptions are a force-quit (a second interrupt, exit code 130) and the interactive shell's shutdown on a termination signal (exit code 143). A direct-mode command interrupted with Ctrl-C exits with code 130. See [Errors](errors.md) for the full list.
 
 ### Direct mode
 

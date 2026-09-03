@@ -1,6 +1,6 @@
 # API リファレンス
 
-公開シンボルはすべてパッケージルートからエクスポートされます。サブパスのエクスポートはありません。
+公開するコードのシンボルはすべてパッケージルートからエクスポートされます。例外はパッケージメタデータを読むための `./package.json` だけです。
 
 ```typescript
 import { createCLI, table, progress, prompt, logger } from "@libraz/node-cli";

@@ -70,7 +70,13 @@ console.log(c`{red Error}: failed`);
 console.log(table([{ name: "Alice", role: "Admin" }], { border: "rounded" }));
 
 const bar = progress.bar({ total: 100, label: "Download" });
+bar.update(50);
+bar.finish();
+
 const spinner = progress.spinner({ label: "Loading..." });
+spinner.start();
+await new Promise((resolve) => setTimeout(resolve, 500));
+spinner.succeed("Loaded");
 
 const name = await prompt.text("Name:");
 const ok = await prompt.confirm("Continue?");

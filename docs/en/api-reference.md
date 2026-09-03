@@ -1,6 +1,6 @@
 # API reference
 
-Every public symbol is exported from the package root. There are no subpath exports.
+Every public code symbol is exported from the package root. The only subpath export is `./package.json`, for reading package metadata.
 
 ```typescript
 import { createCLI, table, progress, prompt, logger } from "@libraz/node-cli";
