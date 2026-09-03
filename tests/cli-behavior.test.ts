@@ -176,6 +176,31 @@ describe("empty direct argv", () => {
     }
     expect(stdout.getOutput()).toContain("Available commands:");
   });
+
+  it("passes an empty string through as a positional argument value", async () => {
+    const cli = createCLI();
+    let received: string | undefined;
+    cli.command("say <text>").action((ctx) => {
+      received = ctx.args.text as string;
+    });
+
+    await cli.start(["say", ""]);
+    expect(received).toBe("");
+  });
+
+  it("passes an empty string through as an option value", async () => {
+    const cli = createCLI();
+    let received: string | undefined;
+    cli
+      .command("greet")
+      .option("-n, --name <name>")
+      .action((ctx) => {
+        received = ctx.options.name as string;
+      });
+
+    await cli.start(["greet", "--name", ""]);
+    expect(received).toBe("");
+  });
 });
 
 describe("public CLI lifecycle APIs", () => {

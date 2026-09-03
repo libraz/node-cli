@@ -294,12 +294,14 @@ export class CLI {
       return;
     }
 
-    const suppliedArgs = argv ?? process.argv.slice(2);
-    const args = suppliedArgs.filter((arg) => arg !== "");
+    const args = argv ?? process.argv.slice(2);
     // An explicitly supplied empty argument or a bare end-of-options marker has
     // no command to execute. Show the index instead of silently succeeding (or
-    // unexpectedly starting a REPL when attached to a terminal).
-    if (suppliedArgs.length > 0 && (args.length === 0 || (args.length === 1 && args[0] === "--"))) {
+    // unexpectedly starting a REPL when attached to a terminal). Empty strings
+    // are skipped for this check only: an empty string is a legitimate argument
+    // value, so the arguments handed to the router stay exactly as supplied.
+    const named = args.filter((arg) => arg !== "");
+    if (args.length > 0 && (named.length === 0 || (named.length === 1 && named[0] === "--"))) {
       process.stdout.write(`${this.helpGenerator.generateIndex()}\n`);
       await this.router.emit("exit");
       return;
