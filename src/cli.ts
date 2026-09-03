@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { CommandBuilder } from "./command/builder.js";
-import { CommandRegistry } from "./command/registry.js";
+import { CommandRegistry, hasUnreachableSubcommands } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
 import { CommandNotFoundError, presentError } from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
@@ -390,8 +390,12 @@ export class CLI {
         const path = (args.command as string[] | undefined) ?? [];
         const parentPath = current ? path.slice(0, -1) : path;
         const parent = parentPath.length === 0 ? undefined : registry.resolve(parentPath);
+        // A parent whose subcommands are shadowed by its own positional
+        // arguments has nothing to offer here: typing one would never dispatch.
         const commands = parent
-          ? [...new Set(parent.subcommands.values())]
+          ? hasUnreachableSubcommands(parent)
+            ? []
+            : [...new Set(parent.subcommands.values())]
           : registry.allTopLevel();
         const names = commands
           .filter((command) => !command.hidden)
@@ -413,10 +417,13 @@ export class CLI {
 
         // Unknown target: report on stderr with a non-zero exit, matching how a
         // bare unrecognized command is surfaced (not a silent stdout + exit 0).
-        // The shell's own commands have no registry entry, yet the generated
-        // help footer advertises them, so they must resolve here too.
+        // The path is resolved the way dispatch would, so help never renders a
+        // page for a subcommand the parser could not reach. The shell's own
+        // commands have no registry entry, yet the generated help footer
+        // advertises them, so they must resolve here too.
+        const match = registry.matchCommandPath(commandParts);
         if (
-          !registry.resolve(commandParts) &&
+          match?.consumed !== commandParts.length &&
           !(commandParts.length === 1 && isShellCommand(commandParts[0]))
         ) {
           throw new CommandNotFoundError(commandParts.join(" "));

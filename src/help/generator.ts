@@ -103,7 +103,11 @@ export class HelpGenerator {
    *   message if the path cannot be resolved.
    */
   generateCommand(commandPath: string[]): string {
-    const command = this.registry.resolve(commandPath);
+    // Resolve the way dispatch would: a runnable command that takes positional
+    // arguments swallows every following token, so its subcommands have no help
+    // page to show even though the registry still holds them.
+    const match = this.registry.matchCommandPath(commandPath);
+    const command = match && match.consumed === commandPath.length ? match.command : undefined;
     // The shell's own commands have no registry entry, so describe them here —
     // but never in place of an application command that took the same name.
     if (!command && commandPath.length === 1 && isShellCommand(commandPath[0])) {
@@ -151,18 +155,13 @@ export class HelpGenerator {
     }
     if (optionEntries.length > 0) {
       lines.push("", "Options:");
-      const maxWidth = Math.max(...optionEntries.map(([flags]) => stringWidth(flags)));
-      for (const [flags, desc] of optionEntries) {
-        const padding = " ".repeat(maxWidth - stringWidth(flags) + 4);
-        lines.push(`  ${flags}${desc ? padding + desc : ""}`);
-      }
+      appendAlignedEntries(lines, optionEntries);
     }
 
     // Subcommands — omitted when the command itself takes positional arguments,
     // because the parser would consume any subcommand name as an argument value,
     // making those subcommands unreachable. Advertising them would mislead.
     if (command.subcommands.size > 0 && !hasUnreachableSubcommands(command)) {
-      lines.push("", "Commands:");
       // Deduplicate: aliases point to the same definition object
       const subEntries: [string, string][] = [...new Set(command.subcommands.values())]
         .filter((sub) => !sub.hidden)
@@ -172,10 +171,13 @@ export class HelpGenerator {
             sub.aliases && sub.aliases.length > 0 ? ` (alias: ${sub.aliases.join(", ")})` : "";
           return [usage, `${sub.description ?? ""}${aliasNote}`];
         });
-      if (subEntries.length === 0) return lines.join("\n");
-      appendAlignedEntries(lines, subEntries);
-
-      lines.push("", `Type "help ${commandPath.join(" ")} <command>" for more information.`);
+      // The heading is only written once there is something to list, so a
+      // command whose subcommands are all hidden does not end on a bare label.
+      if (subEntries.length > 0) {
+        lines.push("", "Commands:");
+        appendAlignedEntries(lines, subEntries);
+        lines.push("", `Type "help ${commandPath.join(" ")} <command>" for more information.`);
+      }
     }
 
     return lines.join("\n");

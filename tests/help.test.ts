@@ -253,3 +253,57 @@ describe("shell commands", () => {
     ]);
   });
 });
+
+describe("help only shows what dispatch can reach", () => {
+  function shadowedRegistry() {
+    const registry = new CommandRegistry();
+    const task = new CommandBuilder(registry, "task <name>");
+    task
+      .command("list")
+      .description("List tasks")
+      .action(() => {});
+    task.action(() => {});
+    return registry;
+  }
+
+  it("refuses a page for a subcommand the parser would never reach", () => {
+    const registry = shadowedRegistry();
+    const help = new HelpGenerator(registry, { name: "app" });
+    expect(help.generateCommand(["task", "list"])).toContain("Unknown command");
+  });
+
+  it("omits the Commands heading when every subcommand is hidden", () => {
+    const registry = new CommandRegistry();
+    const group = new CommandBuilder(registry, "admin");
+    group
+      .command("secret")
+      .hidden()
+      .action(() => {});
+    const help = new HelpGenerator(registry, { name: "app" });
+
+    expect(help.generateCommand(["admin"])).not.toContain("Commands:");
+  });
+
+  it("wraps option descriptions the same way it wraps command descriptions", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "deploy")
+      .option("--strategy <name>", {
+        description:
+          "Choose the rollout strategy used when replacing running instances of the service",
+      })
+      .action(() => {});
+    const help = new HelpGenerator(registry, { name: "app" });
+
+    const originalColumns = process.stdout.columns;
+    Object.defineProperty(process.stdout, "columns", { value: 60, configurable: true });
+    try {
+      const rendered = help.generateCommand(["deploy"]);
+      expect(rendered.split("\n").every((line) => line.length <= 60)).toBe(true);
+    } finally {
+      Object.defineProperty(process.stdout, "columns", {
+        value: originalColumns,
+        configurable: true,
+      });
+    }
+  });
+});
