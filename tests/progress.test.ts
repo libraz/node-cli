@@ -585,6 +585,32 @@ describe("progress.multi", () => {
   });
 });
 
+describe("untrusted text in rendered frames", () => {
+  it("closes styling a caller left open in a spinner label", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ label: "\x1b[31mred", stream });
+    spinner.start();
+    spinner.stop();
+    // Without closing at the frame boundary the red would apply to whatever the
+    // application writes next.
+    expect(stream.getOutput()).toContain("\x1b[31mred\x1b[0m");
+  });
+
+  it("strips control sequences from caller-supplied frames and bar glyphs", () => {
+    const spinnerStream = createMockTTY();
+    const spinner = progress.spinner({ frames: ["\x1b[2Jx"], label: "l", stream: spinnerStream });
+    spinner.start();
+    spinner.stop();
+    expect(spinnerStream.getOutput()).not.toContain("\x1b[2J");
+
+    const barStream = createMockTTY();
+    const bar = progress.bar({ total: 2, filled: "\x1b[2J#", stream: barStream });
+    bar.update(1);
+    bar.stop();
+    expect(barStream.getOutput()).not.toContain("\x1b[2J");
+  });
+});
+
 describe("terminal state ownership", () => {
   it("writes nothing when an indicator is released before it ever renders", () => {
     const barStream = createMockTTY();

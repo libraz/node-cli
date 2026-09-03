@@ -269,6 +269,20 @@ function renderRows(output: string): string[] {
   return rows;
 }
 
+describe("untrusted logger metadata", () => {
+  it("strips control sequences from a prefix and from child names", () => {
+    const stream = createMockStdout();
+    logger({ stream, prefix: "\x1b]2;spoofed\x07api" }).info("hello");
+    expect(stream.getOutput()).not.toContain("\x1b]2;");
+    expect(stream.getOutput()).toContain("[api]");
+
+    const childStream = createMockStdout();
+    logger({ stream: childStream }).child("\x1b]2;spoofed\x07db").info("hello");
+    expect(childStream.getOutput()).not.toContain("\x1b]2;");
+    expect(childStream.getOutput()).toContain("[db]");
+  });
+});
+
 describe("logging beside an active progress renderer", () => {
   beforeEach(() => setColorEnabled(false));
   afterEach(() => {

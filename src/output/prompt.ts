@@ -5,6 +5,7 @@ import {
   type color as c,
   createColorizer,
   isControlCode,
+  renderSafe,
   sanitizeTerminalText,
   splitAnsi,
   splitGraphemes,
@@ -182,6 +183,24 @@ interface CancelableRl {
 const activePromptInputs = new WeakSet<Readable>();
 
 /**
+ * Builds the question line every prompt kind shows. Caller-supplied prefix and
+ * message pass through the rendered-region boundary here, so a control sequence
+ * in either cannot move the cursor or leave styling open around the answer.
+ */
+function promptHeading(
+  col: ReturnType<typeof createColorizer>,
+  prefix: string,
+  message: string,
+): string {
+  return `${col.green(renderSafe(prefix))} ${col.bold(renderSafe(message))}`;
+}
+
+/** Renders a validation failure below the question, without trusting its text. */
+function validationLine(col: ReturnType<typeof createColorizer>, err: unknown): string {
+  return `${col.red("\u2716")} ${renderSafe(err instanceof Error ? err.message : String(err))}\n`;
+}
+
+/**
  * Creates a readline interface plus a cancellation signal that is aborted when
  * the user presses Ctrl+C (SIGINT). Callers pass `signal` to `rl.question` so a
  * cancellation rejects the pending question rather than hanging. The interface's
@@ -306,7 +325,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
     while (true) {
       const answer = await ask(
         rl,
-        `${col.green(prefix)} ${col.bold(message)}${hint} `,
+        `${promptHeading(col, prefix, message)}${hint} `,
         signal,
         isClosed,
       );
@@ -328,8 +347,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
         try {
           validate(value);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          stdout.write(`${col.red("✖")} ${msg}\n`);
+          stdout.write(validationLine(col, err));
           continue;
         }
       }
@@ -368,7 +386,7 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
     while (true) {
       const answer = await ask(
         rl,
-        `${col.green(prefix)} ${col.bold(message)}${hint} `,
+        `${promptHeading(col, prefix, message)}${hint} `,
         signal,
         isClosed,
       );
@@ -382,8 +400,7 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
         try {
           options.validate(value);
         } catch (err) {
-          const validationMessage = err instanceof Error ? err.message : String(err);
-          stdout.write(`${col.red("✖")} ${validationMessage}\n`);
+          stdout.write(validationLine(col, err));
           continue;
         }
       }
@@ -431,7 +448,7 @@ async function select<T = string>(
   );
 
   try {
-    stdout.write(`${col.green(prefix)} ${col.bold(message)}\n`);
+    stdout.write(`${promptHeading(col, prefix, message)}\n`);
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
       const isDefault = i === defaultIndex;
@@ -474,8 +491,7 @@ async function select<T = string>(
         try {
           validate(chosen.value);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          stdout.write(`${col.red("✖")} ${msg}\n`);
+          stdout.write(validationLine(col, err));
           continue;
         }
       }
@@ -541,7 +557,7 @@ async function multiselect<T = string>(
 
   try {
     stdout.write(
-      `${col.green(prefix)} ${col.bold(message)} ${col.dim("(comma-separated numbers)")}\n`,
+      `${promptHeading(col, prefix, message)} ${col.dim("(comma-separated numbers)")}\n`,
     );
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
@@ -590,8 +606,7 @@ async function multiselect<T = string>(
         try {
           validate(values);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          stdout.write(`${col.red("✖")} ${msg}\n`);
+          stdout.write(validationLine(col, err));
           continue;
         }
       }
@@ -729,7 +744,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
 
   try {
     while (true) {
-      const query = `${col.green(prefix)} ${col.bold(message)} `;
+      const query = `${promptHeading(col, prefix, message)} `;
       masking = true;
       promptQuery = query;
       promptRendered = false;
@@ -754,8 +769,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
         try {
           validate(value);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          promptOutput.write(`${col.red("✖")} ${msg}\n`);
+          promptOutput.write(validationLine(col, err));
           continue;
         }
       }

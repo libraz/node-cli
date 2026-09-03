@@ -413,6 +413,19 @@ export function sanitizeTerminalText(
     .join("");
 }
 
+/**
+ * Prepares an untrusted string for a rendered terminal region. Strips every
+ * escape sequence except SGR styling and OSC 8 links, drops raw control bytes,
+ * and closes any styling or link the string leaves open.
+ *
+ * This is the one boundary a caller-supplied string crosses before it can reach
+ * a terminal, so a renderer cannot leave the terminal in a state its own frame
+ * did not intend.
+ */
+export function renderSafe(text: string, options: { singleLine?: boolean } = {}): string {
+  return closeAnsiState(sanitizeTerminalText(text, options));
+}
+
 // ── String width (East Asian Width aware) ──
 
 /**

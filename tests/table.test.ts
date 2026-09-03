@@ -518,3 +518,16 @@ describe("table", () => {
     }
   });
 });
+
+describe("untrusted table decoration", () => {
+  it("strips control sequences from the truncate marker and border characters", () => {
+    const marked = table([{ a: "abcdefghij" }], {
+      colWidths: [6],
+      truncate: "\x1b[2J~",
+    });
+    expect(marked).not.toContain("\x1b[2J");
+
+    const bordered = table([{ a: "x" }], { chars: { horizontal: "\x1b[2J-" } });
+    expect(bordered).not.toContain("\x1b[2J");
+  });
+});

@@ -1,6 +1,7 @@
 import {
   color as c,
   closeAnsiState,
+  renderSafe,
   sanitizeTerminalText,
   stringWidth,
   truncateAnsi,
@@ -193,7 +194,15 @@ function resolveChars(options: TableOptions): Required<TableChars> {
       break;
   }
   if (options.chars) {
-    return { ...base, ...options.chars };
+    // Border pieces are caller-supplied and written on every rendered row, so a
+    // stray escape sequence in one of them would restyle the whole frame.
+    const overrides = Object.fromEntries(
+      Object.entries(options.chars).map(([key, value]) => [
+        key,
+        typeof value === "string" ? renderSafe(value) : value,
+      ]),
+    ) as Partial<TableChars>;
+    return { ...base, ...overrides };
   }
   return base;
 }
@@ -235,7 +244,7 @@ export function table(
   options: TableOptions = {},
 ): string {
   const { header = true, headerStyle = "bold" } = options;
-  const truncChar = options.truncate ?? "\u2026";
+  const truncChar = renderSafe(options.truncate ?? "\u2026");
 
   // Normalize to string[][]
   const { rows, columns, keys } = normalizeData(data, options);

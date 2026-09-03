@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { createColorizer, sanitizeTerminalText, streamIsTTY, stringWidth } from "./color.js";
+import { createColorizer, renderSafe, streamIsTTY, stringWidth } from "./color.js";
 import { type RegionOwner, setRegionOwner } from "./region.js";
 
 // ── Progress Bar ──
@@ -127,8 +127,12 @@ const patterns = {
 /**
  * Checks whether the given stream is a TTY (terminal).
  */
-function singleLine(text: string): string {
-  return sanitizeTerminalText(text);
+/**
+ * Prepares caller-supplied text for a single rendered row: no control bytes, no
+ * line breaks, and no styling left open to bleed into the rest of the frame.
+ */
+function safeLine(text: string): string {
+  return renderSafe(text);
 }
 
 function createFrameWriter(stream: Writable): {
@@ -375,11 +379,11 @@ function renderBarLine(
   options: Pick<BarOptions, "label" | "width" | "filled" | "empty" | "format" | "color">,
   colorizer: Record<string, (text: string) => string>,
 ): string {
-  if (options.format) return singleLine(options.format(state));
+  if (options.format) return safeLine(options.format(state));
 
   const width = options.width ?? 30;
-  const filled = options.filled ?? "█";
-  const empty = options.empty ?? "░";
+  const filled = safeLine(options.filled ?? "█");
+  const empty = safeLine(options.empty ?? "░");
   const filledCount = Math.round((state.percent / 100) * width);
   let bar = filled.repeat(filledCount) + empty.repeat(width - filledCount);
   if (options.color) {
@@ -391,7 +395,7 @@ function renderBarLine(
   }
 
   const parts: string[] = [];
-  if (options.label) parts.push(singleLine(options.label));
+  if (options.label) parts.push(safeLine(options.label));
   parts.push(`[${bar}]`, `${state.percent}%`, `${state.current}/${state.total}`);
   return parts.join("  ");
 }
@@ -543,6 +547,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     throw new RangeError("Spinner interval must be a positive finite number");
   }
 
+  const safeFrames = frames.map((frame) => safeLine(frame));
   let label = initialLabel;
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -557,7 +562,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
 
   function render(): void {
     if (!tty) return;
-    let frame = frames[frameIndex % frames.length];
+    let frame = safeFrames[frameIndex % safeFrames.length];
     if (spinnerColor) {
       try {
         frame = (col as Record<string, (s: string) => string>)[spinnerColor](frame);
@@ -565,7 +570,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
         // ignore
       }
     }
-    frameWriter.write(`\r\x1b[K${frame} ${singleLine(label)}`);
+    frameWriter.write(`\r\x1b[K${frame} ${safeLine(label)}`);
     rendered = true;
     frameIndex++;
   }
@@ -619,7 +624,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      const msg = singleLine(message ?? label);
+      const msg = safeLine(message ?? label);
       stream.write(`${col.green("✔")} ${msg}\n`);
     },
 
@@ -628,7 +633,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      const msg = singleLine(message ?? label);
+      const msg = safeLine(message ?? label);
       stream.write(`${col.red("✖")} ${msg}\n`);
     },
 
@@ -637,7 +642,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       done = true;
       cleanup();
       clearLine();
-      const msg = singleLine(message ?? label);
+      const msg = safeLine(message ?? label);
       stream.write(`${col.yellow("⚠")} ${msg}\n`);
     },
 

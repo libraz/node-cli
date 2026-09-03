@@ -1,6 +1,6 @@
 import type { Writable } from "node:stream";
 import { format } from "node:util";
-import { createColorizer, isColorEnabled, sanitizeTerminalText } from "./color.js";
+import { createColorizer, isColorEnabled, renderSafe, sanitizeTerminalText } from "./color.js";
 import { writeThrough } from "./region.js";
 
 // ── Types ──
@@ -231,7 +231,8 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
 
     // Prefix
     if (prefix) {
-      parts.push(colored ? col.dim(`[${prefix}]`) : `[${prefix}]`);
+      const safePrefix = renderSafe(prefix);
+      parts.push(colored ? col.dim(`[${safePrefix}]`) : `[${safePrefix}]`);
     }
 
     // Message
