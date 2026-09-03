@@ -179,7 +179,10 @@ cli.on("commandError", (error, ctx) => {
 });
 
 cli.on("exit", () => {
-  // Runs when the interactive shell exits
+  // Runs once on every exit path of start(): after a direct-mode command
+  // completes, throws, or is force-quit; after a help index is printed; when
+  // plugin initialization fails; and when the interactive shell ends.
+  // exec() never fires it.
 });
 ```
 

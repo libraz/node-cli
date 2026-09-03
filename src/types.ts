@@ -132,7 +132,12 @@ export interface CLIEventMap {
    * for command failures in addition to {@link CLIEventMap.commandError}.
    */
   error: (error: Error) => void | Promise<void>;
-  /** Fired when the interactive shell exits. */
+  /**
+   * Fired once on every exit path of `CLI.start()`: after a direct-mode command
+   * completes, throws, or is force-quit; after a help index is printed for an
+   * empty argv or a non-TTY start; when plugin initialization fails; and when
+   * the interactive shell ends. The `exec()` method never fires it.
+   */
   exit: () => void | Promise<void>;
 }
 
