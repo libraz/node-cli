@@ -373,6 +373,33 @@ describe("ShellCompleter", () => {
       expect(aborted).toBe(true);
     });
 
+    it("times out a stalled option-value autocomplete on both flag forms", async () => {
+      const reg = new CommandRegistry();
+      new CommandBuilder(reg, "connect")
+        .option("--host <host>", {
+          type: "string",
+          autocomplete: () => new Promise<string[]>(() => {}),
+        })
+        .action(() => {});
+      const comp = new ShellCompleter(reg, { completionTimeoutMs: 1 });
+
+      await expect(comp.complete("connect --host ")).resolves.toEqual([[], ""]);
+      await expect(comp.complete("connect --host=")).resolves.toEqual([[], ""]);
+    });
+
+    it("caps a provider handed in by the interactive shell", async () => {
+      const comp = new ShellCompleter(new CommandRegistry(), { completionTimeoutMs: 1 });
+
+      await expect(
+        comp.runProvider(() => new Promise<[string[], string]>(() => {}), [[], "sel"]),
+      ).resolves.toEqual([[], "sel"]);
+      expect(
+        comp.runProvider(() => {
+          throw new Error("provider failed");
+        }, [[], "sel"]),
+      ).toEqual([[], "sel"]);
+    });
+
     it("tolerates incomplete quotes and isolates custom provider failures", async () => {
       const reg = new CommandRegistry();
       new CommandBuilder(reg, "connect <host>")

@@ -29,6 +29,37 @@ export type CompletionResult = [string[], string];
 export const COMPLETION_TIMEOUT_MS = 1_000;
 
 /**
+ * Caps a user-supplied completion provider so readline can always resume.
+ * Every path that hands a provider's promise to readline goes through here:
+ * a provider that never settles, settles late, or rejects all resolve to
+ * `fallback` instead of leaving the interface paused. When the caller owns an
+ * `AbortController`, a timeout aborts it so the provider can stop early.
+ */
+function withCompletionTimeout<T>(
+  result: Promise<T>,
+  fallback: T,
+  timeoutMs: number,
+  controller?: AbortController,
+): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      controller?.abort();
+      resolve(fallback);
+    }, timeoutMs);
+    void result.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
+/**
  * Provides tab-completion for the interactive shell.
  * Completes command names, subcommands, option flags, option values,
  * and custom command completers.
@@ -247,22 +278,35 @@ export class ShellCompleter {
     controller: AbortController,
     filterByPrefix: (candidates: string[]) => string[],
   ): Promise<CompletionResult> {
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        controller.abort();
-        resolve([[], current]);
-      }, this.completionTimeoutMs);
-      void result.then(
-        (candidates) => {
-          clearTimeout(timer);
-          resolve([filterByPrefix(candidates), current]);
-        },
-        () => {
-          clearTimeout(timer);
-          resolve([[], current]);
-        },
-      );
-    });
+    // Filtering happens inside the capped promise so a throwing filter fails the
+    // same way a rejecting provider does, rather than leaving readline paused.
+    return withCompletionTimeout(
+      result.then((candidates) => [filterByPrefix(candidates), current] as CompletionResult),
+      [[], current],
+      this.completionTimeoutMs,
+      controller,
+    );
+  }
+
+  /**
+   * Runs a caller-supplied completion provider under the same deadline as the
+   * built-in paths. The interactive shell uses this for a mode's own completer,
+   * which readline drives directly rather than through {@link complete}.
+   * @param provider - Invoked once; a synchronous throw yields `fallback`.
+   * @param fallback - Result used when the provider throws, rejects, or times out.
+   */
+  runProvider(
+    provider: () => CompletionResult | Promise<CompletionResult>,
+    fallback: CompletionResult,
+  ): CompletionResult | Promise<CompletionResult> {
+    let result: CompletionResult | Promise<CompletionResult>;
+    try {
+      result = provider();
+    } catch {
+      return fallback;
+    }
+    if (!(result instanceof Promise)) return result;
+    return withCompletionTimeout(result, fallback, this.completionTimeoutMs);
   }
 
   /**
@@ -390,12 +434,14 @@ export class ShellCompleter {
         return [[], current];
       }
       if (result instanceof Promise) {
-        return result
-          .then((candidates) => {
-            const filtered = formatCompletionCandidates(candidates, current);
-            return [filtered, current] as CompletionResult;
-          })
-          .catch(() => [[], current] as CompletionResult);
+        return withCompletionTimeout(
+          result.then(
+            (candidates) =>
+              [formatCompletionCandidates(candidates, current), current] as CompletionResult,
+          ),
+          [[], current],
+          this.completionTimeoutMs,
+        );
       }
       const filtered = formatCompletionCandidates(result, current);
       return [filtered, current];

@@ -85,6 +85,35 @@ describe("mode command", () => {
     }
   });
 
+  it("resumes readline when a mode completer never settles", async () => {
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const shell = new Shell({
+      router,
+      registry,
+      prompt: "> ",
+      historyFile: "mode-history-test",
+    });
+    shell.enterMode({
+      prompt: "mode> ",
+      action: () => {},
+      completer: () => new Promise<[string[], string]>(() => {}),
+    });
+    const internal = shell as unknown as {
+      openReadline(history: string[]): void;
+      completer: { completionTimeoutMs: number };
+      rl?: { completer?: (line: string) => Promise<[string[], string]>; close(): void };
+    };
+    internal.completer.completionTimeoutMs = 1;
+
+    internal.openReadline([]);
+    try {
+      await expect(internal.rl?.completer?.("sel")).resolves.toEqual([[], "sel"]);
+    } finally {
+      internal.rl?.close();
+    }
+  });
+
   it("passes mode completion requests to its configured completer", async () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);

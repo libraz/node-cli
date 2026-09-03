@@ -118,9 +118,12 @@ export class Shell {
       completer: mode
         ? mode.completer
           ? (line: string) =>
-              Promise.resolve()
-                .then(() => mode.completer?.(line) ?? ([[], line] as CompletionResult))
-                .catch((): CompletionResult => [[], line])
+              Promise.resolve(
+                this.completer.runProvider(
+                  () => mode.completer?.(line) ?? ([[], line] as CompletionResult),
+                  [[], line],
+                ),
+              )
           : undefined
         : (line: string) => this.completer.complete(line),
       terminal: streamIsTTY(process.stdin) && streamIsTTY(process.stdout),
