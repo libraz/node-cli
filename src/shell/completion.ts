@@ -158,6 +158,8 @@ export class ShellCompleter {
     const currentRemaining = pastDoubleDash ? positionalScopeRemaining : remaining;
     const currentLastToken = currentRemaining[currentRemaining.length - 1] ?? "";
     const typingOption = !pastDoubleDash && !endsWithSpace && lastToken.startsWith("-");
+    // What readline will replace: the word under the cursor in its raw spelling.
+    const rawCurrent = endsWithSpace ? "" : rawTokenSuffix(segment);
 
     // If we're at a command boundary and expecting subcommand (but not when the
     // user is clearly typing an option flag, which should list options instead).
@@ -189,7 +191,14 @@ export class ShellCompleter {
         const optDef = resolveOptionName(optName, command.options);
         if (optDef?.takesValue) {
           const valuePrefix = lastToken.slice(eq + 1);
-          return this.completeOptionValue(optDef, valuePrefix);
+          // Only the value part is being replaced, so drop the `--opt=` head
+          // from the raw word as well.
+          const rawEq = rawCurrent.indexOf("=");
+          return this.completeOptionValue(
+            optDef,
+            valuePrefix,
+            rawEq === -1 ? valuePrefix : rawCurrent.slice(rawEq + 1),
+          );
         }
       }
     }
@@ -203,7 +212,7 @@ export class ShellCompleter {
       const optDef = this.findPrecedingOption(optionScopeRemaining, endsWithSpace, command.options);
       if (optDef) {
         const valueCurrent = endsWithSpace ? "" : current;
-        return this.completeOptionValue(optDef, valueCurrent);
+        return this.completeOptionValue(optDef, valueCurrent, rawCurrent);
       }
     }
 
@@ -253,28 +262,28 @@ export class ShellCompleter {
           signal: controller.signal,
         });
       } catch {
-        return [[], current];
+        return [[], rawCurrent];
       }
       if (result instanceof Promise) {
-        return this.completeWithTimeout(result, current, controller, filterByPrefix);
+        return this.completeWithTimeout(result, rawCurrent, controller, filterByPrefix);
       }
-      return [filterByPrefix(result), current];
+      return [filterByPrefix(result), rawCurrent];
     }
 
-    return [[], current];
+    return [[], rawCurrent];
   }
 
   private completeWithTimeout(
     result: Promise<string[]>,
-    current: string,
+    completeOn: string,
     controller: AbortController,
     filterByPrefix: (candidates: string[]) => string[],
   ): Promise<CompletionResult> {
     // Filtering happens inside the capped promise so a throwing filter fails the
     // same way a rejecting provider does, rather than leaving readline paused.
     return withCompletionTimeout(
-      result.then((candidates) => [filterByPrefix(candidates), current] as CompletionResult),
-      [[], current],
+      result.then((candidates) => [filterByPrefix(candidates), completeOn] as CompletionResult),
+      [[], completeOn],
       this.completionTimeoutMs,
       controller,
     );
@@ -400,41 +409,42 @@ export class ShellCompleter {
   private completeOptionValue(
     optDef: OptionDef,
     current: string,
+    rawCurrent: string,
   ): CompletionResult | Promise<CompletionResult> {
     const { autocomplete, choices } = optDef.schema;
 
     if (autocomplete) {
       if (Array.isArray(autocomplete)) {
         const candidates = formatCompletionCandidates(autocomplete, current);
-        return [candidates, current];
+        return [candidates, rawCurrent];
       }
       // Function-based autocomplete
       let result: ReturnType<Exclude<typeof autocomplete, string[]>>;
       try {
         result = autocomplete(current);
       } catch {
-        return [[], current];
+        return [[], rawCurrent];
       }
       if (result instanceof Promise) {
         return withCompletionTimeout(
           result.then(
             (candidates) =>
-              [formatCompletionCandidates(candidates, current), current] as CompletionResult,
+              [formatCompletionCandidates(candidates, current), rawCurrent] as CompletionResult,
           ),
-          [[], current],
+          [[], rawCurrent],
           this.completionTimeoutMs,
         );
       }
       const filtered = formatCompletionCandidates(result, current);
-      return [filtered, current];
+      return [filtered, rawCurrent];
     }
 
     if (choices) {
       const candidates = formatCompletionCandidates(choices.map(String), current);
-      return [candidates, current];
+      return [candidates, rawCurrent];
     }
 
-    return [[], current];
+    return [[], rawCurrent];
   }
 
   /** Tokenizes a line under active editing by synthetically closing its quote. */
@@ -458,9 +468,41 @@ export class ShellCompleter {
 /**
  * Filters candidates against their semantic value, then quotes whitespace and
  * shell-sensitive characters so readline can insert a single valid argv token.
+ * The escape set covers everything the framework's own tokenizer and pipe
+ * splitter treat as syntax, so a candidate survives a round trip through them.
  */
 function formatCompletionCandidates(candidates: string[], current: string): string[] {
   return (
     current ? candidates.filter((candidate) => candidate.startsWith(current)) : candidates
-  ).map((candidate) => candidate.replace(/([\\\s'"`])/g, "\\$1"));
+  ).map((candidate) => candidate.replace(/([\\\s'"`|])/g, "\\$1"));
+}
+
+/**
+ * The word under the cursor exactly as it appears in the line, quoting and
+ * escaping included. Readline replaces the trailing `completeOn.length`
+ * characters with the chosen candidate, so a completion that inserts an escaped
+ * candidate must report the raw text it replaces rather than the tokenizer's
+ * unescaped value — otherwise the arithmetic slices the wrong number of
+ * characters and corrupts the line.
+ */
+function rawTokenSuffix(segment: string): string {
+  let start = 0;
+  let quote: string | undefined;
+  for (let i = 0; i < segment.length; i++) {
+    const char = segment[i];
+    if (!quote && char === "\\") {
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) start = i + 1;
+  }
+  return segment.slice(start);
 }

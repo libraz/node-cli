@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { CLI } from "../src/cli.js";
 import { CommandBuilder } from "../src/command/builder.js";
+import { splitPipes, tokenize } from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { ShellCompleter } from "../src/shell/completion.js";
 
@@ -408,7 +409,9 @@ describe("ShellCompleter", () => {
         })
         .action(() => {});
       expect(() => new ShellCompleter(reg).complete('connect "local')).not.toThrow();
-      expect(new ShellCompleter(reg).complete('connect "local')).toEqual([[], "local"]);
+      // The reported substring is the raw word readline would replace, quote
+      // included — not the tokenizer's unquoted value.
+      expect(new ShellCompleter(reg).complete('connect "local')).toEqual([[], '"local']);
 
       const asyncReg = new CommandRegistry();
       new CommandBuilder(asyncReg, "connect <host>")
@@ -446,6 +449,41 @@ describe("ShellCompleter", () => {
 
       const [candidates] = comp.complete("tool custom") as [string[], string];
       expect(candidates).toEqual(["custom-target"]);
+    });
+  });
+
+  describe("escaped candidates", () => {
+    /** Applies readline's own substitution so the resulting line can be checked. */
+    function insert(line: string, candidate: string, completeOn: string): string {
+      return line.slice(0, line.length - completeOn.length) + candidate;
+    }
+
+    it("reports the raw word being replaced when the typed word is escaped", () => {
+      const reg = new CommandRegistry();
+      new CommandBuilder(reg, "book")
+        .option("--city <city>", { autocomplete: ["New York"] })
+        .action(() => {});
+      const comp = new ShellCompleter(reg);
+
+      const line = "book --city New\\ Y";
+      const [candidates, completeOn] = comp.complete(line) as [string[], string];
+      expect(candidates).toEqual(["New\\ York"]);
+      expect(insert(line, candidates[0], completeOn)).toBe("book --city New\\ York");
+    });
+
+    it("escapes the pipe separator so the inserted word stays one token", () => {
+      const reg = new CommandRegistry();
+      new CommandBuilder(reg, "filter")
+        .option("--expr <expr>", { autocomplete: ["a|b"] })
+        .action(() => {});
+      const comp = new ShellCompleter(reg);
+
+      const line = "filter --expr a";
+      const [candidates, completeOn] = comp.complete(line) as [string[], string];
+      expect(candidates).toEqual(["a\\|b"]);
+      const inserted = insert(line, candidates[0], completeOn);
+      expect(splitPipes(inserted)).toHaveLength(1);
+      expect(tokenize(inserted)).toEqual(["filter", "--expr", "a|b"]);
     });
   });
 });
