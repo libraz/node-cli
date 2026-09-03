@@ -50,7 +50,7 @@ function ctxStub(): CommandContext {
   };
 }
 
-// ── Structured errors (T-2) ──
+// ── Structured errors ──
 
 describe("structured errors", () => {
   it("carry machine-readable fields", () => {
@@ -80,7 +80,7 @@ describe("structured errors", () => {
   });
 });
 
-// ── version / top-level help interception (H-2, #90) ──
+// ── version / top-level help interception ──
 
 describe("version and top-level help", () => {
   function router() {
@@ -109,7 +109,7 @@ describe("version and top-level help", () => {
   });
 });
 
-// ── alias collisions & wiring (H-3, T-4) ──
+// ── alias collisions and wiring ──
 
 describe("alias handling", () => {
   it("throws when an alias collides with an existing command", () => {
@@ -141,7 +141,7 @@ describe("alias handling", () => {
   });
 });
 
-// ── OptionSchema.alias wiring (H-4) & schema isolation (#3) ──
+// ── OptionSchema.alias wiring and schema isolation ──
 
 describe("option schema wiring", () => {
   it("honours schema.alias as a short flag", () => {
@@ -180,7 +180,7 @@ describe("option schema wiring", () => {
   });
 });
 
-// ── option resolver (H-5, #6/#20, #19) ──
+// ── option resolver ──
 
 describe("option resolver", () => {
   function defs(flags: string, schema: Record<string, unknown>) {
@@ -216,7 +216,7 @@ describe("option resolver", () => {
   });
 });
 
-// ── router error emission across phases (M-1) ──
+// ── router error emission across phases ──
 
 describe("router error events", () => {
   function router() {
@@ -268,7 +268,7 @@ describe("router error events", () => {
   });
 });
 
-// ── required variadic (#1) ──
+// ── required variadic ──
 
 describe("required variadic argument", () => {
   it("fails when zero values are provided", async () => {
@@ -282,7 +282,7 @@ describe("required variadic argument", () => {
   });
 });
 
-// ── command cancellation (H-1) ──
+// ── command cancellation ──
 
 describe("command cancellation", () => {
   it("invokes the active command's cancel handler via triggerCancel()", async () => {
@@ -301,7 +301,7 @@ describe("command cancellation", () => {
   });
 });
 
-// ── definition-time validation (D-2) ──
+// ── definition-time validation ──
 
 describe("definition parsing validation", () => {
   it("rejects an empty command name", () => {
@@ -320,7 +320,7 @@ describe("definition parsing validation", () => {
   });
 });
 
-// ── tokenize / splitPipes unification (D-1) ──
+// ── tokenize / splitPipes unification ──
 
 describe("tokenize and splitPipes", () => {
   it("tokenize strips quotes and escapes", () => {
@@ -331,7 +331,7 @@ describe("tokenize and splitPipes", () => {
   });
 });
 
-// ── color: nesting, width, strip, per-stream (T-1) ──
+// ── color: nesting, width, strip, per-stream ──
 
 describe("color and width", () => {
   beforeEach(() => setColorEnabled(true));
@@ -365,7 +365,7 @@ describe("color and width", () => {
   });
 });
 
-// ── table robustness (H-7) ──
+// ── table robustness ──
 
 describe("table robustness", () => {
   it("truncates an over-wide header to keep the frame aligned", () => {
@@ -392,7 +392,7 @@ describe("table robustness", () => {
   });
 });
 
-// ── progress hygiene (M-6, #62, #63) ──
+// ── progress hygiene ──
 
 describe("progress hygiene", () => {
   it("spinner.stop() is idempotent and clears its timer", () => {
@@ -414,7 +414,7 @@ describe("progress hygiene", () => {
   });
 });
 
-// ── prompt masking & selection (H-8, M-5) ──
+// ── prompt masking and selection ──
 
 describe("prompt fixes", () => {
   it("maskInput masks digits and symbols but preserves ANSI/newlines", () => {
@@ -440,7 +440,7 @@ describe("prompt fixes", () => {
   });
 });
 
-// ── logger child level propagation (#70) ──
+// ── logger child level propagation ──
 
 describe("logger child level", () => {
   it("propagates setLevel to existing children", () => {
@@ -453,7 +453,7 @@ describe("logger child level", () => {
   });
 });
 
-// ── help completeness (M-11) ──
+// ── help completeness ──
 
 describe("help completeness", () => {
   function help() {
@@ -476,7 +476,7 @@ describe("help completeness", () => {
   });
 });
 
-// ── completion improvements (M-10) ──
+// ── completion behavior ──
 
 describe("completion improvements", () => {
   function completer() {
@@ -494,7 +494,7 @@ describe("completion improvements", () => {
   });
 });
 
-// ── completer context population (#38, #40) ──
+// ── completer context population ──
 
 describe("custom completer context", () => {
   it("receives parsed args/options and is prefix-filtered", () => {
