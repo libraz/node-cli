@@ -75,7 +75,7 @@ private な履歴ファイルへ書く前にコマンドを編集または除外
 | `"afterExecute"` | `(ctx: CommandContext) => void \| Promise<void>` | コマンドアクション正常完了後に発火 |
 | `"commandError"` | `(error: Error, ctx: CommandContext) => void \| Promise<void>` | 解決済みコマンドがバリデーション・オプション解決・アクションで失敗した際に発火 |
 | `"error"` | `(error: Error) => void \| Promise<void>` | 入力処理中のあらゆるエラーを捕捉する全般ハンドラ。コマンド解決前の失敗（command-not-found など）も含む。コマンド失敗時は `"commandError"` に加えて発火 |
-| `"exit"` | `() => void \| Promise<void>` | インタラクティブシェル終了時に発火 |
+| `"exit"` | `() => void \| Promise<void>` | `start()` のあらゆる終了経路でちょうど 1 回発火する。直接モードのコマンド完了・throw・強制終了、ヘルプインデックス出力、プラグイン初期化失敗、インタラクティブシェル終了。`exec()` では発火しない |
 
 #### `off<K>(event: K, handler: CLIEventMap[K]): this`
 
@@ -294,7 +294,7 @@ interface OptionSchema {
 | プロパティ | デフォルト | 説明 |
 |-----------|---------|------|
 | `description` | — | ヘルプ出力に表示するこのオプションの説明 |
-| `type` | 推論 | 値の型。`<value>` なしのフラグは `"boolean"`、それ以外は `"string"` と推論 |
+| `type` | 推論 | 値の型。`<value>` なしのフラグは `"boolean"`、それ以外は `"string"` と推論。`"number"` は安全整数の範囲内の 10 進表記・指数表記を受け付ける。`Number.MAX_SAFE_INTEGER` を超える大きさは桁を正確に表現できないため拒否される |
 | `alias` | — | 追加の別名。`flags` で宣言した別名とマージされる。先頭の `-` / `--` は除去され、ロング形式で宣言していない別名は 1 文字でなければならない |
 | `required` | `false` | 未提供時にエラーを発生。`default` とは併用不可 |
 | `default` | — | 未指定時だけ使う値。組み込み型変換は適用し、カスタム `parse` は適用しない。ブールオプションは `false` がデフォルト |
@@ -628,7 +628,7 @@ function prompt.text(message: string, options?: TextOptions): Promise<string>
 |-----------|------|---------|------|
 | `default` | `string` | — | デフォルト値 |
 | `placeholder` | `string` | — | プレースホルダーテキスト |
-| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `validate` | `(v: string) => void` | — | 無効時に例外を投げる |
 | `required` | `boolean` | `true` | 空でないことを要求 |
 | `trim` | `boolean` | `true` | 先頭・末尾の空白を除去 |
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
@@ -645,7 +645,7 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 | オプション | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `default` | `boolean` | `false` | デフォルト値 |
-| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `validate` | `(v: boolean) => void` | — | 無効時に例外を投げる |
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
@@ -675,7 +675,7 @@ function prompt.select<T>(
 | オプション | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `default` | `T` | — | デフォルトの選択値。ユーザーが何も入力せず Enter を押した際に返される |
-| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `validate` | `(v: T) => void` | — | 無効時に例外を投げる |
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
@@ -696,7 +696,7 @@ function prompt.multiselect<T>(
 | `default` | `T[]` | — | 事前選択済みの値 |
 | `min` | `number` | `0` | 最小選択数。省略時は Enter だけで空配列を返せる |
 | `max` | `number` | — | 最大選択数 |
-| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `validate` | `(v: T[]) => void` | — | 無効時に例外を投げる |
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
@@ -712,7 +712,7 @@ function prompt.password(message: string, options?: PasswordOptions): Promise<st
 
 | オプション | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
-| `validate` | `(v: unknown) => void` | — | 無効時に例外を投げる |
+| `validate` | `(v: string) => void` | — | 無効時に例外を投げる |
 | `required` | `boolean` | `true` | 空でないことを要求 |
 | `trim` | `boolean` | `false` | 先頭・末尾の空白を除去 |
 | `prefix` | `string` | `"?"` | プロンプト接頭辞 |
@@ -745,11 +745,14 @@ function logger(options?: LoggerOptions): Logger
 
 | メソッド | レベル | アイコン |
 |---------|-------|---------|
-| `debug(msg, ...args)` | debug | (なし) |
+| `debug(msg, ...args)` | debug | ● |
 | `info(msg, ...args)` | info | ℹ |
 | `success(msg, ...args)` | info | ✔ |
 | `warn(msg, ...args)` | warn | ⚠ |
 | `error(msg, ...args)` | error | ✖ |
+
+上記のグリフは色が有効なときに使われる。色が無効な場合はそれぞれ角括弧付きの
+ラベル（`[DEBUG]` / `[INFO]` / `[OK]` / `[WARN]` / `[ERROR]`）になる。
 
 追加メソッド:
 

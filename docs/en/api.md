@@ -75,7 +75,7 @@ Register an event listener.
 | `"afterExecute"` | `(ctx: CommandContext) => void \| Promise<void>` | Fired after a command action completes successfully |
 | `"commandError"` | `(error: Error, ctx: CommandContext) => void \| Promise<void>` | Fired when a resolved command fails during validation, option resolution, or its action |
 | `"error"` | `(error: Error) => void \| Promise<void>` | Catch-all for any error while handling input, including failures before a command resolves (e.g. command-not-found). Also fires for command failures, in addition to `"commandError"` |
-| `"exit"` | `() => void \| Promise<void>` | Fired when the interactive shell exits |
+| `"exit"` | `() => void \| Promise<void>` | Fired once on every exit path of `start()`: after a direct-mode command completes, throws, or is force-quit; after a help index is printed; when plugin initialization fails; and when the interactive shell ends. Never fired by `exec()` |
 
 #### `off<K>(event: K, handler: CLIEventMap[K]): this`
 
@@ -294,7 +294,7 @@ interface OptionSchema {
 | Property | Default | Description |
 |----------|---------|-------------|
 | `description` | — | Text shown for this option in help output |
-| `type` | Inferred | Value type. Inferred as `"boolean"` for flags without `<value>`, `"string"` otherwise |
+| `type` | Inferred | Value type. Inferred as `"boolean"` for flags without `<value>`, `"string"` otherwise. `"number"` accepts ordinary decimal or scientific notation within the safe integer range; a magnitude above `Number.MAX_SAFE_INTEGER` is rejected because its digits cannot be represented exactly |
 | `alias` | — | Additional alias or aliases, merged with any declared in `flags`. A leading `-` / `--` is stripped; an alias that is not declared in long form must be exactly one character |
 | `required` | `false` | Throw if not provided. Cannot be combined with `default` |
 | `default` | — | Value used only when absent. Built-in coercion applies, custom `parse` does not. Boolean options default to `false` |
@@ -631,7 +631,7 @@ function prompt.text(message: string, options?: TextOptions): Promise<string>
 |--------|------|---------|-------------|
 | `default` | `string` | — | Default value |
 | `placeholder` | `string` | — | Placeholder text |
-| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `validate` | `(v: string) => void` | — | Throw on invalid |
 | `required` | `boolean` | `true` | Require non-empty |
 | `trim` | `boolean` | `true` | Trim leading and trailing whitespace |
 | `prefix` | `string` | `"?"` | Prompt prefix |
@@ -648,7 +648,7 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `default` | `boolean` | `false` | Default value |
-| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `validate` | `(v: boolean) => void` | — | Throw on invalid |
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
@@ -678,7 +678,7 @@ function prompt.select<T>(
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `default` | `T` | — | Default selected value, returned when the user presses Enter with no input |
-| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `validate` | `(v: T) => void` | — | Throw on invalid |
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
@@ -699,7 +699,7 @@ function prompt.multiselect<T>(
 | `default` | `T[]` | — | Pre-selected values |
 | `min` | `number` | `0` | Minimum selections; Enter may return an empty array when omitted |
 | `max` | `number` | — | Maximum selections |
-| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `validate` | `(v: T[]) => void` | — | Throw on invalid |
 | `prefix` | `string` | `"?"` | Prompt prefix |
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
@@ -715,7 +715,7 @@ Input is masked with asterisks. Leading and trailing whitespace is preserved by 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `validate` | `(v: unknown) => void` | — | Throw on invalid |
+| `validate` | `(v: string) => void` | — | Throw on invalid |
 | `required` | `boolean` | `true` | Require non-empty |
 | `trim` | `boolean` | `false` | Trim leading and trailing whitespace |
 | `prefix` | `string` | `"?"` | Prompt prefix |
@@ -748,11 +748,14 @@ function logger(options?: LoggerOptions): Logger
 
 | Method | Level | Icon |
 |--------|-------|------|
-| `debug(msg, ...args)` | debug | (none) |
+| `debug(msg, ...args)` | debug | ● |
 | `info(msg, ...args)` | info | ℹ |
 | `success(msg, ...args)` | info | ✔ |
 | `warn(msg, ...args)` | warn | ⚠ |
 | `error(msg, ...args)` | error | ✖ |
+
+The glyphs above are used when color is on. With color off each becomes a
+bracketed label instead — `[DEBUG]`, `[INFO]`, `[OK]`, `[WARN]`, `[ERROR]`.
 
 Additional methods:
 

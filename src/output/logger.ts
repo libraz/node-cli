@@ -64,9 +64,9 @@ const levelOrder: Record<LogLevel, number> = {
  * Display configuration for a single log level.
  */
 interface LevelConfig {
-  /** Icon used in non-TTY output (plain text). */
+  /** Label used when color is disabled, e.g. `[INFO]`. */
   icon: string;
-  /** Icon used in TTY output (with color support). */
+  /** Glyph used when color is enabled, e.g. `\u2139`. */
   ttyIcon: string;
   /** Color style name applied to the icon in TTY mode. */
   colorName: string;
@@ -104,7 +104,16 @@ function formatTimestamp(): string {
  * @param options - Logger configuration options.
  * @returns A Logger instance.
  */
-export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel): Logger {
+export function logger(options: LoggerOptions = {}): Logger {
+  return createLogger(options);
+}
+
+/**
+ * The actual factory. `inheritLevel` is how `child()` wires level inheritance;
+ * it stays off the exported signature so it never becomes part of the public
+ * type contract in the generated declarations.
+ */
+function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel): Logger {
   // A logger uses its own level when one is set, otherwise it inherits its
   // parent's current level dynamically. This means `parent.setLevel(...)`
   // propagates to children that have no explicit level of their own, while
@@ -268,7 +277,10 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
       // No explicit level → the child inherits this logger's effective level
       // dynamically (so later parent.setLevel calls still reach it).
-      const child = logger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
+      const child = createLogger(
+        { prefix: fullPrefix, timestamp, stream, bufferLimit },
+        effectiveLevel,
+      );
       children.add(child);
       return child;
     },

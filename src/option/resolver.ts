@@ -120,18 +120,13 @@ export function resolveOptions(
 }
 
 /**
- * Coerces a raw option value to the expected type.
+ * Converts a value to a number, returning null for anything callers must reject
+ * rather than silently accept: empty or blank strings, non-numeric text,
+ * non-finite values, and magnitudes beyond `Number.MAX_SAFE_INTEGER`, whose
+ * decimal digits a JavaScript number cannot represent exactly.
  *
- * Supports `"string"`, `"boolean"`, `"number"`, `"string[]"`, and `"number[]"`.
- * When `type` is `undefined` the value is returned as-is (treated as a string).
- *
- * @param value - The raw value to coerce.
- * @param type - The target type declared in the option schema.
- * @param name - The long option name, used in error messages.
- * @returns The coerced value.
- * Converts a value to a finite number, returning null for empty/blank strings
- * or non-finite/non-numeric input so callers can reject them instead of
- * silently producing 0 or accepting Infinity.
+ * @param value - The raw value to convert.
+ * @returns The number, or null when the value is not an exactly representable one.
  */
 function toNumber(value: unknown): number | null {
   if (typeof value === "number") {
@@ -148,6 +143,17 @@ function toNumber(value: unknown): number | null {
   return Number.isFinite(num) && Math.abs(num) <= Number.MAX_SAFE_INTEGER ? num : null;
 }
 
+/**
+ * Coerces a raw option value to the expected type.
+ *
+ * Supports `"string"`, `"boolean"`, `"number"`, `"string[]"`, and `"number[]"`.
+ * When `type` is `undefined` the value is returned as-is (treated as a string).
+ *
+ * @param value - The raw value to coerce.
+ * @param type - The target type declared in the option schema.
+ * @param name - The long option name, used in error messages.
+ * @returns The coerced value.
+ */
 export function coerceOptionValue(value: unknown, type: string | undefined, name: string): unknown {
   if (type === undefined) return value;
   if (type === "string") return String(value);
@@ -169,7 +175,15 @@ export function coerceOptionValue(value: unknown, type: string | undefined, name
   if (type === "number") {
     const num = toNumber(value);
     if (num === null) {
-      throw new InvalidOptionError(`Option --${name} expects a number, got "${value}"`, {
+      // Say which constraint actually rejected the value. A magnitude past the
+      // safe-integer range is a number; calling it "not a number" sends the
+      // caller looking for a typo that is not there.
+      const asNumber = Number(value);
+      const reason =
+        Number.isFinite(asNumber) && Math.abs(asNumber) > Number.MAX_SAFE_INTEGER
+          ? `is outside the safe integer range (max ${Number.MAX_SAFE_INTEGER})`
+          : `expects a number, got "${value}"`;
+      throw new InvalidOptionError(`Option --${name} ${reason}`, {
         optionName: name,
         value,
       });

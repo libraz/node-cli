@@ -26,7 +26,7 @@ cli
       const name = await prompt.text("Project name:", {
         default: "my-project",
         validate: (v) => {
-          if (!/^[a-z0-9-]+$/.test(v as string)) {
+          if (!/^[a-z0-9-]+$/.test(v)) {
             throw new Error("Only lowercase letters, numbers, and hyphens allowed");
           }
         },

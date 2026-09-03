@@ -818,3 +818,34 @@ describe("prompt terminal mode", () => {
     await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
   });
 });
+
+// ── Numeric option bounds ──
+
+describe("numeric option bounds", () => {
+  function numberDefs() {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "size").option("--bytes <n>", { type: "number" });
+    return registry.resolve(["size"])?.options ?? new Map();
+  }
+
+  it("names the constraint that actually rejected the value", () => {
+    let thrown: unknown;
+    try {
+      resolveOptions({ bytes: "1e20" }, numberDefs(), ctxStub());
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(InvalidOptionError);
+    // 1e20 is a finite number; saying it is "not a number" misstates the reason.
+    expect((thrown as Error).message).toContain("safe integer range");
+  });
+
+  it("rejects the same value as a declared default", () => {
+    expect(() =>
+      new CommandBuilder(new CommandRegistry(), "size").option("--bytes <n>", {
+        type: "number",
+        default: "1e20",
+      }),
+    ).toThrow(/safe integer range/);
+  });
+});

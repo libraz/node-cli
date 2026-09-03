@@ -325,3 +325,22 @@ describe("logging beside an active progress renderer", () => {
     expect(stream.getOutput()).toContain("hello");
   });
 });
+
+describe("child level inheritance", () => {
+  it("follows a later parent setLevel and is not overridden by the child", () => {
+    const stream = createMockStdout();
+    const parent = logger({ stream });
+    const child = parent.child("db");
+
+    parent.setLevel("debug");
+    child.debug("inherited");
+    expect(stream.getOutput()).toContain("inherited");
+
+    child.setLevel("error");
+    child.debug("suppressed");
+    expect(stream.getOutput()).not.toContain("suppressed");
+
+    parent.debug("parent unchanged");
+    expect(stream.getOutput()).toContain("parent unchanged");
+  });
+});
