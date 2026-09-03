@@ -235,16 +235,6 @@ function resolveLayout(options: TableOptions): TableLayout {
 }
 
 /**
- * Renders tabular data as a formatted string.
- *
- * Accepts either an array of arrays or an array of objects. Supports configurable
- * borders, column alignment, max column widths, header styling, and custom border characters.
- *
- * @param data - The data to render, either as rows of arrays or rows of objects.
- * @param options - Table rendering options.
- * @returns The formatted table string.
- */
-/**
  * Reads a per-column setting supplied by the caller. Plain object literals
  * inherit from `Object.prototype`, so an unguarded lookup on a column named
  * `constructor` or `toString` returns an inherited value and renders it.
@@ -254,6 +244,16 @@ function columnSetting<T>(record: Record<string, T> | undefined, key: string): T
   return record[key];
 }
 
+/**
+ * Renders tabular data as a formatted string.
+ *
+ * Accepts either an array of arrays or an array of objects. Supports configurable
+ * borders, column alignment, max column widths, header styling, and custom border characters.
+ *
+ * @param data - The data to render, either as rows of arrays or rows of objects.
+ * @param options - Table rendering options.
+ * @returns The formatted table string.
+ */
 export function table(
   data: unknown[][] | Record<string, unknown>[],
   options: TableOptions = {},
@@ -268,13 +268,27 @@ export function table(
 
   // Calculate column widths (header width from labels, maxWidth keyed by column key)
   const layout = resolveLayout(options);
-  const colWidths = calculateWidths(rows, columns, keys, header, options, layout);
-
-  // Truncate cells
-  const truncated = rows.map((row) =>
-    row.map((cell, i) => truncateCell(cell, colWidths[i], truncChar)),
+  const { colWidths, cellWidths, labelWidths } = calculateWidths(
+    rows,
+    columns,
+    keys,
+    header,
+    options,
+    layout,
   );
-  const truncatedWidths = truncated.map((row) => row.map(stringWidth));
+
+  // Truncate cells. Grapheme segmentation is the dominant cost of rendering a
+  // non-ASCII table, so the widths measured above are carried through instead of
+  // being measured again; only a cell that truncation actually reshaped is
+  // re-measured.
+  const truncated = rows.map((row, r) =>
+    row.map((cell, i) => truncateCell(cell, colWidths[i], truncChar, cellWidths[r][i])),
+  );
+  const truncatedWidths = rows.map((row, r) =>
+    row.map((_cell, i) =>
+      cellWidths[r][i] <= colWidths[i] ? cellWidths[r][i] : stringWidth(truncated[r][i]),
+    ),
+  );
 
   // Style
   const style = options.style ?? {};
@@ -286,11 +300,18 @@ export function table(
   // narrow maxWidth/colWidths does not leave an over-wide header that breaks the frame.
   const headerRow = header && columns.length > 0 ? columns : undefined;
   const styledHeader = headerRow?.map((h, i) => {
-    let styled = applyHeaderStyle(truncateCell(h, colWidths[i], truncChar), headerStyle);
+    let styled = applyHeaderStyle(
+      truncateCell(h, colWidths[i], truncChar, labelWidths[i]),
+      headerStyle,
+    );
     if (headColor) styled = applyColorChain(styled, headColor);
     return styled;
   });
-  const styledHeaderWidths = styledHeader?.map(stringWidth);
+  // Styling only wraps the label in escape sequences, which carry no display
+  // width, so an untruncated label keeps the width measured for it.
+  const styledHeaderWidths = styledHeader?.map((styled, i) =>
+    labelWidths[i] <= colWidths[i] ? labelWidths[i] : stringWidth(styled),
+  );
 
   // Resolve alignment (keyed by column key)
   const getAlign = buildAlignFn(options, keys);
@@ -437,6 +458,9 @@ function normalizeData(
 
 /**
  * Calculates the display width for each column based on content and constraints.
+ *
+ * The per-cell and per-label widths measured on the way are returned alongside
+ * the column widths so the rest of the render can reuse them.
  */
 function calculateWidths(
   rows: string[][],
@@ -445,23 +469,30 @@ function calculateWidths(
   header: boolean,
   options: TableOptions,
   layout: TableLayout,
-): number[] {
+): { colWidths: number[]; cellWidths: number[][]; labelWidths: number[] } {
   let colCount = Math.max(labels.length, keys.length);
   for (const row of rows) colCount = Math.max(colCount, row.length);
   const widths = new Array<number>(colCount).fill(0);
+  const labelWidths: number[] = [];
 
   // Header widths (from display labels)
   if (header) {
     for (let i = 0; i < labels.length; i++) {
-      widths[i] = Math.max(widths[i], stringWidth(labels[i]));
+      labelWidths[i] = stringWidth(labels[i]);
+      widths[i] = Math.max(widths[i], labelWidths[i]);
     }
   }
 
   // Data widths
-  for (const row of rows) {
+  const cellWidths: number[][] = [];
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    const rowWidths = new Array<number>(row.length);
     for (let i = 0; i < row.length; i++) {
-      widths[i] = Math.max(widths[i], stringWidth(row[i]));
+      rowWidths[i] = stringWidth(row[i]);
+      widths[i] = Math.max(widths[i], rowWidths[i]);
     }
+    cellWidths[r] = rowWidths;
   }
 
   // Apply maxWidth (by column key). A non-positive maxWidth is treated as "no
@@ -491,7 +522,7 @@ function calculateWidths(
     }
   }
 
-  return widths;
+  return { colWidths: widths, cellWidths, labelWidths };
 }
 
 /** Coerces user-provided spacing to a safe number of spaces. */
@@ -503,8 +534,18 @@ function normalizePadding(value: number | undefined, fallback: number): number {
 
 /**
  * Truncates a cell string to fit within the specified width.
+ *
+ * `cellWidth` is the already-measured display width of `cell`; passing it lets a
+ * cell that already fits skip the measurement `truncateAnsi` would repeat.
  */
-function truncateCell(cell: string, maxWidth: number, truncChar: string): string {
+function truncateCell(
+  cell: string,
+  maxWidth: number,
+  truncChar: string,
+  cellWidth: number,
+): string {
+  if (maxWidth <= 0) return "";
+  if (cellWidth <= maxWidth) return closeAnsiState(cell);
   return truncateAnsi(cell, maxWidth, truncChar);
 }
 
