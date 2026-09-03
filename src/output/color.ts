@@ -349,6 +349,28 @@ export function splitAnsi(text: string): AnsiSegment[] {
 }
 
 /**
+ * True for C0 controls, DEL, and C1 controls. None of them occupy a terminal
+ * column, and none may reach a rendered region as literal bytes. Every consumer
+ * shares this one boundary so a change to it cannot apply to only some of them.
+ */
+export function isControlCode(code: number): boolean {
+  return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+}
+
+/**
+ * Splits an SGR parameter body into its parameters, each carrying its own
+ * sub-parameters. Both spellings of an extended colour reach this function —
+ * `38;2;r;g;b` as five parameters and `38:2:cs:r:g:b` as one parameter with
+ * sub-parameters — so callers can tell them apart instead of mistaking a
+ * colon-separated colour for a stray reset.
+ */
+function parseSgrParameters(body: string): number[][] {
+  return body
+    .split(";")
+    .map((parameter) => parameter.split(":").map((value) => (value === "" ? 0 : Number(value))));
+}
+
+/**
  * Sanitizes text before it is rendered inside a structured terminal UI.
  *
  * SGR styling and OSC 8 hyperlinks are preserved. Cursor movement, screen
@@ -380,7 +402,7 @@ export function sanitizeTerminalText(
           (code === 0x09 || code === 0x0a || code === 0x0b || code === 0x0c || code === 0x0d)
         ) {
           result += " ";
-        } else if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+        } else if (isControlCode(code)) {
           // Drop remaining C0 controls, DEL, and C1 controls.
         } else {
           result += character;
@@ -476,12 +498,10 @@ export function closeAnsiState(text: string): string {
   for (const segment of splitAnsi(text)) {
     if (!segment.ansi) continue;
     if (segment.text.startsWith("\x1b[") && segment.text.endsWith("m")) {
-      const params = segment.text
-        .slice(2, -1)
-        .split(";")
-        .map((value) => (value === "" ? 0 : Number(value)));
+      const params = parseSgrParameters(segment.text.slice(2, -1));
       for (let index = 0; index < params.length; index++) {
-        const code = params[index];
+        const parameter = params[index];
+        const code = parameter[0];
         if (!Number.isFinite(code)) continue;
         if (code === 0) {
           active.clear();
@@ -523,8 +543,13 @@ export function closeAnsiState(text: string): string {
           active.delete("background");
         } else if (code === 38 || code === 48 || code === 58) {
           active.add(code === 48 ? "background" : "foreground");
-          const mode = params[index + 1];
-          index += mode === 2 ? 4 : mode === 5 ? 2 : 0;
+          // The colon spelling carries the whole colour spec as sub-parameters of
+          // this one parameter, so there is nothing to skip; the semicolon
+          // spelling spreads it across the parameters that follow.
+          if (parameter.length === 1) {
+            const mode = params[index + 1]?.[0];
+            index += mode === 2 ? 4 : mode === 5 ? 2 : 0;
+          }
         } else if (code === 59) {
           active.delete("foreground");
         } else if (code === 51 || code === 52) {
@@ -617,6 +642,36 @@ function isWide(code: number): boolean {
     (code >= 0x2329 && code <= 0x232a) || // angle brackets
     code === 0x231a || // watch
     code === 0x231b || // hourglass
+    (code >= 0x23e9 && code <= 0x23ec) || // fast-forward controls
+    code === 0x23f0 || // alarm clock
+    code === 0x23f3 || // hourglass flowing sand
+    (code >= 0x25fd && code <= 0x25fe) || // small squares
+    (code >= 0x2614 && code <= 0x2615) || // umbrella, hot beverage
+    (code >= 0x2648 && code <= 0x2653) || // zodiac
+    code === 0x267f || // wheelchair
+    code === 0x2693 || // anchor
+    code === 0x26a1 || // high voltage
+    (code >= 0x26aa && code <= 0x26ab) || // medium circles
+    (code >= 0x26bd && code <= 0x26be) || // soccer ball, baseball
+    (code >= 0x26c4 && code <= 0x26c5) || // snowman, sun behind cloud
+    code === 0x26ce || // ophiuchus
+    code === 0x26d4 || // no entry
+    code === 0x26ea || // church
+    (code >= 0x26f2 && code <= 0x26f3) || // fountain, golf
+    code === 0x26f5 || // sailboat
+    code === 0x26fa || // tent
+    code === 0x26fd || // fuel pump
+    code === 0x2705 || // check mark button
+    (code >= 0x270a && code <= 0x270b) || // raised fist, raised hand
+    code === 0x2728 || // sparkles
+    code === 0x274c || // cross mark
+    code === 0x274e || // cross mark button
+    (code >= 0x2753 && code <= 0x2755) || // question and exclamation marks
+    code === 0x2757 || // exclamation mark
+    (code >= 0x2795 && code <= 0x2797) || // heavy plus, minus, division
+    code === 0x27b0 || // curly loop
+    code === 0x27bf || // double curly loop
+    (code >= 0x2b1b && code <= 0x2b1c) || // large squares
     code === 0x2b50 || // star
     code === 0x2b55 || // heavy circle
     (code >= 0x2e80 && code <= 0xa4cf) || // CJK radicals … Yi
@@ -629,6 +684,7 @@ function isWide(code: number): boolean {
     (code >= 0x1f000 && code <= 0x1f2ff) || // mahjong, dominoes, cards, enclosed (incl. regional indicators U+1F1E6–1F1FF)
     (code >= 0x1f300 && code <= 0x1f64f) || // misc symbols & emoticons
     (code >= 0x1f680 && code <= 0x1f6ff) || // transport & map symbols
+    (code >= 0x1f7e0 && code <= 0x1f7eb) || // coloured circles and squares
     (code >= 0x1f900 && code <= 0x1f9ff) || // supplemental symbols & pictographs
     (code >= 0x1fa70 && code <= 0x1faff) || // symbols & pictographs extended-A
     (code >= 0x20000 && code <= 0x2fffd) || // CJK unified ideographs extension B–F
@@ -640,7 +696,7 @@ function getCharWidth(code: number): number {
   // C0 control characters (incl. NUL), DEL, and C1 control characters occupy no
   // columns. ANSI escape sequences are stripped before measuring; this only
   // covers stray raw control bytes (e.g. BEL) left in the input.
-  if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return 0;
+  if (isControlCode(code)) return 0;
   if (isZeroWidth(code)) return 0;
   if (isWide(code)) return 2;
   return 1;

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   c,
+  closeAnsiState,
   color,
   isColorEnabled,
   resetColorEnabled,
@@ -303,5 +304,25 @@ describe("color detection precedence", () => {
     process.env.TERM = "dumb";
     const { isColorEnabled } = await import("../src/output/color.js");
     expect(isColorEnabled()).toBe(true);
+  });
+});
+
+describe("SGR recognition and display width", () => {
+  it("closes a colon-separated extended colour", () => {
+    // The colon spelling carries the colour as sub-parameters of one parameter;
+    // reading it as separate parameters mistakes a component for a reset and
+    // leaves the colour open, which then bleeds into a table frame.
+    expect(closeAnsiState("\x1b[38:2::255:0:0mred")).toBe("\x1b[38:2::255:0:0mred\x1b[0m");
+    expect(closeAnsiState("\x1b[38:5:196mred")).toBe("\x1b[38:5:196mred\x1b[0m");
+    // The semicolon spelling keeps working.
+    expect(closeAnsiState("\x1b[38;2;255;0;0mred")).toBe("\x1b[38;2;255;0;0mred\x1b[0m");
+    // An explicit reset still closes the state.
+    expect(closeAnsiState("\x1b[38:2::255:0:0mred\x1b[0m")).toBe("\x1b[38:2::255:0:0mred\x1b[0m");
+  });
+
+  it("measures status emoji as two columns", () => {
+    for (const emoji of ["\u2705", "\u274c", "\u{1f7e2}", "\u26a1", "\u2728", "\u2b1b"]) {
+      expect(stringWidth(emoji)).toBe(2);
+    }
   });
 });

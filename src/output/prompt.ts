@@ -4,6 +4,7 @@ import { PromptCancelError } from "../errors.js";
 import {
   type color as c,
   createColorizer,
+  isControlCode,
   sanitizeTerminalText,
   splitAnsi,
   splitGraphemes,
@@ -698,10 +699,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
       const prefixHasVisibleText = prefixSegments.some(
         (segment) =>
           !segment.ansi &&
-          [...segment.text].some((character) => {
-            const code = character.codePointAt(0) as number;
-            return code > 0x1f && !(code >= 0x7f && code <= 0x9f);
-          }),
+          [...segment.text].some((character) => !isControlCode(character.codePointAt(0) as number)),
       );
       const prefixHasTerminalEscape = prefixSegments.some((segment) => segment.ansi);
       const trustedPrompt =
