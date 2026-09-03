@@ -531,3 +531,14 @@ describe("untrusted table decoration", () => {
     expect(bordered).not.toContain("\x1b[2J");
   });
 });
+
+describe("per-column settings from untrusted keys", () => {
+  it("ignores values inherited from Object.prototype", () => {
+    const rendered = table([{ constructor: "value", toString: "other" }], {});
+    // An unguarded lookup returns Object.prototype's own members here and
+    // renders a function body as the header label or alignment.
+    expect(rendered).not.toContain("native code");
+    expect(rendered).toContain("constructor");
+    expect(rendered).toContain("value");
+  });
+});

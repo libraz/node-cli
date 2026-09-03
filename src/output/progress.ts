@@ -403,20 +403,51 @@ function renderBarLine(
 // ── Bar Implementation ──
 
 /**
+ * Bar options after defaults, validation and normalization have been applied.
+ * Renderers take this type rather than {@link BarOptions}, so a path that skips
+ * {@link normalizeBarOptions} cannot reach a renderer.
+ */
+type ResolvedBarOptions = Required<
+  Pick<BarOptions, "total" | "label" | "width" | "filled" | "empty">
+> &
+  Pick<BarOptions, "format" | "color"> & { stream: Writable };
+
+/**
+ * Applies defaults and validates a caller's bar options once. Both the
+ * standalone bar and each bar added to a multi-bar group resolve here, so the
+ * two cannot disagree about what a given option means.
+ */
+function normalizeBarOptions(options: BarOptions): ResolvedBarOptions {
+  const width = options.width ?? 30;
+  if (!Number.isFinite(width) || width <= 0) {
+    throw new RangeError("Bar width must be a positive finite number");
+  }
+  return {
+    total: normalizeProgressTotal(options.total),
+    label: options.label ?? "",
+    width,
+    filled: options.filled ?? "█",
+    empty: options.empty ?? "░",
+    format: options.format,
+    color: options.color,
+    stream: options.stream ?? process.stderr,
+  };
+}
+
+/**
  * Creates a new progress bar with the specified options.
  */
 function createBar(options: BarOptions): Bar {
   const {
-    total: requestedTotal,
-    label = "",
-    width = 30,
-    filled = "█",
-    empty = "░",
+    total,
+    label,
+    width,
+    filled,
+    empty,
     format: customFormat,
-    stream = process.stderr,
+    stream,
     color: barColor,
-  } = options;
-  const total = normalizeProgressTotal(requestedTotal);
+  } = normalizeBarOptions(options);
 
   let current = 0;
   let finished = false;
@@ -716,14 +747,16 @@ function createMultiBar(): MultiBar {
         streamSet = true;
       }
       const entry = {
-        options: { ...options, total: normalizeProgressTotal(options.total) },
+        options: normalizeBarOptions(options),
         current: 0,
         startTime: Date.now(),
         finished: false,
       };
       bars.push(entry);
 
-      const total = options.total;
+      // The normalized total, not the caller's raw value: clamping against a
+      // NaN or negative total is what let a multi bar render "NaN/0".
+      const total = entry.options.total;
 
       const wrapper: Bar = {
         update(value: number) {

@@ -239,6 +239,16 @@ function resolveLayout(options: TableOptions): TableLayout {
  * @param options - Table rendering options.
  * @returns The formatted table string.
  */
+/**
+ * Reads a per-column setting supplied by the caller. Plain object literals
+ * inherit from `Object.prototype`, so an unguarded lookup on a column named
+ * `constructor` or `toString` returns an inherited value and renders it.
+ */
+function columnSetting<T>(record: Record<string, T> | undefined, key: string): T | undefined {
+  if (!record || !Object.hasOwn(record, key)) return undefined;
+  return record[key];
+}
+
 export function table(
   data: unknown[][] | Record<string, unknown>[],
   options: TableOptions = {},
@@ -380,7 +390,7 @@ function normalizeData(
     const keys = Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? String(index));
     const columns = headerProvided
       ? Array.from({ length: colCount }, (_, index) =>
-          cellToString(options.headerLabels?.[keys[index]] ?? rawColumns[index] ?? ""),
+          cellToString(columnSetting(options.headerLabels, keys[index]) ?? rawColumns[index] ?? ""),
         )
       : [];
     const rows = normalizedRows.map((row) =>
@@ -406,7 +416,7 @@ function normalizeData(
       }
     }
   }
-  const labels = keys.map((col) => cellToString(options.headerLabels?.[col] ?? col));
+  const labels = keys.map((col) => cellToString(columnSetting(options.headerLabels, col) ?? col));
   const rows = Array.from(objData, (obj) =>
     obj == null ? [] : (keys as string[]).map((col) => cellToString(obj[col])),
   );
@@ -450,7 +460,7 @@ function calculateWidths(
   if (maxWidth && keys.length > 0) {
     for (let i = 0; i < keys.length; i++) {
       const col = keys[i];
-      const limit = maxWidth[col];
+      const limit = columnSetting(maxWidth, col);
       if (limit !== undefined && limit > 0) {
         widths[i] = Math.min(widths[i], limit);
       }
@@ -562,7 +572,7 @@ function buildAlignFn(
     // colAligns (array) takes precedence
     if (colAligns?.[i]) return colAligns[i];
     // Then align (Record by column name)
-    if (align && columns[i]) return align[columns[i]] ?? "left";
+    if (align && columns[i]) return columnSetting(align, columns[i]) ?? "left";
     return "left";
   };
 }

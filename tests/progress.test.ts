@@ -585,6 +585,27 @@ describe("progress.multi", () => {
   });
 });
 
+describe("bar option normalization", () => {
+  it("rejects an unusable width at creation on both bar paths", () => {
+    expect(() => progress.bar({ total: 10, width: -1 })).toThrow(RangeError);
+    expect(() => progress.bar({ total: 10, width: Number.NaN })).toThrow(RangeError);
+    const multi = progress.multi();
+    expect(() => multi.add({ total: 10, width: -1 })).toThrow(RangeError);
+    multi.stop();
+  });
+
+  it("clamps a multi bar against its normalized total", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    const bar = multi.add({ total: Number.NaN, label: "x", stream });
+    bar.update(5);
+    multi.stop();
+    // A raw NaN total used to reach the renderer and print "NaN/0".
+    expect(stream.getOutput()).not.toContain("NaN");
+    expect(stripAnsi(stream.getOutput())).toContain("0/0");
+  });
+});
+
 describe("untrusted text in rendered frames", () => {
   it("closes styling a caller left open in a spinner label", () => {
     const stream = createMockTTY();
