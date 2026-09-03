@@ -1,4 +1,4 @@
-import { helpFlagBindings } from "../command/parser.js";
+import { formatOptionFlag, helpFlagBindings } from "../command/parser.js";
 import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
 import { stringWidth } from "../output/color.js";
 import type { ArgDef, CommandDefinition, OptionDef } from "../types.js";
@@ -280,7 +280,7 @@ function formatOptionEntries(options: OptionDef[]): [string, string][] {
 
     // Aliases
     if (opt.aliases.length > 0) {
-      parts.push(`${opt.aliases.map((a) => `-${a}`).join(", ")},`);
+      parts.push(`${opt.aliases.map(formatOptionFlag).join(", ")},`);
     } else {
       parts.push("   ");
     }

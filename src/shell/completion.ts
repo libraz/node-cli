@@ -1,23 +1,15 @@
 import {
   activePipeSegment,
+  formatOptionFlag,
   helpFlagBindings,
   parse,
+  resolveOptionName,
   stripOptionPrefix,
   tokenize,
 } from "../command/parser.js";
 import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
 import { ParseError } from "../errors.js";
 import type { CommandDefinition, OptionDef } from "../types.js";
-
-/**
- * Finds an option definition by one of its short/long aliases.
- */
-function findOptionByAlias(name: string, options: Map<string, OptionDef>): OptionDef | undefined {
-  for (const [, def] of options) {
-    if (def.aliases.includes(name)) return def;
-  }
-  return undefined;
-}
 
 /**
  * Result of a completion operation.
@@ -194,7 +186,7 @@ export class ShellCompleter {
       const eq = lastToken.indexOf("=");
       if (eq !== -1) {
         const optName = stripOptionPrefix(lastToken.slice(0, eq));
-        const optDef = command.options.get(optName) ?? findOptionByAlias(optName, command.options);
+        const optDef = resolveOptionName(optName, command.options);
         if (optDef?.takesValue) {
           const valuePrefix = lastToken.slice(eq + 1);
           return this.completeOptionValue(optDef, valuePrefix);
@@ -373,8 +365,10 @@ export class ShellCompleter {
         if (negated.startsWith(prefix)) candidates.push(negated);
       }
       for (const alias of opt.aliases) {
-        const shortFlag = `-${alias}`;
-        if (shortFlag.startsWith(prefix)) candidates.push(shortFlag);
+        // Spell the alias the way the parser accepts it; a multi-character alias
+        // rendered with one dash is a suggestion the parser would reject.
+        const aliasFlag = formatOptionFlag(alias);
+        if (aliasFlag.startsWith(prefix)) candidates.push(aliasFlag);
       }
     }
     return candidates;
@@ -396,20 +390,8 @@ export class ShellCompleter {
     const prevToken = remaining[prevIndex];
     if (!prevToken.startsWith("-")) return undefined;
 
-    const optName = prevToken.startsWith("--") ? prevToken.slice(2) : prevToken.slice(1);
-
-    // Look up by long name
-    const byLong = options.get(optName);
-    if (byLong?.takesValue) return byLong;
-
-    // Look up by alias
-    for (const [, def] of options) {
-      if (def.takesValue && def.aliases.includes(optName)) {
-        return def;
-      }
-    }
-
-    return undefined;
+    const def = resolveOptionName(stripOptionPrefix(prevToken), options);
+    return def?.takesValue ? def : undefined;
   }
 
   /**

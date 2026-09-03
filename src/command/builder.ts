@@ -162,11 +162,13 @@ export class CommandBuilder {
     }
 
     // Redefinition is intentional: plugins can refine a built-in option without
-    // first removing it. Drop the previous definition so its own aliases do not
-    // collide, while aliases owned by other options remain protected.
-    this.definition.options.delete(long);
+    // first removing it, so the definition being replaced is skipped rather than
+    // deleted up front. Deleting first would leave the option gone if the check
+    // below then rejected the new definition, and would also move it to the end
+    // of the render order that help and completion follow.
     const candidateNames = new Set([long, ...mergedAliases]);
-    for (const existing of this.definition.options.values()) {
+    for (const [existingLong, existing] of this.definition.options) {
+      if (existingLong === long) continue;
       for (const existingName of [existing.long, ...existing.aliases]) {
         if (candidateNames.has(existingName)) {
           throw new Error(`Option name or alias "${existingName}" is already registered`);

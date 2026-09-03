@@ -66,8 +66,10 @@ export function resolveOptions(
       // Apply the default only when the flag was absent, and run it through the
       // same built-in coercion an explicit value receives so the runtime type
       // matches (e.g. a string default on a `number` option becomes a number).
-      // A default already in its final type is left unchanged. Custom `parse` is
-      // not re-applied: a default is an already-resolved value, not raw input.
+      // The builder coerces a declared default too, but only to reject a bad one
+      // at definition time; this call is what makes resolveOptions correct for a
+      // definition it did not build. Custom `parse` is not re-applied: a default
+      // is an already-resolved value, not raw input.
       value = coerceOptionValue(schema.default, schema.type, long);
     }
 
@@ -111,13 +113,6 @@ export function resolveOptions(
           optionName: long,
         });
       }
-    }
-  }
-
-  // Pass through unknown options (not defined in schema)
-  for (const [key, value] of Object.entries(raw)) {
-    if (!defs.has(key) && !Object.hasOwn(resolved, key)) {
-      resolved[key] = value;
     }
   }
 

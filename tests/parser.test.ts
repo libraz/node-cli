@@ -9,6 +9,8 @@ import {
 } from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { InvalidOptionError, ParseError, UnknownOptionError } from "../src/errors.js";
+import { HelpGenerator } from "../src/help/generator.js";
+import { ShellCompleter } from "../src/shell/completion.js";
 
 describe("tokenize", () => {
   it("splits by spaces", () => {
@@ -334,5 +336,65 @@ describe("parse", () => {
     const registry = createRegistry();
     expect(() => parse("deploy prod > output.txt", registry)).toThrow(ParseError);
     expect(() => parse("deploy < input.txt", registry)).toThrow(ParseError);
+  });
+});
+
+describe("one resolution shared by parsing, help and completion", () => {
+  it("parses a multi-character long alias and advertises it with two dashes", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "run")
+      .option("--verbose, --loud", { type: "boolean" })
+      .action(() => {});
+
+    // The last long flag is the canonical name; the earlier one is its alias and
+    // must resolve to the same option rather than being rejected as unknown.
+    expect(parse("run --loud", registry).options.loud).toBe(true);
+    expect(parse("run --verbose", registry).options.loud).toBe(true);
+
+    // Both surfaces spell that alias the way the parser accepts it.
+    const help = new HelpGenerator(registry, { name: "t" }).generateCommand(["run"]);
+    expect(help).toContain("--verbose");
+    expect(help).not.toMatch(/(^|\s)-verbose\b/);
+    const [candidates] = new ShellCompleter(registry).complete("run --") as [string[], string];
+    expect(candidates).toContain("--verbose");
+    expect(candidates).not.toContain("-verbose");
+  });
+
+  it("stops advertising built-in help once a command binds the flag itself", () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "run").option("--h <n>", { type: "string" }).action(() => {});
+
+    // The parser binds -h to the declared option, so neither surface may keep
+    // offering it as the built-in help flag.
+    const help = new HelpGenerator(registry, { name: "t" }).generateCommand(["run"]);
+    expect(help).not.toMatch(/-h,\s+--help/);
+    const [candidates] = new ShellCompleter(registry).complete("run -") as [string[], string];
+    expect(candidates.filter((flag) => flag === "-h")).toHaveLength(0);
+  });
+});
+
+describe("option redefinition", () => {
+  it("leaves the option set unchanged when a redefinition is rejected", () => {
+    const registry = new CommandRegistry();
+    const builder = new CommandBuilder(registry, "run")
+      .option("--verbose", { type: "boolean" })
+      .option("--tag <t>", { type: "string", alias: "t" });
+    const before = [...(registry.resolve(["run"])?.options.keys() ?? [])];
+
+    expect(() => builder.option("--verbose, -t", { type: "boolean" })).toThrow();
+
+    const after = [...(registry.resolve(["run"])?.options.keys() ?? [])];
+    expect(after).toEqual(before);
+    expect(parse("run --verbose", registry).options.verbose).toBe(true);
+  });
+
+  it("keeps its position when an option is redefined", () => {
+    const registry = new CommandRegistry();
+    const builder = new CommandBuilder(registry, "run")
+      .option("--alpha", { type: "boolean" })
+      .option("--beta", { type: "boolean" });
+    builder.option("--alpha", { type: "boolean", description: "refined" });
+
+    expect([...(registry.resolve(["run"])?.options.keys() ?? [])]).toEqual(["alpha", "beta"]);
   });
 });

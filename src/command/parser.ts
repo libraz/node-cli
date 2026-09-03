@@ -21,6 +21,21 @@ export function stripOptionPrefix(flag: string): string {
  * @param options - The command's option definitions.
  * @returns A map from each alias to its option's long name.
  */
+export function formatOptionFlag(alias: string): string {
+  return alias.length === 1 ? `-${alias}` : `--${alias}`;
+}
+
+export function resolveOptionName(
+  name: string,
+  options: Map<string, OptionDef>,
+  aliasMap?: Map<string, string>,
+): OptionDef | undefined {
+  const direct = options.get(name);
+  if (direct) return direct;
+  const long = (aliasMap ?? buildAliasMap(options)).get(name);
+  return long === undefined ? undefined : options.get(long);
+}
+
 export function buildAliasMap(options: Map<string, OptionDef>): Map<string, string> {
   const aliasMap = new Map<string, string>();
   for (const [, def] of options) {
@@ -44,13 +59,11 @@ export function helpFlagBindings(options: Map<string, OptionDef>): {
   long: boolean;
   short: boolean;
 } {
-  let long = false;
-  let short = false;
-  for (const [, def] of options) {
-    if (def.long === "help") long = true;
-    if (def.aliases.includes("h")) short = true;
-  }
-  return { long, short };
+  const aliasMap = buildAliasMap(options);
+  return {
+    long: resolveOptionName("help", options, aliasMap) !== undefined,
+    short: resolveOptionName("h", options, aliasMap) !== undefined,
+  };
 }
 
 /**
@@ -416,19 +429,20 @@ function extractOptionsAndArgs(
     const negatedEqIndex = token.indexOf("=");
     const negatedLiteralName = token.slice(2, negatedEqIndex === -1 ? undefined : negatedEqIndex);
     if (token.startsWith("--no-") && !optionDefs.has(negatedLiteralName)) {
-      const name = token.slice(5, negatedEqIndex === -1 ? undefined : negatedEqIndex);
+      const typed = token.slice(5, negatedEqIndex === -1 ? undefined : negatedEqIndex);
       if (negatedEqIndex !== -1) {
-        throw new InvalidOptionError(`Option --no-${name} does not accept a value`, {
-          optionName: name,
+        throw new InvalidOptionError(`Option --no-${typed} does not accept a value`, {
+          optionName: typed,
           value: token.slice(negatedEqIndex + 1),
         });
       }
-      const def = optionDefs.get(name);
+      const def = resolveOptionName(typed, optionDefs, aliasMap);
       if (!def) {
-        throw new UnknownOptionError(`--no-${name}`);
+        throw new UnknownOptionError(`--no-${typed}`);
       }
+      const name = def.long;
       if (def.schema.type !== "boolean") {
-        throw new InvalidOptionError(`Option --no-${name} can only be used with boolean options`, {
+        throw new InvalidOptionError(`Option --no-${typed} can only be used with boolean options`, {
           optionName: name,
         });
       }
@@ -440,27 +454,28 @@ function extractOptionsAndArgs(
     if (token.startsWith("--")) {
       const eqIndex = token.indexOf("=");
       if (eqIndex !== -1) {
-        const name = token.slice(2, eqIndex);
-        const def = optionDefs.get(name);
+        const typed = token.slice(2, eqIndex);
+        const def = resolveOptionName(typed, optionDefs, aliasMap);
         if (!def) {
-          throw new UnknownOptionError(`--${name}`);
+          throw new UnknownOptionError(`--${typed}`);
         }
-        appendOption(options, name, token.slice(eqIndex + 1), def);
+        appendOption(options, def.long, token.slice(eqIndex + 1), def);
         i++;
         continue;
       }
 
-      const name = token.slice(2);
-      const def = optionDefs.get(name);
+      const typed = token.slice(2);
+      const def = resolveOptionName(typed, optionDefs, aliasMap);
       if (!def) {
-        if (name === "help") {
+        if (typed === "help") {
           builtInHelp = true;
           options.help = true;
           i++;
           continue;
         }
-        throw new UnknownOptionError(`--${name}`);
+        throw new UnknownOptionError(`--${typed}`);
       }
+      const name = def.long;
       const isBool = def.schema.type === "boolean";
 
       if (isBool) {
@@ -500,19 +515,18 @@ function extractOptionsAndArgs(
       const eqIndex = token.indexOf("=");
       if (eqIndex !== -1) {
         const alias = token.slice(1, eqIndex);
-        const name = aliasMap.get(alias) ?? alias;
-        if (!optionDefs.has(name)) {
+        const def = resolveOptionName(alias, optionDefs, aliasMap);
+        if (!def) {
           throw new UnknownOptionError(`-${alias}`);
         }
-        appendOption(options, name, token.slice(eqIndex + 1), optionDefs.get(name));
+        appendOption(options, def.long, token.slice(eqIndex + 1), def);
         i++;
         continue;
       }
 
       const chars = token.slice(1);
       if (chars.length === 1) {
-        const name = aliasMap.get(chars) ?? chars;
-        const def = optionDefs.get(name);
+        const def = resolveOptionName(chars, optionDefs, aliasMap);
         if (!def) {
           // Mirror the long `--help` fallback so `-h` works on every command
           // unless the user has explicitly bound `-h` to another option.
@@ -524,6 +538,7 @@ function extractOptionsAndArgs(
           }
           throw new UnknownOptionError(`-${chars}`);
         }
+        const name = def.long;
         const isBool = def.schema.type === "boolean";
 
         if (isBool) {
@@ -544,8 +559,7 @@ function extractOptionsAndArgs(
       } else {
         // Multiple short booleans: -abc → -a -b -c
         for (const ch of chars) {
-          const name = aliasMap.get(ch) ?? ch;
-          const def = optionDefs.get(name);
+          const def = resolveOptionName(ch, optionDefs, aliasMap);
           if (!def) {
             // Mirror the single-flag `-h` fallback so help works inside a cluster
             // (e.g. `-vh`) unless the user has bound `-h` to another option.
@@ -556,6 +570,7 @@ function extractOptionsAndArgs(
             }
             throw new UnknownOptionError(`-${ch}`);
           }
+          const name = def.long;
           if (def.schema.type !== "boolean") {
             throw new InvalidOptionError(
               `Option -${ch} expects a value and cannot be combined with other short flags`,
