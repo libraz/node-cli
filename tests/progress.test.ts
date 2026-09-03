@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetColorEnabled, setColorEnabled, stripAnsi } from "../src/output/color.js";
-import { progress } from "../src/output/progress.js";
+import { progress, restoreCursor } from "../src/output/progress.js";
 import { createMockStdout, createMockTTY } from "./helpers.js";
 
 describe("progress.bar", () => {
@@ -582,5 +582,56 @@ describe("progress.multi", () => {
     bar1.update(5);
     bar2.update(5);
     expect(ttyStream.getOutput()).not.toBe("");
+  });
+});
+
+describe("terminal state ownership", () => {
+  it("writes nothing when an indicator is released before it ever renders", () => {
+    const barStream = createMockTTY();
+    progress.bar({ total: 10, stream: barStream }).stop();
+    expect(barStream.getOutput()).toBe("");
+
+    const spinnerStream = createMockTTY();
+    progress.spinner({ label: "x", stream: spinnerStream }).stop();
+    expect(spinnerStream.getOutput()).toBe("");
+
+    const multiStream = createMockTTY();
+    const multi = progress.multi();
+    multi.add({ total: 5, stream: multiStream });
+    multi.stop();
+    expect(multiStream.getOutput()).toBe("");
+  });
+
+  it("decides cursor restoration per signal rather than for all of them at once", () => {
+    const counts = () => ({
+      SIGINT: process.listenerCount("SIGINT"),
+      SIGTERM: process.listenerCount("SIGTERM"),
+      SIGHUP: process.listenerCount("SIGHUP"),
+    });
+    // Earlier cases in this file may leave an indicator active; start from a
+    // known terminal state so the counts below measure only this case.
+    restoreCursor();
+    const occupy = () => undefined;
+    // Stand in for an embedding application (or the interactive shell) that owns
+    // SIGINT for the whole session.
+    process.on("SIGINT", occupy);
+    const before = counts();
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ label: "x", stream });
+    try {
+      spinner.start();
+      const during = counts();
+      // The owned signal is left alone, but the other two are still guarded.
+      expect(during.SIGINT).toBe(before.SIGINT);
+      expect(during.SIGTERM).toBe(before.SIGTERM + 1);
+      expect(during.SIGHUP).toBe(before.SIGHUP + 1);
+    } finally {
+      spinner.stop();
+      process.removeListener("SIGINT", occupy);
+    }
+
+    const after = counts();
+    expect(after.SIGTERM).toBe(before.SIGTERM);
+    expect(after.SIGHUP).toBe(before.SIGHUP);
   });
 });

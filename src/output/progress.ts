@@ -214,6 +214,7 @@ export function restoreCursor(): void {
   }
   cursorHiddenStreams.clear();
   removeSignalRestore();
+  removeExitRestore();
 }
 
 /** Removes the standalone signal handlers installed for hidden cursors. */
@@ -230,12 +231,14 @@ function removeSignalRestore(): void {
  * handlers first, so it remains responsible for cooperative cancellation.
  */
 function registerSignalRestore(): void {
-  if (cursorSignalHandlers.size > 0) return;
-  // Do not supersede an embedding application's signal policy, or the router's
-  // cooperative Ctrl-C handler installed around command execution.
-  if (cursorRestoreSignals.some((signal) => process.listenerCount(signal) > 0)) return;
-
   for (const signal of cursorRestoreSignals) {
+    if (cursorSignalHandlers.has(signal)) continue;
+    // Do not supersede an embedding application's policy for THIS signal, or the
+    // router's cooperative Ctrl-C handler installed around command execution.
+    // Each signal is judged on its own: a listener on one of them must not
+    // suppress cursor restoration for the other two, which is what happens for
+    // the whole lifetime of an interactive shell session otherwise.
+    if (process.listenerCount(signal) > 0) continue;
     const handler = () => {
       restoreCursor();
       // Signal delivery is asynchronous; re-send only after our listeners have
@@ -245,6 +248,13 @@ function registerSignalRestore(): void {
     cursorSignalHandlers.set(signal, handler);
     process.once(signal, handler);
   }
+}
+
+/** Removes the last-chance exit handler once no cursor is hidden any more. */
+function removeExitRestore(): void {
+  if (!exitRestoreRegistered) return;
+  exitRestoreRegistered = false;
+  process.removeListener("exit", restoreCursor);
 }
 
 /**
@@ -288,7 +298,10 @@ function acquireTerminal(stream: Writable): () => void {
       stream.write("\x1b[?25h");
       cursorHiddenStreams.delete(stream);
       terminalSessions.delete(stream);
-      if (cursorHiddenStreams.size === 0) removeSignalRestore();
+      if (cursorHiddenStreams.size === 0) {
+        removeSignalRestore();
+        removeExitRestore();
+      }
     }
   };
 }
@@ -456,8 +469,12 @@ function createBar(options: BarOptions): Bar {
   function stop(): void {
     if (finished) return;
     finished = true;
+    const drew = started;
     cleanup();
-    if (tty) stream.write("\n");
+    // Only close a line this bar actually opened. Disposing a bar whose block
+    // returned or threw before the first update must leave the terminal exactly
+    // as it found it.
+    if (tty && drew) stream.write("\n");
   }
 
   return {
@@ -516,6 +533,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let done = false;
+  let rendered = false;
   let releaseTerminal: (() => void) | null = null;
   let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-spinner");
@@ -534,11 +552,14 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       }
     }
     frameWriter.write(`\r\x1b[K${frame} ${singleLine(label)}`);
+    rendered = true;
     frameIndex++;
   }
 
   function clearLine(): void {
-    if (tty) stream.write("\r\x1b[K");
+    // Erasing a line this spinner never drew would wipe whatever the caller had
+    // already written there.
+    if (tty && rendered) stream.write("\r\x1b[K");
   }
 
   function cleanup(): void {
@@ -647,8 +668,9 @@ function createMultiBar(): MultiBar {
   function stop(): void {
     if (closed) return;
     closed = true;
+    const drew = renderedRows > 0;
     cleanup();
-    if (streamIsTTY(stream)) stream.write("\n");
+    if (streamIsTTY(stream) && drew) stream.write("\n");
   }
 
   return {
