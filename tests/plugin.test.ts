@@ -191,3 +191,57 @@ describe("plugin system", () => {
     expect(process.exitCode).toBe(1);
   });
 });
+
+describe("plugin initialization barrier under concurrency", () => {
+  it("runs plugin bodies once for concurrent executions", async () => {
+    const cli = new CLI();
+    let initializations = 0;
+    cli.use(async (ctx) => {
+      initializations++;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      ctx.command("ready").action(() => {});
+    });
+
+    // Both calls hit the barrier before it resolves, so they must share it.
+    await Promise.all([cli.exec("ready"), cli.exec("ready")]);
+    expect(initializations).toBe(1);
+  });
+
+  it("fails every concurrent execution with the same sticky error", async () => {
+    const cli = new CLI();
+    cli.command("ready").action(() => {});
+    cli.use(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      throw new Error("plugin exploded");
+    });
+
+    const outcomes = await Promise.allSettled([cli.exec("ready"), cli.exec("ready")]);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["rejected", "rejected"]);
+    for (const outcome of outcomes) {
+      expect((outcome as PromiseRejectedResult).reason).toHaveProperty(
+        "message",
+        "plugin exploded",
+      );
+    }
+
+    // The failure sticks for a later call rather than degrading into success.
+    await expect(cli.exec("ready")).rejects.toThrow("plugin exploded");
+  });
+
+  it("keeps registration order when an earlier plugin awaits", async () => {
+    const cli = new CLI();
+    const order: string[] = [];
+    cli.use(async (ctx) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      order.push("first");
+      ctx.command("a").action(() => {});
+    });
+    cli.use((ctx) => {
+      order.push("second");
+      ctx.command("b").action(() => {});
+    });
+
+    await Promise.all([cli.exec("a"), cli.exec("b")]);
+    expect(order).toEqual(["first", "second"]);
+  });
+});

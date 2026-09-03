@@ -239,3 +239,54 @@ describe("piped execution", () => {
     await expect(router.execute("source | take")).rejects.toThrow("late source failure");
   });
 });
+
+describe("pipeline outcome and backpressure", () => {
+  it("reports the exit code of the stage that actually failed", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "ok").action((ctx) => {
+      ctx.stdout.write("data\n");
+    });
+    new CommandBuilder(registry, "boom").action(() => {
+      throw Object.assign(new Error("stage failed"), { exitCode: 7 });
+    });
+
+    const router = new CommandRouter(registry);
+    const stream = createMockStdout();
+    router.on("error", () => {});
+
+    await expect(
+      router.execute("ok | boom", { stdout: stream, stderr: stream }),
+    ).rejects.toMatchObject({ message: "stage failed", exitCode: 7 });
+  });
+
+  it("destroys the downstream pipe when a middle stage throws", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "source").action((ctx) => {
+      ctx.stdout.write("data\n");
+    });
+    new CommandBuilder(registry, "middle").action(() => {
+      throw new Error("middle failed");
+    });
+    let downstreamSawEnd = false;
+    new CommandBuilder(registry, "sink").action(async (ctx) => {
+      try {
+        for await (const _chunk of ctx.stdin as Readable) {
+          // Drain until the stream ends or is destroyed.
+        }
+      } catch {
+        // A destroyed pipe rejects the iteration; either way it terminates.
+      }
+      downstreamSawEnd = true;
+    });
+
+    const router = new CommandRouter(registry);
+    const stream = createMockStdout();
+    router.on("error", () => {});
+
+    await expect(
+      router.execute("source | middle | sink", { stdout: stream, stderr: stream }),
+    ).rejects.toThrow("middle failed");
+    // The sink must not be left waiting on a producer that will never write.
+    expect(downstreamSawEnd).toBe(true);
+  });
+});
