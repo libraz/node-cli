@@ -32,7 +32,7 @@ describe("public surface and documentation agree", () => {
     const [api, declarations, reference] = await Promise.all([
       import("../src/index.js"),
       readFile("dist/index.d.ts", "utf8"),
-      readFile("docs/en/api.md", "utf8"),
+      readFile("docs/en/api-reference.md", "utf8"),
     ]);
     const exported = [...Object.keys(api), ...exportedTypeNames(declarations)].sort();
 

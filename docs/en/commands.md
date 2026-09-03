@@ -1,468 +1,506 @@
-# Commands & Options
+# Commands
 
-## Command Definition
+A command is a named action the user invokes by typing its name. `cli.command()`
+declares one and returns a builder whose methods configure it.
 
-Commands are defined using a definition string that specifies the command name and its positional arguments:
+This page covers command names, positional arguments, subcommands, and the
+lifecycle a command goes through when it runs. Flags such as `--force` are
+covered in [Options](options.md).
 
-```
-command <required> [optional] [...variadic]
-parent child <arg>
-```
+## Defining a command
 
-- `<arg>` — Required argument
-- `[arg]` — Optional argument
-- `<...args>` — Required variadic (consumes all remaining)
-- `[...args]` — Optional variadic
+`cli.command()` takes a single specification string and returns a
+`CommandBuilder`. Chain `description()` and `action()` onto it:
 
 ```typescript
-cli.command("deploy <env> [region]")
+import { createCLI } from "@libraz/node-cli";
+
+const cli = createCLI({ name: "myapp" });
+
+cli
+  .command("ping")
+  .description("Check connectivity")
   .action((ctx) => {
-    // ctx.args.env    — always present
-    // ctx.args.region — may be undefined
+    ctx.stdout.write("pong\n");
   });
+
+await cli.start();
 ```
 
-## Options
+The command is registered while `cli.command()` runs, not when the chain ends,
+so it exists as soon as the call returns. Every builder method returns the same
+builder, so the order of the chained calls does not matter.
 
-### Option Flags
+The action receives one argument, the [command context](#the-command-context).
+Write output through `ctx.stdout` rather than `console.log` so that output
+routing works in the interactive shell and in tests.
+
+### Builder methods
+
+| Method | Effect |
+|---|---|
+| `description(text)` | Sets the text shown next to the command in help |
+| `option(flags, schema)` | Declares a flag — see [Options](options.md) |
+| `action(fn)` | Sets the function to run when the command is dispatched |
+| `alias(...names)` | Adds alternative names for the command |
+| `hidden(hidden = true)` | Hides the command from help and completion |
+| `validate(fn)` | Sets a check that runs before the action |
+| `cancel(fn)` | Sets a handler that runs when the command is interrupted |
+| `complete(fn)` | Sets a custom tab-completion provider — see [Interactive shell](interactive-shell.md) |
+| `command(spec)` | Declares a subcommand under this command |
+| `remove()` | Unregisters the command |
+
+There is no `default()`, `example()`, `usage()`, or `argument()` method. A usage
+line is generated from the specification string, and there is no concept of a
+default command that runs when no command name is given.
+
+## The argument spec syntax
+
+The specification string is split on whitespace. Each token is classified by its
+first character:
+
+- A token starting with `<` or `[` declares a **positional argument** — a value
+  the user types in a fixed position, without a flag name.
+- Any other token is a **bare name**. The last bare name is the command itself;
+  every earlier bare name is a parent command.
 
 ```typescript
-.option("--verbose")                    // Boolean flag
-.option("-f, --force")                  // Short alias + long
-.option("-p, --port <port>")            // Takes value
-.option("--tag <tag>", { type: "string" })
-.option("-t, --timeout <ms>", { type: "number" })
+cli.command("deploy <env> [region]");
+//           ^^^^^^ command name
+//                  ^^^^^ required argument
+//                        ^^^^^^^^ optional argument
 ```
 
-### Option Schema
+Four bracket forms are recognized:
+
+| Token | Meaning | Value in `ctx.args` |
+|---|---|---|
+| `<name>` | Required, exactly one value | `string` |
+| `[name]` | Optional, at most one value | `string`, or the key is absent |
+| `<...name>` | Required variadic — one or more values | `string[]`, never empty |
+| `[...name]` | Optional variadic — zero or more values | `string[]`, possibly empty |
+
+*Variadic* means the argument collects every remaining value into an array
+instead of taking exactly one. See the [glossary](glossary.md).
+
+### Worked transcripts
 
 ```typescript
-interface OptionSchema {
-  description?: string;
-  type?: "string" | "number" | "boolean" | "string[]" | "number[]";
-  alias?: string | string[];
-  required?: boolean;
-  default?: unknown;
-  choices?: unknown[];
-  parse?: (value: string, ctx: CommandContext) => unknown;
-  validate?: (value: unknown, ctx: CommandContext) => void;
-  hidden?: boolean;
-  autocomplete?: string[] | ((current: string) => string[] | Promise<string[]>);
-}
+cli.command("copy <source> [dest]").action((ctx) => {
+  const source = ctx.args.source as string;
+  const dest = (ctx.args.dest as string | undefined) ?? ".";
+  ctx.stdout.write(`${source} -> ${dest}\n`);
+});
 ```
-
-### Examples
-
-```typescript
-.option("--env <env>", {
-  type: "string",
-  required: true,
-  choices: ["dev", "staging", "prod"],
-  description: "Target environment",
-})
-
-.option("--retries <n>", {
-  type: "number",
-  default: 3,
-  validate: (v) => {
-    if ((v as number) < 0) throw new Error("Must be non-negative");
-  },
-})
-
-.option("--tags <tag>", {
-  type: "string[]",
-  description: "Tags (can be specified multiple times)",
-})
-
-.option("--date <date>", {
-  type: "string",
-  parse: (v) => new Date(v),
-})
-```
-
-### Option Parsing Behavior
 
 | Input | Result |
-|-------|--------|
-| `--force` | `{ force: true }` |
-| `--no-force` | `{ force: false }` |
-| `--tag v2` | `{ tag: "v2" }` |
-| `--tag=v2` | `{ tag: "v2" }` |
-| `-t 5000` | `{ timeout: 5000 }` after option resolution |
-| `-abc` | `{ a: true, b: true, c: true }` when every flag is boolean |
-| `-- --not-an-option` | Treated as positional arg |
+|---|---|
+| `myapp copy a.txt b.txt` | `ctx.args` is `{ source: "a.txt", dest: "b.txt" }` |
+| `myapp copy a.txt` | `ctx.args` is `{ source: "a.txt" }` — the `dest` key is absent |
+| `myapp copy` | `MissingArgumentError`, carrying the command's usage line |
+| `myapp copy a.txt b.txt c.txt` | `ExtraArgumentError` for `c.txt` |
 
-Explicit option values are resolved in declaration order. A custom `parse`
-function receives the raw string and replaces built-in coercion; otherwise the
-declared `type` performs coercion. Defaults are used only when the option is
-absent, receive built-in coercion, and do not pass through custom `parse`.
-`required: true` and `default` are mutually exclusive and are rejected when the
-option is defined.
-
-## Command Aliases
+With a variadic argument the last row behaves differently:
 
 ```typescript
-cli.command("deploy <env>")
-  .alias("d", "dep")
-  .action(/* ... */);
+cli.command("copy <...files>").action((ctx) => {
+  const files = ctx.args.files as string[];
+  ctx.stdout.write(`${files.length} file(s)\n`);
+});
+```
 
-// All of these work:
+| Input | Result |
+|---|---|
+| `myapp copy a.txt b.txt c.txt` | `ctx.args.files` is `["a.txt", "b.txt", "c.txt"]` |
+| `myapp copy a.txt` | `ctx.args.files` is `["a.txt"]` |
+| `myapp copy` | `MissingArgumentError` for `...files` |
+
+### Errors raised when the spec is invalid
+
+These are thrown as ordinary `Error` objects while `cli.command()` runs, so a
+malformed specification fails at startup rather than when a user types the
+command:
+
+- A bare name appears after an argument token (`"deploy <env> now"`).
+- The string contains no bare name at all (`"<env>"`).
+- A bracket is missing its closing character (`"deploy <env"`).
+- An argument name is empty (`"deploy <>"`).
+- Two arguments share a name (`"copy <file> [file]"`).
+- A required argument follows an optional one (`"copy [dest] <source>"`).
+- A variadic argument is not the last one (`"copy <...files> <dest>"`).
+
+### What the spec does not support
+
+| Written | Actual meaning |
+|---|---|
+| `[name=foo]` | An optional argument literally named `name=foo` — there are no default values in the spec |
+| `<port:number>` | An argument literally named `port:number` — there are no type annotations |
+| `<dev\|prod>` | An argument literally named `dev\|prod` — there are no unions |
+| `deploy <env> ...` | A trailing `...` is not a bracket form, so it is read as a bare name — and a bare name after an argument is an error |
+
+Defaults, types, choices, and validation belong to [options](options.md), not to
+positional arguments.
+
+## Positional arguments at runtime
+
+`ctx.args` holds the positional arguments, keyed by the names from the
+specification string. Four rules describe every value it can hold.
+
+**Values are always strings.** A non-variadic argument is a `string`; a variadic
+argument is a `string[]`. No conversion is applied, so a numeric argument must be
+converted in the action:
+
+```typescript
+cli.command("wait <seconds>").action((ctx) => {
+  const seconds = Number(ctx.args.seconds as string);
+  if (!Number.isFinite(seconds)) throw new Error("seconds must be a number");
+  ctx.stdout.write(`waiting ${seconds}s\n`);
+});
+```
+
+**A variadic argument always yields an array.** For `[...name]` that array may be
+empty; for `<...name>` zero values are rejected with `MissingArgumentError`
+before the action runs.
+
+**A missing optional argument leaves its key absent**, rather than present with
+the value `undefined`. Reading it still yields `undefined`, so a default is
+usually written with `??`. When the distinction matters, test for the key with
+`Object.hasOwn`:
+
+```typescript
+cli.command("copy <source> [dest]").action((ctx) => {
+  if (Object.hasOwn(ctx.args, "dest")) {
+    // The user supplied a destination.
+  }
+});
+```
+
+`ctx.args` is a null-prototype object, which means it does not inherit the usual
+`Object` methods. `ctx.args.hasOwnProperty("dest")` throws a `TypeError`;
+`Object.hasOwn(ctx.args, "dest")` is the working form.
+
+**Leftover values are an error.** If the user supplies more positional values
+than the command declares, and the command has an action, an
+`ExtraArgumentError` naming the first extra value is thrown. See
+[Errors](errors.md).
+
+## Subcommands and groups
+
+A command can nest under another. Two forms declare the same structure:
+
+```typescript
+// Path form: the last bare name is the command, earlier names are parents.
+cli.command("db migrate").action(runMigrations);
+
+// Builder form: keep a reference to the parent and call .command() on it.
+const db = cli.command("db").description("Database operations");
+db.command("migrate").action(runMigrations);
+db.command("seed").action(seedDatabase);
+```
+
+In the path form, a parent that does not exist yet is created automatically as a
+**group** — a command with a name and no action. In the builder form,
+`cli.command("db")` is that same group as long as no `action()` is set on it.
+
+![Command tree for an application named myapp: the root fans out into the groups db and user plus the command deploy. The db group holds the subcommands migrate and seed; the user group holds create with the aliases c and new, drawn as arrows that resolve to the canonical name create. A separate branch shows the command task taking a positional argument name and an action, with its subcommand list greyed out and struck through to mark it unreachable.](../assets/command-tree.svg)
+
+Dispatch walks the typed tokens from the root downwards, matching each token
+against the subcommands of the command matched so far, and stops at the first
+token that matches nothing. Everything left over becomes arguments and options.
+
+A group has no action, so it cannot run. It behaves as follows:
+
+- With no extra input (`myapp db`) it prints its own help page, listing its
+  subcommands.
+- With extra input (`myapp db bogus`) it reports an unknown command. If a
+  fallback handler is registered with `cli.catch()`, that handler receives the
+  input instead; otherwise a `CommandNotFoundError` is thrown, carrying the list
+  of available subcommands.
+
+### Re-registering the same path
+
+Declaring the same command path twice merges the two declarations rather than
+replacing or duplicating the command. `action`, `description`, the completion
+provider, `aliases`, `validate`, and the cancel handler each overwrite the
+previous value when the new declaration sets one; options merge key by key; the
+positional argument list is replaced wholesale, including with an empty list.
+
+```typescript
+cli.command("status <target>").action(showStatus);
+cli.command("status").description("Show status"); // argument list is now empty
+```
+
+This is how a [plugin](events-and-plugins.md) refines a command another module
+already declared.
+
+### Pitfall: unreachable subcommands
+
+Dispatch stops descending at the first command that has **both an action and at
+least one positional argument**. From that point on, every remaining token is
+treated as an argument value, never as a subcommand name. Any subcommand
+underneath such a command can therefore never be dispatched.
+
+```typescript
+// Broken: `task` runs and takes an argument, so `list` is only ever an argument.
+const task = cli.command("task <name>").action(runTask);
+task.command("list").action(listTasks);
+
+// `myapp task list` runs runTask with ctx.args.name === "list".
+```
+
+This is not silent. At registration, a warning is emitted through
+`process.emitWarning` with the code `NODE_CLI_UNREACHABLE_SUBCOMMAND`, and help
+and tab completion both omit the unreachable subcommands so the interface never
+advertises something that cannot be run.
+
+The fix is to keep the parent free of both an action and positional arguments,
+and to move the argument onto a subcommand:
+
+```typescript
+const task = cli.command("task").description("Task operations");
+task.command("run <name>").action(runTask);
+task.command("list").action(listTasks);
+
+// myapp task run build
+// myapp task list
+```
+
+The same rule explains why a bare name after an argument is rejected in a
+specification string: `cli.command("task <name> list")` would describe exactly
+this unreachable arrangement.
+
+## Aliases
+
+`alias()` adds alternative names for a command:
+
+```typescript
+cli.command("deploy <env>").alias("d", "dep").action(deploy);
+
 // myapp deploy prod
 // myapp d prod
 // myapp dep prod
 ```
 
-Aliases also work for subcommands:
+Aliases work at any depth, including on subcommands:
 
 ```typescript
 const user = cli.command("user");
-user.command("create <name>")
-  .alias("c", "new")
-  .action(/* ... */);
+user.command("create <name>").alias("c", "new").action(createUser);
 
-// myapp user create Alice
-// myapp user c Alice
 // myapp user new Alice
 ```
 
-## Command Validation
+An alias is resolved to the real command name before the action runs, so
+`ctx.commandPath` always holds the canonical path — `["user", "create"]`, never
+`["user", "new"]`.
 
-Pre-action validation that runs before event handlers:
+Aliases are checked when they are registered. Adding an alias that collides with
+a sibling command's name, or with an alias another sibling already claims,
+throws. A real command always wins over an alias of the same name, so an alias
+can never shadow a command.
+
+## Hidden commands
+
+`hidden()` removes a command from the help index and from tab completion:
 
 ```typescript
-cli.command("deploy <env>")
+cli.command("debug-dump").hidden().action(dumpState);
+```
+
+The command remains fully dispatchable — `myapp debug-dump` runs it — and
+`myapp help debug-dump` still prints its page. Hiding keeps an internal or
+deprecated command out of the advertised interface; it does not restrict access.
+
+## Validation
+
+`validate()` registers a check that runs after options are resolved and before
+the `beforeExecute` event. Throwing from it stops the command:
+
+```typescript
+cli
+  .command("deploy <env>")
+  .option("--force", { type: "boolean" })
   .validate((ctx) => {
-    const env = ctx.args.env as string;
-    if (!["prod", "staging", "dev"].includes(env)) {
-      throw new Error(`Unknown environment: ${env}`);
+    if (ctx.args.env === "prod" && !ctx.options.force) {
+      throw new Error("Deploying to prod requires --force");
     }
   })
-  .action(/* ... */);
+  .action(deploy);
 ```
 
-Async validation is supported:
+Because it runs after option resolution, the validator sees fully resolved
+option values, including defaults and any custom conversion.
+
+The function may be asynchronous, and it is awaited:
 
 ```typescript
-.validate(async (ctx) => {
-  const exists = await checkEnvironment(ctx.args.env as string);
+cli.command("deploy <env>").validate(async (ctx) => {
+  const exists = await environmentExists(ctx.args.env as string);
   if (!exists) throw new Error("Environment not found");
-})
-```
-
-## Command Removal
-
-Commands can be dynamically removed:
-
-```typescript
-const builder = cli.command("temporary").action(/* ... */);
-
-// Later:
-builder.remove(); // Returns true if found and removed
-```
-
-## Event System
-
-Register lifecycle event handlers on the CLI instance:
-
-```typescript
-cli.on("beforeExecute", (ctx) => {
-  // Runs before every command action
-});
-
-cli.on("afterExecute", (ctx) => {
-  // Runs after successful command execution
-});
-
-cli.on("commandError", (error, ctx) => {
-  // Runs when a command action throws
-  // The error is still re-thrown after handlers run
-});
-
-cli.on("exit", () => {
-  // Runs once on every exit path of start(): after a direct-mode command
-  // completes, throws, or is force-quit; after a help index is printed; when
-  // plugin initialization fails; and when the interactive shell ends.
-  // exec() never fires it.
 });
 ```
 
-Remove handlers with `off()`:
+Whatever it throws propagates unchanged. It is not wrapped in `ValidationError`
+— that class is reserved for a failure inside an individual option's `parse` or
+`validate`. See [Errors](errors.md).
+
+## Cancellation
+
+A running command is cancelled when the user presses Ctrl+C, or when an
+`AbortSignal` supplied to `cli.exec()` aborts. Two mechanisms report this,
+and they fire together, so a command may use either or both.
+
+`cancel()` registers a callback for cleanup:
 
 ```typescript
-const handler = (ctx) => { /* ... */ };
-cli.on("beforeExecute", handler);
-cli.off("beforeExecute", handler);
-```
-
-**Execution order:**
-
-```mermaid
-flowchart TD
-  A["Raw Input"] --> B["Parse Tokens"]
-  B --> C["Resolve Command"]
-  C --> D["Option Resolution"]
-  D --> E["validate()"]
-  E -- "throws" --> ERR["Error thrown"]
-  E -- "pass" --> F["emit beforeExecute"]
-  F --> G["action()"]
-  G -- "success" --> H["emit afterExecute"]
-  G -- "throws" --> I["emit commandError"]
-  I --> ERR
-```
-
-## Catch / Fallback Command
-
-Handle unrecognized commands instead of throwing `CommandNotFoundError`:
-
-```typescript
-cli.catch((input, { stdout }) => {
-  stdout.write(`Unknown command: ${input}\nType "help" for available commands.\n`);
-});
-```
-
-A registered handler also receives input that fails to parse (see `ParseError`
-below) instead of that error being thrown.
-
-## Programmatic Execution
-
-Execute commands programmatically:
-
-```typescript
-await cli.exec("deploy prod --force");
-await cli.exec("user create Alice", {
-  stdout: customStream,
-  stderr: customStream,
-});
-```
-
-## Plugin System
-
-```mermaid
-flowchart TD
-  CLI["CLI Instance"]
-  P1["Plugin A"]
-  P2["Plugin B"]
-  P3["Async Plugin C"]
-
-  CLI -- "cli.use()" --> P1
-  CLI -- "cli.use()" --> P2
-  CLI -- "cli.use()" --> P3
-
-  P1 -- "ctx.command()" --> CMD1["Command: status"]
-  P1 -- "ctx.on()" --> EVT1["Event: beforeExecute"]
-  P2 -- "ctx.command()" --> CMD2["Command: health"]
-  P3 -- "ctx.command()" --> CMD3["Command: greet"]
-
-  subgraph Registry
-    CMD1
-    CMD2
-    CMD3
-  end
-
-  subgraph Event Bus
-    EVT1
-  end
-```
-
-Extend the CLI with reusable plugins:
-
-```typescript
-function myPlugin(ctx: PluginContext) {
-  ctx.command("status")
-    .description("Show status")
-    .action((cmdCtx) => {
-      cmdCtx.stdout.write("All systems operational\n");
-    });
-
-  ctx.on("beforeExecute", (cmdCtx) => {
-    // Add logging, metrics, etc.
-  });
-}
-
-cli.use(myPlugin);
-```
-
-The `PluginContext` interface:
-
-```typescript
-interface PluginContext {
-  command(definition: string): CommandBuilder;
-  on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
-  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
-  catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void;
-}
-```
-
-Async plugins are awaited when `cli.start()` is called.
-
-## Pipe Commands
-
-In the interactive shell, commands can be piped together:
-
-```
-> produce | transform | consume
-```
-
-```mermaid
-flowchart LR
-  A["produce"] -- "stdout → stdin" --> B["transform"]
-  B -- "stdout → stdin" --> C["consume"]
-  C -- "stdout" --> D["Terminal"]
-
-  style A fill:#e1f5fe
-  style B fill:#fff3e0
-  style C fill:#e8f5e9
-```
-
-The stdout of each command becomes the stdin of the next. Access stdin in your action:
-
-```typescript
-cli.command("uppercase")
-  .action(async (ctx) => {
-    if (ctx.stdin) {
-      const chunks: Buffer[] = [];
-      for await (const chunk of ctx.stdin) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const input = Buffer.concat(chunks).toString();
-      ctx.stdout.write(input.toUpperCase());
-    }
-  });
-```
-
-## Mode Sub-REPL
-
-```mermaid
-stateDiagram-v2
-  [*] --> MainShell
-  MainShell --> Mode : enterMode()
-  Mode --> Mode : user input → action()
-  Mode --> MainShell : "exit" / "quit"
-  MainShell --> [*] : "exit" / "quit"
-
-  state MainShell {
-    [*] --> ReadInput
-    ReadInput --> Execute
-    Execute --> ReadInput
-  }
-
-  state Mode {
-    [*] --> ModeInput
-    ModeInput --> ModeAction
-    ModeAction --> ModeInput
-  }
-```
-
-Enter a specialized sub-REPL with its own prompt and handler:
-
-```typescript
-cli.command("sql").action((ctx) => {
-  ctx.shell?.enterMode({
-    prompt: "sql> ",
-    message: "Entering SQL mode. Type 'exit' to return.",
-    action: async (input, { stdout }) => {
-      const result = await executeQuery(input);
-      stdout.write(`${JSON.stringify(result)}\n`);
-    },
-  });
-});
-```
-
-Type `exit` or `quit` to return to the main shell.
-
-## Tab Completion
-
-The interactive shell provides automatic tab completion for command names, subcommands, and option flags.
-
-### Option Value Completion
-
-Options with `choices` are automatically completed. You can also provide explicit `autocomplete` candidates:
-
-```typescript
-cli.command("deploy <env>")
-  .option("--region <region>", {
-    autocomplete: ["us-east-1", "us-west-2", "eu-west-1"],
-  })
-  .option("--profile <profile>", {
-    // Dynamic completions (async supported)
-    autocomplete: async (current) => {
-      const profiles = await loadProfiles();
-      return profiles.map((p) => p.name);
-    },
-  });
-```
-
-### Custom Command Completer
-
-Use `.complete()` to provide custom completions for a command's arguments:
-
-Returned candidates are filtered against the current token prefix before they
-are shown or inserted. Return the full candidate values, not pre-filtered text.
-
-```typescript
-cli.command("connect <host>")
-  .complete((ctx) => {
-    return ["localhost", "example.com", "192.168.1.1"];
-  })
-  .action((ctx) => { /* ... */ });
-```
-
-### Progressive Completion (Tab Iteration)
-
-The `CompletionContext.iteration` counter tracks consecutive Tab presses, enabling progressive completions:
-
-```typescript
-cli.command("ssh <host>")
-  .complete((ctx) => {
-    if (ctx.iteration === 1) {
-      // First Tab: show recent hosts
-      return ["server-1", "server-2"];
-    }
-    // Second+ Tab: show all hosts
-    return ["server-1", "server-2", "server-3", "server-4", "server-5"];
-  })
-  .action((ctx) => { /* ... */ });
-```
-
-## Custom SIGINT Handler
-
-Register a handler for when SIGINT (Ctrl+C) is received during command execution:
-
-```typescript
-cli.command("longrun")
+cli
+  .command("sync")
   .cancel((ctx) => {
-    // Clean up resources
-    ctx.stdout.write("\nCancelled.\n");
+    ctx.stderr.write("\nCancelled; rolling back.\n");
+    releaseLock();
   })
-  .action(async (ctx) => {
-    // Long running operation
-  });
+  .action(runSync);
 ```
 
-Every action also receives `ctx.signal`, an `AbortSignal` that is aborted on the
-same cancellation. Use it with abort-aware APIs or listen for `"abort"` — the two
-mechanisms fire together, so a command may use either or both:
+`ctx.signal` is an `AbortSignal` that is aborted at the same moment. Pass it to
+any abort-aware API so the work itself stops:
 
 ```typescript
-cli.command("fetch <url>")
-  .action(async (ctx) => {
-    const res = await fetch(ctx.args.url as string, { signal: ctx.signal });
-    ctx.stdout.write(await res.text());
-  });
+cli.command("fetch <url>").action(async (ctx) => {
+  const res = await fetch(ctx.args.url as string, { signal: ctx.signal });
+  ctx.stdout.write(await res.text());
+});
 ```
 
-## Error Classes
+Cancellation is cooperative: aborting the signal and calling the cancel handler
+asks the command to stop, and the command is expected to do so on its own.
+Nothing forcibly unwinds a running action.
 
-| Error | Code | When |
-|-------|------|------|
-| `CommandNotFoundError` | `COMMAND_NOT_FOUND` | Unknown command |
-| `MissingArgumentError` | `MISSING_ARGUMENT` | Required arg missing |
-| `ExtraArgumentError` | `EXTRA_ARGUMENT` | Unexpected positional arg |
-| `MissingOptionError` | `MISSING_OPTION` | Required option missing |
-| `InvalidOptionError` | `INVALID_OPTION` | Wrong type or not in choices |
-| `UnknownOptionError` | `UNKNOWN_OPTION` | Unrecognized flag |
-| `ValidationError` | `VALIDATION_ERROR` | Custom validation failed |
-| `ParseError` | `PARSE_ERROR` | Unclosed quote, empty or trailing pipe, unsupported redirection operator |
-| `PromptCancelError` | `PROMPT_CANCELLED` | User cancelled prompt |
+At a terminal there is an escape hatch for a command that ignores the request: a
+second Ctrl+C terminates the process with exit status 130. That escalation
+belongs to the interrupt path only. When the signal comes from an
+`ExecOptions.signal` passed to `cli.exec()`, there is no second press and no
+forced exit — a command that ignores the abort runs to completion.
 
-All error classes extend `CLIError` which has a `code` property for programmatic handling.
+## Removing a command
+
+`remove()` unregisters a command and returns `true` when a command was found and
+removed:
+
+```typescript
+const temp = cli.command("temporary").action(runTemporary);
+temp.remove(); // true
+```
+
+Removal takes the command's whole subtree with it, including the aliases
+registered anywhere beneath it. Afterwards every other builder method on that
+builder throws `Cannot configure detached command "temporary"`, so a stale
+reference cannot silently reconfigure a command that is no longer registered.
+
+## The command lifecycle
+
+Each stage below runs only if the previous one succeeded. A failure at any stage
+skips the action and reports the error.
+
+![Command lifecycle as a left-to-right flow: raw input is tokenized, the command path is matched against the registry, positional arguments are bound, options are parsed, options are resolved, the command validator runs, the beforeExecute event is emitted, the action runs, and the afterExecute event is emitted. A failure branch leaves any stage from argument binding onwards and joins a shared path that emits commandError and then error before the error is rethrown.](../assets/command-lifecycle.svg)
+
+1. **Tokenize** — string input is split into tokens, respecting quotes. Array
+   input is already tokenized.
+2. **Match the command path** — tokens are walked against the registry, aliases
+   resolved, until no further subcommand matches.
+3. **Bind positional arguments** — leftover non-flag values are assigned to the
+   declared arguments, and required ones are checked.
+4. **Parse options** — flags are separated from positional values and grouped by
+   canonical name.
+5. **Resolve options** — conversion, defaults, required checks, `choices`, and
+   per-option `parse` and `validate` run. See [Options](options.md).
+6. **Validate** — the command's own `validate()` runs.
+7. **beforeExecute** — the event is emitted to every listener.
+8. **action** — the command's action runs.
+9. **afterExecute** — the event is emitted once the action resolves.
+
+When any stage from step 3 onwards throws, the `commandError` event fires with
+the error and the context, then the `error` event fires, and the error is
+rethrown. Events are described in
+[Events and plugins](events-and-plugins.md).
+
+### The command context
+
+Every action, validator, and cancel handler receives the same context object:
+
+| Property | Type | Description |
+|---|---|---|
+| `args` | `Record<string, unknown>` | Positional arguments by name; null-prototype |
+| `options` | `Record<string, unknown>` | Resolved options by canonical long name; null-prototype |
+| `rawInput` | `string` | The input as one string |
+| `rawArgv` | `string[] \| undefined` | The exact input elements, when the input was an array |
+| `commandPath` | `string[]` | The canonical path, for example `["db", "migrate"]` |
+| `shell` | `Shell \| null` | The interactive shell, or `null` |
+| `signal` | `AbortSignal` | Aborted when the command is cancelled |
+| `stdin` | `Readable \| null` | Input stream, or `null` when none is available |
+| `stdout` | `Writable` | Output stream |
+| `stderr` | `Writable` | Error stream |
+
+Three of these need care:
+
+- **`rawInput` is lossy.** When the CLI is started from argv — the array of
+  command-line words the operating system hands the program — `rawInput` is
+  those elements joined with single spaces, so quoting and embedded spaces are
+  no longer distinguishable. Use `rawArgv` when the exact values matter.
+  `rawArgv` is present only for array input, and is `undefined` for the string
+  input used by `cli.exec()` and by the interactive shell.
+- **`shell` is non-null only inside the interactive shell.** It is `null` in
+  direct mode and under `cli.exec()`.
+- **`stdin` depends on the surface.** In direct mode it is `process.stdin`; for a
+  stage in a pipeline it is the upstream stage's output; in the interactive
+  shell, for a command that is not part of a pipeline, it is `null`.
+
+Both `args` and `options` are null-prototype objects. Use
+`Object.hasOwn(ctx.options, "force")` rather than
+`ctx.options.hasOwnProperty("force")`, which throws.
+
+## Built-in help and `--version`
+
+Help is available without declaring anything.
+
+`-h` and `--help` are recognized at any position among a command's arguments,
+including inside a cluster of short flags such as `-vh`, and print that
+command's page:
+
+```bash
+$ myapp deploy --help
+Usage: deploy <env> [options]
+```
+
+Required arguments are not checked when help is requested, so
+`myapp deploy --help` works even though `<env>` was not supplied.
+
+A bare `--help` or `-h` as the only token prints the index of all commands.
+
+These flags stop working on a command that declares an option named `help` or
+aliased `h`. That is intentional: an application flag always wins. Help output
+and tab completion adapt automatically, advertising only the forms that still
+trigger help.
+
+`--version` and `-V` print the version string, but only when they are the sole
+token and only when `version` was passed to `createCLI`. There is no `-v` short
+form; `-v` is free for the application to use.
+
+```typescript
+const cli = createCLI({ name: "myapp", version: "1.0.0" });
+// myapp --version  → 1.0.0
+// myapp -V         → 1.0.0
+```
+
+`help` is also an ordinary registered command, declared as `help [...command]`.
+`myapp help db migrate` prints the page for `db migrate`, and an unresolvable
+target reports `CommandNotFoundError`. Because it is a normal command, it appears
+in the help index like any other, sorted last.
+
+## Related pages
+
+- [Options](options.md) — flags, types, defaults, and the input forms they accept
+- [Errors](errors.md) — the error classes raised by dispatch and validation
+- [Events and plugins](events-and-plugins.md) — lifecycle events, `cli.catch()`, and plugins
+- [Interactive shell](interactive-shell.md) — the REPL, pipes, and tab completion
+- [API reference](api-reference.md) — full signatures
