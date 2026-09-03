@@ -649,7 +649,9 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 ### プロンプト共通の型
 
 各プロンプトのオプション型はいずれも `PromptBaseOptions<T>` を継承する。
-`validate` / `required` / `prefix` / `stdin` / `stdout` / `stderr` / `signal` を持つ。
+`validate` / `required` / `prefix` / `stdin` / `stdout` / `signal` を持つ。
+`stderr` は `PasswordOptions` にのみ存在する。キャプチャされた `stdout` から
+出力先を切り替えるのは password プロンプトだけであるため。
 
 `SelectChoice<T>` は選択肢のオブジェクト形式（`{ label, value, hint? }`）、
 `Choice<T>` は素の値または `SelectChoice<T>` のいずれかを表す。

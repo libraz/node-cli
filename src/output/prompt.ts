@@ -26,8 +26,6 @@ export interface PromptBaseOptions<T = unknown> {
   prefix?: string;
   /** Writable stream for output. Defaults to process.stdout. */
   stdout?: Writable;
-  /** Writable stream for interactive prompts when stdout is redirected. Defaults to process.stderr. */
-  stderr?: Writable;
   /** Readable stream for input. Defaults to process.stdin. */
   stdin?: Readable;
   /** Cancels the pending prompt when aborted. */
@@ -90,6 +88,12 @@ export interface MultiselectOptions<T> extends PromptBaseOptions<T[]> {
 export interface PasswordOptions extends PromptBaseOptions<string> {
   /** Whether to trim leading/trailing whitespace. Defaults to false. */
   trim?: boolean;
+  /**
+   * Where the question and the masked entry go when input is a terminal but
+   * `stdout` is redirected, so a captured stdout never receives the secret.
+   * Defaults to process.stderr. Only the password prompt redirects this way.
+   */
+  stderr?: Writable;
 }
 
 /**
@@ -223,7 +227,12 @@ function createCancelableRl(
   }
   activePromptInputs.add(input);
   const output = stdout ?? process.stdout;
-  const terminal = terminalOverride ?? (streamIsTTY(input) && streamIsTTY(output));
+  // Terminal mode follows the input alone. Readline's own SIGINT hook and
+  // character-level editing exist only in that mode, so deciding it from the
+  // output too meant `mycli init | tee log` silently downgraded a prompt on a
+  // real terminal: Ctrl-C killed the process instead of raising
+  // PromptCancelError, and arrow keys arrived as raw escape sequences.
+  const terminal = terminalOverride ?? streamIsTTY(input);
   const rl = createInterface({
     input,
     output,

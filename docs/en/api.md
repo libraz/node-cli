@@ -652,7 +652,9 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 ### Shared prompt types
 
 Every prompt option type extends `PromptBaseOptions<T>`, which carries
-`validate`, `required`, `prefix`, `stdin`, `stdout`, `stderr` and `signal`.
+`validate`, `required`, `prefix`, `stdin`, `stdout` and `signal`. `stderr` lives
+on `PasswordOptions` alone, since the password prompt is the only one that
+redirects away from a captured `stdout`.
 
 `SelectChoice<T>` is the object form of a choice — `{ label, value, hint? }` —
 and `Choice<T>` is either a bare value or a `SelectChoice<T>`. `prompt.select`
