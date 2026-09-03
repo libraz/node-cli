@@ -421,6 +421,37 @@ raise SystemExit(child.returncode)
     expect(output).toContain("EXIT_EVENT_LAST");
   });
 
+  it("cancels every concurrent execution on a single interrupt", async () => {
+    const child = spawn(process.execPath, [resolve("tests/fixtures/concurrent-sigint-child.mjs")], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+
+    try {
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 8_000);
+      const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
+      clearTimeout(timeout);
+      // Not 130: the first press requests cooperative cancellation, it is not a
+      // force quit just because a second execution also saw the signal.
+      expect({ code, signal }).toEqual({ code: 0, signal: null });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+
+    expect(output).toContain("CANCELLED first");
+    expect(output).toContain("CANCELLED second");
+    expect(output).toContain("BOTH_SETTLED");
+    // The hint belongs to the interrupt, not to each listener that saw it.
+    expect(output.match(/Press Ctrl-C again to force quit/g) ?? []).toHaveLength(1);
+  });
+
   it("runs every exit listener when a programmatic execution is force-quit", async () => {
     const child = spawn(process.execPath, [resolve("tests/fixtures/exec-force-quit-child.mjs")], {
       stdio: ["ignore", "pipe", "pipe"],

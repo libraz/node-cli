@@ -79,6 +79,16 @@ export class CommandRouter {
   private readonly stderrContext = new AsyncLocalStorage<Writable>();
 
   /**
+   * How many SIGINT scopes are open, and when the current one's cooperative
+   * cancel was requested (0 when none is). Both are per router rather than per
+   * scope: a single SIGINT reaches every scope's listener, and a cancel that one
+   * scope delivers aborts every active command, so a sibling scope must not read
+   * its own untouched flag as "the interrupt did nothing" and force-quit.
+   */
+  private sigintScopes = 0;
+  private sigintRequestedAt = 0;
+
+  /**
    * Creates a new CommandRouter.
    *
    * @param registry - The command registry used to look up command definitions.
@@ -304,8 +314,8 @@ export class CommandRouter {
     // it means the first interrupt clearly did not stop the command.
     const FORCE_QUIT_GRACE_MS = 250;
     let interruptRequested = false;
-    let firstInterruptAt = 0;
     let forced = false;
+    this.sigintScopes++;
 
     // Upper bound on force-quit cleanup. Awaiting `onForceQuit` is what lets
     // every `exit` listener run before the process dies, but a listener that
@@ -331,16 +341,24 @@ export class CommandRouter {
     };
 
     const onSigint = () => {
-      if (interruptRequested) {
-        // A cancellation was already requested. If enough time has passed that the
-        // command clearly ignored it, escalate to a hard exit; otherwise coalesce.
-        if (Date.now() - firstInterruptAt >= FORCE_QUIT_GRACE_MS) forceQuit();
+      if (this.sigintRequestedAt !== 0) {
+        // If enough time has passed that the command clearly ignored the
+        // cooperative cancel, escalate to a hard exit.
+        if (Date.now() - this.sigintRequestedAt >= FORCE_QUIT_GRACE_MS) {
+          forceQuit();
+          return;
+        }
+        // Still inside the window: either a repeat press mid-cleanup, or another
+        // concurrent scope reacting to the same delivery. Either way the cancel
+        // that scope requested aborted every active command, this one included,
+        // so record the interrupt here too rather than coalescing it away.
+        interruptRequested = true;
         return;
       }
       const newlyCancelled = interrupt();
       if (newlyCancelled) {
         interruptRequested = true;
-        firstInterruptAt = Date.now();
+        this.sigintRequestedAt = Date.now();
         writeThrough(hintStream, "\nInterrupted. Press Ctrl-C again to force quit.\n");
       } else {
         // Nothing was running to cancel; fall back to default termination.
@@ -357,6 +375,10 @@ export class CommandRouter {
       return interruptRequested;
     } finally {
       process.removeListener("SIGINT", onSigint);
+      // The interrupt state spans concurrent scopes, so it only resets once the
+      // last of them is gone; otherwise a scope that finishes early would let
+      // the next press of the same burst force-quit its still-running sibling.
+      if (--this.sigintScopes === 0) this.sigintRequestedAt = 0;
     }
   }
 
