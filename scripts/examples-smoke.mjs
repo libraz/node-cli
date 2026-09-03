@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, resolve } from "node:path";
 
@@ -10,7 +10,62 @@ function run(command, args, options = {}) {
       `${command} ${args.join(" ")} failed\n${result.stdout ?? ""}${result.stderr ?? ""}`,
     );
   }
-  return result.stdout;
+  return result;
+}
+
+/**
+ * Splits a shell-style command line into argv, honouring quotes. The documented
+ * invocations are plain enough that this needs no expansion or substitution.
+ */
+function splitArgv(line) {
+  const argv = [];
+  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match = pattern.exec(line);
+  while (match) {
+    argv.push(match[1] ?? match[2] ?? match[3]);
+    match = pattern.exec(line);
+  }
+  return argv;
+}
+
+/**
+ * Every shell command line the project publishes for the examples: the `Usage:`
+ * header of each example plus the bash fences in examples/README.md. Placeholder
+ * lines and REPL transcripts (which carry a prompt prefix) are not invocations.
+ */
+async function documentedInvocations(examples, readmePath) {
+  const lines = [];
+  for (const example of examples) {
+    const source = await readFile(example, "utf8");
+    const usage = source.match(/^ \* Usage:\n((?: \* {3}.*\n)+)/m);
+    if (!usage) continue;
+    for (const raw of usage[1].split("\n")) {
+      const text = raw.replace(/^ \*\s{0,3}/, "").trim();
+      if (text) lines.push(text);
+    }
+  }
+  const readme = await readFile(readmePath, "utf8");
+  for (const fence of readme.matchAll(/```bash\n([\s\S]*?)```/g)) {
+    for (const raw of fence[1].split("\n")) {
+      const text = raw.trim();
+      if (text) lines.push(text);
+    }
+  }
+
+  const seen = new Set();
+  const invocations = [];
+  for (const line of lines) {
+    // Drop the trailing prose comment; what precedes it is still a real command.
+    const command = line.replace(/\s+#.*$/, "").trim();
+    if (!command.startsWith("npx tsx examples/")) continue;
+    // A placeholder, not something that can be run.
+    if (command.includes("<filename>")) continue;
+    if (seen.has(command)) continue;
+    seen.add(command);
+    const argv = splitArgv(command).slice(2);
+    invocations.push({ command, script: argv[0], args: argv.slice(1) });
+  }
+  return invocations;
 }
 
 const root = process.cwd();
@@ -44,7 +99,7 @@ try {
     ],
     { cwd: root },
   );
-  const stdout = run(
+  const { stdout } = run(
     process.execPath,
     [resolve(output, "examples/01-minimal.js"), "greet", "World"],
     { cwd: root },
@@ -55,9 +110,25 @@ try {
     const help = run(process.execPath, [resolve(output, "examples", name), "--help"], {
       cwd: root,
     });
-    if (help.includes("Error:")) throw new Error(`${name} printed an error for --help`);
+    if (help.stdout.includes("Error:")) throw new Error(`${name} printed an error for --help`);
   }
-  process.stdout.write("Example smoke passed\n");
+
+  // Every invocation the project tells users to run has to actually run.
+  const invocations = await documentedInvocations(examples, resolve(root, "examples/README.md"));
+  if (invocations.length === 0) throw new Error("No documented example invocations were found");
+  for (const { command, script, args } of invocations) {
+    const compiled = resolve(output, script.replace(/\.ts$/, ".js"));
+    const result = run(process.execPath, [compiled, ...args], {
+      cwd: root,
+      // Closed stdin: a documented invocation must not depend on a terminal.
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.stderr.includes("Error:")) {
+      throw new Error(`${command} printed an error:\n${result.stderr}`);
+    }
+  }
+
+  process.stdout.write(`Example smoke passed (${invocations.length} documented invocations)\n`);
 } finally {
   await rm(output, { recursive: true, force: true });
 }
