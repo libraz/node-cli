@@ -1,6 +1,7 @@
 import type { Writable } from "node:stream";
 import { format } from "node:util";
 import { createColorizer, isColorEnabled, sanitizeTerminalText } from "./color.js";
+import { writeThrough } from "./region.js";
 
 // ── Types ──
 
@@ -169,7 +170,7 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
     backpressured = false;
     while (bufferedLines.length > 0) {
       const line = bufferedLines.shift() as string;
-      if (!stream.write(line)) {
+      if (!writeThrough(stream, line)) {
         backpressured = true;
         waitForDrain();
         return;
@@ -186,7 +187,9 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
       bufferedLines.push(line);
       return;
     }
-    if (!stream.write(line)) {
+    // A progress renderer may own this stream's current line; go through the
+    // arbiter so the log line lands on a clean row and the renderer redraws.
+    if (!writeThrough(stream, line)) {
       backpressured = true;
       waitForDrain();
     }

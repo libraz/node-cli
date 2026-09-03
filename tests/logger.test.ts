@@ -2,7 +2,8 @@ import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetColorEnabled, setColorEnabled } from "../src/output/color.js";
 import { logger } from "../src/output/logger.js";
-import { createMockStdout } from "./helpers.js";
+import { progress, restoreCursor } from "../src/output/progress.js";
+import { createMockStdout, createMockTTY } from "./helpers.js";
 
 describe("logger", () => {
   beforeEach(() => setColorEnabled(false));
@@ -238,4 +239,75 @@ describe("logger", () => {
       await expect(flushed).rejects.toThrow(terminalEvent === "error" ? "disk failed" : "closed");
     },
   );
+});
+
+/**
+ * Replays the carriage returns, line erases and newlines a single-line renderer
+ * emits, yielding what each terminal row finally shows.
+ */
+function renderRows(output: string): string[] {
+  const rows: string[] = [""];
+  let column = 0;
+  for (let i = 0; i < output.length; i++) {
+    if (output.startsWith("\x1b[K", i)) {
+      rows[rows.length - 1] = rows[rows.length - 1].slice(0, column);
+      i += 2;
+      continue;
+    }
+    const ch = output[i];
+    if (ch === "\n") {
+      rows.push("");
+      column = 0;
+    } else if (ch === "\r") {
+      column = 0;
+    } else {
+      const row = rows[rows.length - 1].padEnd(column, " ");
+      rows[rows.length - 1] = row.slice(0, column) + ch + row.slice(column + 1);
+      column++;
+    }
+  }
+  return rows;
+}
+
+describe("logging beside an active progress renderer", () => {
+  beforeEach(() => setColorEnabled(false));
+  afterEach(() => {
+    restoreCursor();
+    resetColorEnabled();
+  });
+
+  it("emits the log line on a cleared row and lets the renderer redraw", () => {
+    restoreCursor();
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ label: "working", stream });
+    const log = logger({ stream, timestamp: false });
+    spinner.start();
+    const before = stream.getOutput().length;
+
+    log.info("hello");
+    const written = stream.getOutput().slice(before);
+    spinner.stop();
+
+    // The row the spinner owns is erased before the log line is written, so the
+    // two never share a row in the terminal's scrollback.
+    expect(written.startsWith("\r\x1b[K")).toBe(true);
+    const logEnd = written.indexOf("hello\n") + "hello\n".length;
+    expect(logEnd).toBeGreaterThan(0);
+    // ... and the renderer redraws itself below the log line.
+    expect(written.slice(logEnd)).toContain("working");
+
+    // Interpreting the control sequences (rather than splitting the raw buffer)
+    // is what distinguishes "the log overwrote the frame" from "the log was
+    // appended to a live frame and the two merged".
+    for (const row of renderRows(stream.getOutput())) {
+      expect(row.includes("hello") && row.includes("working")).toBe(false);
+    }
+  });
+
+  it("writes straight through when no renderer owns the stream", () => {
+    const stream = createMockTTY();
+    logger({ stream, timestamp: false }).info("hello");
+    expect(stream.getOutput().startsWith("\r\x1b[K")).toBe(false);
+    expect(stream.getOutput()).toContain("hello");
+  });
 });

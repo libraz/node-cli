@@ -1,5 +1,6 @@
 import type { Writable } from "node:stream";
 import { createColorizer, sanitizeTerminalText, streamIsTTY, stringWidth } from "./color.js";
+import { type RegionOwner, setRegionOwner } from "./region.js";
 
 // ── Progress Bar ──
 
@@ -311,7 +312,7 @@ function acquireTerminal(stream: Writable): () => void {
  * region. Multiple standalone renderers cannot infer one another's row layout;
  * callers that need concurrent bars should use progress.multi().
  */
-function acquireVisualTerminal(stream: Writable, owner: symbol): () => void {
+function acquireVisualTerminal(stream: Writable, owner: symbol, region: RegionOwner): () => void {
   if (!streamIsTTY(stream)) return () => {};
   const currentOwner = visualOwners.get(stream);
   if (currentOwner && currentOwner !== owner) {
@@ -320,12 +321,18 @@ function acquireVisualTerminal(stream: Writable, owner: symbol): () => void {
     );
   }
   visualOwners.set(stream, owner);
+  // Publish how this renderer steps aside, so a logger or diagnostic writing to
+  // the same stream cannot splice its output into a half-drawn frame.
+  setRegionOwner(stream, region);
   const releaseCursor = acquireTerminal(stream);
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    if (visualOwners.get(stream) === owner) visualOwners.delete(stream);
+    if (visualOwners.get(stream) === owner) {
+      visualOwners.delete(stream);
+      setRegionOwner(stream, null);
+    }
     releaseCursor();
   };
 }
@@ -430,7 +437,14 @@ function createBar(options: BarOptions): Bar {
   function render(final = false): void {
     if (!tty) return;
     if (!started) {
-      releaseTerminal = acquireVisualTerminal(stream, visualOwner);
+      releaseTerminal = acquireVisualTerminal(stream, visualOwner, {
+        clear: () => {
+          const frame = clearStandaloneFrame(renderedRows);
+          renderedRows = 0;
+          return frame;
+        },
+        redraw: () => render(),
+      });
       started = true;
       activeIndicators.add(stop);
       unregister = () => activeIndicators.delete(stop);
@@ -584,7 +598,10 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   return {
     start() {
       if (timer || done) return;
-      releaseTerminal = acquireVisualTerminal(stream, visualOwner);
+      releaseTerminal = acquireVisualTerminal(stream, visualOwner, {
+        clear: () => (rendered ? "\r\x1b[K" : ""),
+        redraw: () => render(),
+      });
       activeIndicators.add(stop);
       unregister = () => activeIndicators.delete(stop);
       render();
@@ -652,7 +669,17 @@ function createMultiBar(): MultiBar {
 
   function startTerminalSession(): void {
     if (releaseTerminal || !streamIsTTY(stream)) return;
-    releaseTerminal = acquireVisualTerminal(stream, visualOwner);
+    releaseTerminal = acquireVisualTerminal(stream, visualOwner, {
+      clear: () => {
+        if (renderedRows <= 0) return "";
+        let frame = `\x1b[${renderedRows}A`;
+        for (let row = 0; row < renderedRows; row++) frame += "\r\x1b[K\x1b[1B";
+        frame += `\x1b[${renderedRows}A\r`;
+        renderedRows = 0;
+        return frame;
+      },
+      redraw: () => renderAll(),
+    });
     activeIndicators.add(stop);
     unregister = () => activeIndicators.delete(stop);
   }

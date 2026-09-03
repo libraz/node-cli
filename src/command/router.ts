@@ -12,6 +12,7 @@ import {
 import { formatUsage, type HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
 import { releaseAll, restoreCursor } from "../output/progress.js";
+import { writeThrough } from "../output/region.js";
 import type { Shell } from "../shell/repl.js";
 import type { CatchContext, CLIEventMap, CommandContext, CommandDefinition } from "../types.js";
 import { parse, splitPipes, tokenize } from "./parser.js";
@@ -329,7 +330,7 @@ export class CommandRouter {
       if (newlyCancelled) {
         interruptRequested = true;
         firstInterruptAt = Date.now();
-        hintStream.write("\nInterrupted. Press Ctrl-C again to force quit.\n");
+        writeThrough(hintStream, "\nInterrupted. Press Ctrl-C again to force quit.\n");
       } else {
         // Nothing was running to cancel; fall back to default termination.
         forceQuit();
