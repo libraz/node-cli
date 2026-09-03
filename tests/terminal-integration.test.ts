@@ -315,6 +315,78 @@ raise SystemExit(child.returncode)
     expect(child.stdout).not.toContain("secret");
   });
 
+  it("keeps the password label readable across a redraw", () => {
+    const redrawHarness = `
+import os, select, subprocess, sys, time
+master, slave = os.openpty()
+try:
+    child = subprocess.Popen(sys.argv[1:], stdin=slave, stdout=slave, stderr=slave)
+finally:
+    os.close(slave)
+screen = b""
+os.set_blocking(master, False)
+
+def drain():
+    global screen
+    try:
+        chunk = os.read(master, 4096)
+    except OSError:
+        return
+    if chunk:
+        screen += chunk
+
+deadline = time.time() + 5
+while b"Password:" not in screen and time.time() < deadline:
+    select.select([master], [], [], 0.05)
+    drain()
+if b"Password:" not in screen:
+    child.kill()
+    raise SystemExit("password prompt did not appear")
+os.write(master, b"secret")
+time.sleep(0.3)
+drain()
+before_edit = len(screen)
+# Two backspaces make readline redraw the whole line, label included.
+os.write(master, b"\\x7f\\x7f")
+time.sleep(0.3)
+drain()
+after_edit = screen[before_edit:]
+os.write(master, b"t\\n")
+deadline = time.time() + 5
+while child.poll() is None and time.time() < deadline:
+    select.select([master], [], [], 0.05)
+    drain()
+if child.poll() is None:
+    child.kill()
+    raise SystemExit("child did not exit")
+drain()
+status = child.returncode
+os.close(master)
+sys.stdout.buffer.write(screen)
+sys.stdout.buffer.write(b"\\n---REDRAW---\\n")
+sys.stdout.buffer.write(after_edit)
+raise SystemExit(status)
+`;
+    const child = spawnSync(
+      "python3",
+      [
+        "-c",
+        redrawHarness,
+        process.execPath,
+        resolve("tests/fixtures/tty-password-redraw-child.mjs"),
+      ],
+      { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" }, timeout: 10_000 },
+    );
+
+    expect(child.status, child.stderr || child.stdout).toBe(0);
+    expect(child.stdout).toContain("PASSWORD_OK");
+    const redraw = child.stdout.split("---REDRAW---")[1] ?? "";
+    // The redraw rewrote the line: the label must come back as readable text
+    // rather than a run of asterisks, and the typed value must stay masked.
+    expect(redraw).toContain("Password:");
+    expect(redraw).not.toContain("secret");
+  });
+
   it("isolates mode history and restores its in-memory entries", async () => {
     const child = spawn(
       "python3",

@@ -711,6 +711,12 @@ async function password(message: string, options: PasswordOptions = {}): Promise
   // it is masked. Previously the label was masked into asterisks on every redraw.
   let promptQuery = "";
   let promptRendered = false;
+  // Readline sends the escape sequences that reposition the cursor in a write()
+  // of their own, then rewrites the label and the line in the next one. Without
+  // remembering that the first chunk arrived, the second looks untrustworthy and
+  // the label is masked into asterisks on every backspace, arrow key, wrap and
+  // validation retry.
+  let refreshing = false;
   const maskingOutput = new Writable({
     write(chunk: string | Buffer, _encoding, callback) {
       const text = typeof chunk === "string" ? chunk : chunk.toString();
@@ -719,18 +725,36 @@ async function password(message: string, options: PasswordOptions = {}): Promise
         callback();
         return;
       }
+      const hasVisibleText = (value: string) =>
+        splitAnsi(value).some(
+          (segment) =>
+            !segment.ansi &&
+            [...segment.text].some(
+              (character) => !isControlCode(character.codePointAt(0) as number),
+            ),
+        );
+
+      // A chunk with nothing visible in it is readline preparing to redraw, so
+      // the label that arrives next is still the one we rendered. Masking it is
+      // a no-op (escapes and line breaks pass through) but the flag matters.
+      if (!hasVisibleText(text)) {
+        refreshing = true;
+        promptOutput.write(maskInput(text));
+        callback();
+        return;
+      }
+
       // If this chunk carries the prompt label, everything up to and including it
       // is passed through verbatim; only the user's input after it is masked.
       const idx = promptQuery ? text.indexOf(promptQuery) : -1;
-      const prefixSegments = idx === -1 ? [] : splitAnsi(text.slice(0, idx));
-      const prefixHasVisibleText = prefixSegments.some(
-        (segment) =>
-          !segment.ansi &&
-          [...segment.text].some((character) => !isControlCode(character.codePointAt(0) as number)),
-      );
-      const prefixHasTerminalEscape = prefixSegments.some((segment) => segment.ansi);
+      const prefix = idx === -1 ? "" : text.slice(0, idx);
+      const prefixHasVisibleText = hasVisibleText(prefix);
+      const prefixHasTerminalEscape = splitAnsi(prefix).some((segment) => segment.ansi);
       const trustedPrompt =
-        idx !== -1 && !prefixHasVisibleText && (!promptRendered || prefixHasTerminalEscape);
+        idx !== -1 &&
+        !prefixHasVisibleText &&
+        (!promptRendered || prefixHasTerminalEscape || refreshing);
+      refreshing = false;
       if (trustedPrompt) {
         const boundary = idx + promptQuery.length;
         promptRendered = true;

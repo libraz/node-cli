@@ -570,7 +570,9 @@ describe("borderless and simple modes honour every table option", () => {
       border: "simple",
       style: { border: "red" },
     });
-    expect(out).toMatch(/\x1b\[31m-+\x1b\[39m/);
+    const separator = out.split("\n")[1];
+    expect(separator.startsWith("\x1b[31m")).toBe(true);
+    expect(separator.endsWith("\x1b[39m")).toBe(true);
   });
 
   it("separates data rows of a simple table when not compact", () => {
