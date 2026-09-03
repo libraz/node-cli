@@ -5,6 +5,73 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-09-03
+
+A corrective release. No public API was added, removed, or renamed. Where two
+shipped surfaces disagreed, or where behavior contradicted its documented
+contract, the implementation was moved to match; several crash, hang, and
+lost-input paths are closed.
+
+### Changed
+
+- The generated help and the completion candidates list only what dispatch can
+  actually reach, and both advertise the shell built-ins `exit` and `quit` in
+  the same place. A command registered under one of those names takes
+  precedence over the built-in.
+- A flag token resolves to the same option on every surface. Long aliases such
+  as `--loud` parse, and help and completion advertise them with two dashes;
+  `-h` and `--help` are advertised as the built-in help only when no declared
+  option has claimed them.
+- The borderless and simple table layouts honor padding, border color, and
+  compact spacing, which previously applied to the boxed layout only.
+- Progress and table options are normalized through a single path, so a
+  multi-bar total, a `colWidths` entry below the padding width, and a column
+  keyed `constructor` or `toString` behave as documented.
+- Caller-supplied text is sanitized where it reaches the terminal, covering
+  bar characters, spinner frames, table borders and truncation markers, help
+  text, and prompt messages.
+- `logger()` accepts only its documented options, and a rejected numeric option
+  value reports whether it failed the declared range or the safe integer bound.
+- The toolchain moves to the native TypeScript build; Biome, Vitest, and the
+  pinned Node.js, Yarn, and npm versions are updated with it.
+
+### Fixed
+
+- The first Ctrl-C during concurrent command execution cancels the running
+  commands instead of terminating the process.
+- Every registered `exit` listener runs to completion before a forced quit
+  terminates, including on the direct execution entry point.
+- An empty-string argument keeps its position in direct argv mode instead of
+  being dropped and shifting the arguments after it.
+- A rejected asynchronous cancel handler no longer terminates the process, a
+  prompt opened after stdin has ended no longer hangs, and a non-string value
+  passed to the logger no longer throws.
+- The completion deadline applies to every user-supplied provider, so a
+  provider that never settles can no longer freeze the shell.
+- Completion replaces the word the terminal actually holds, so a candidate
+  inserted after a quote, a backslash, or a pipe no longer corrupts the line.
+- A password prompt keeps its label readable while the value is being edited.
+- A prompt decides its terminal mode from the input stream alone, so Ctrl-C is
+  handled when stdin is a TTY and stdout is redirected. The `stderr` option is
+  accepted where it applies, on password prompts.
+- Leaving a mode always returns to the top level, input typed before a command
+  finished is redisplayed afterwards, and a closed stdin is not reopened.
+- With color disabled, an interpolated `c` template no longer emits escape
+  sequences, and sanitizing multi-line text preserves line and word boundaries
+  instead of joining words together.
+- A color chain responds to runtime protocol properties such as `then` and
+  `toString` instead of throwing.
+- A cursor-restoration handler is registered per signal, so an unrelated
+  listener on one signal no longer disables restoration for the others.
+- Log lines no longer merge into the line a live progress frame is drawing.
+- Colon-separated SGR colors are recognized when closing terminal state, and
+  wide status emoji are measured as two columns.
+- Interactive history reports a permanently failing save once instead of on
+  every command.
+- A released progress indicator that never drew writes nothing, and adding a
+  bar after the group is closed returns an inert handle.
+- The published tarball ships a single README.
+
 ## [1.4.0] - 2026-08-05
 
 New public API for controlling help visibility, history size, and parse
@@ -376,6 +443,7 @@ These correct previously buggy behavior and may be observable:
 Initial public feature set: interactive shell, subcommands, tab completion,
 color, tables, progress, prompts, logger, events, plugins, and pipes.
 
+[1.4.1]: https://github.com/libraz/node-cli/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/libraz/node-cli/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/libraz/node-cli/compare/v1.3.2...v1.3.3
 [1.3.2]: https://github.com/libraz/node-cli/compare/v1.3.1...v1.3.2
