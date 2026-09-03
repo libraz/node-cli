@@ -302,8 +302,10 @@ export class Shell {
       const line = await this.readNextLine();
       if (line === null) {
         // EOF (Ctrl-D). Inside a mode sub-REPL, leave the mode and return to the
-        // parent prompt rather than terminating the whole shell.
-        if (this.mode) {
+        // parent prompt rather than terminating the whole shell — unless the
+        // input stream itself has ended, in which case a reopened readline would
+        // never receive another close event and the shell would hang forever.
+        if (this.mode && !process.stdin.readableEnded) {
           this.exitMode();
           this.openReadline(this.history.entries());
           continue;
@@ -317,17 +319,22 @@ export class Shell {
         continue;
       }
 
-      if (isShellCommand(trimmed) && !this.registry.resolve([trimmed])) {
+      if (isShellCommand(trimmed)) {
+        // Inside a mode, exit always leaves the mode: a mode does not dispatch
+        // through the registry, so an application command of the same name is
+        // unreachable there and honouring it would strand the user in the mode.
         if (this.mode) {
           this.exitMode();
           this.reopeningReadline = true;
           this.rl?.close();
           this.reopeningReadline = false;
           this.rl = undefined;
+          if (process.stdin.readableEnded) break;
           this.openReadline(this.history.entries());
           continue;
         }
-        break;
+        // At the top level an application command of the same name wins.
+        if (!this.registry.resolve([trimmed])) break;
       }
 
       // Close readline to fully release stdin before command execution AND before

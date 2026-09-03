@@ -546,3 +546,63 @@ describe("mode command", () => {
     expect(stderr.getOutput()).toContain("Press Ctrl-C again to force quit");
   });
 });
+
+describe("leaving a mode when the app registers its own exit command", () => {
+  it("always returns to the parent prompt", async () => {
+    const historyFixture = await createHistoryFixture();
+    const originalStdin = process.stdin;
+    const originalStdout = process.stdout;
+    const originalStderr = process.stderr;
+    const stdin = new PassThrough();
+    const stdout = createMockTTY();
+    const stderr = createMockTTY();
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const seen: string[] = [];
+
+    // A mode does not dispatch through the registry, so an application command
+    // named "exit" is unreachable inside it and must not shadow the way out.
+    new CommandBuilder(registry, "exit").action(() => {
+      seen.push("app-exit");
+    });
+    new CommandBuilder(registry, "sql").action((ctx) => {
+      ctx.shell?.enterMode({
+        prompt: "sql> ",
+        action(input) {
+          seen.push(`mode:${input}`);
+        },
+      });
+    });
+
+    const shell = new Shell({
+      router,
+      registry,
+      prompt: "app> ",
+      banner: "",
+      historyFile: historyFixture.filePath,
+    });
+
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
+    Object.defineProperty(process, "stdout", { configurable: true, value: stdout });
+    Object.defineProperty(process, "stderr", { configurable: true, value: stderr });
+
+    try {
+      const sigintListeners = process.listenerCount("SIGINT");
+      const running = shell.start();
+      await vi.waitFor(() =>
+        expect(process.listenerCount("SIGINT")).toBeGreaterThan(sigintListeners),
+      );
+      feedLines(stdin, ["sql", "select 1", "exit", "exit"]);
+      await expect(running).resolves.toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "stdin", { configurable: true, value: originalStdin });
+      Object.defineProperty(process, "stdout", { configurable: true, value: originalStdout });
+      Object.defineProperty(process, "stderr", { configurable: true, value: originalStderr });
+      await historyFixture.cleanup();
+    }
+
+    // The first "exit" left the mode; the second ran the application command at
+    // the top level, where it does take precedence.
+    expect(seen).toEqual(["mode:select 1", "app-exit"]);
+  });
+});
