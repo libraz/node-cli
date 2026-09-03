@@ -2,6 +2,9 @@
 
 Each example demonstrates a different use case for `@libraz/node-cli`.
 
+The [Examples](../docs/en/examples.md) documentation page walks through the same
+material as task-oriented recipes, each with its expected output.
+
 ## Running
 
 ```bash

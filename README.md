@@ -4,39 +4,32 @@
 [![npm](https://img.shields.io/npm/v/@libraz/node-cli)](https://www.npmjs.com/package/@libraz/node-cli)
 [![codecov](https://codecov.io/gh/libraz/node-cli/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/node-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/libraz/node-cli/blob/main/LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-6-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=node.js)](https://nodejs.org/)
 
 Zero-dependency, batteries-included CLI framework for Node.js / TypeScript.
 
 ![Interactive shell session: launching the CLI, running a deploy command, a progress bar filling, and a spinner resolving to a success line](docs/assets/demo.svg)
 
-## Overview
+Define a command once and it works two ways: as `myapp deploy prod` typed at a shell, and as `deploy prod` typed at your tool's own interactive prompt. Around that sit the parts a command-line tool usually needs — options, subcommands, tab completion, colour, tables, progress bars, prompts and a logger — with no runtime dependencies to install.
 
-**node-cli** is a lightweight interactive CLI shell framework that provides everything you need to build rich command-line applications — with no external production dependencies.
+## What you get
 
-| Capability | Availability |
-|------------|--------------|
-| Interactive shell, subcommands, and tab completion | Built in |
-| Color, tables, progress indicators, prompts, and logging | Built in |
-| Pipes, plugins, and lifecycle events | Built in |
-| Production dependencies | None |
-| TypeScript and ESM | First-class support |
+- Commands, subcommands, aliases, and typed options with defaults, choices and validation
+- An interactive shell with persistent history, tab completion, pipes, and mode sub-REPLs
+- Colour, tables, progress bars, spinners, prompts and a logger, each usable on its own
+- Lifecycle events and plugins for cross-cutting behaviour
+- TypeScript and ESM first, no production dependencies
 
-## Installation
+## Install
+
+Node.js 22 or later, ESM only.
 
 ```bash
-# npm
 npm install @libraz/node-cli
-
-# yarn
-yarn add @libraz/node-cli
-
-# pnpm
-pnpm add @libraz/node-cli
 ```
 
-## Quick Start
+## Quick start
 
 ```typescript
 #!/usr/bin/env node
@@ -50,52 +43,20 @@ cli
   .option("-u, --uppercase", { type: "boolean" })
   .action((ctx) => {
     const name = ctx.args.name as string;
-    const msg = ctx.options.uppercase ? name.toUpperCase() : name;
-    ctx.stdout.write(`Hello, ${msg}!\n`);
+    ctx.stdout.write(`Hello, ${ctx.options.uppercase ? name.toUpperCase() : name}!\n`);
   });
 
 await cli.start();
 ```
 
-Save this as `src/cli.ts`, then use a minimal ESM package setup:
-
-```json
-{
-  "type": "module",
-  "bin": { "myapp": "dist/cli.js" },
-  "scripts": { "build": "tsc", "start": "node dist/cli.js" },
-  "dependencies": { "@libraz/node-cli": "^1" },
-  "devDependencies": { "@types/node": "^22", "typescript": "^6" }
-}
-```
-
-Add a `tsconfig.json`. `types: ["node"]` is required: the published type declarations reference `NodeJS` and `node:stream`, so a build without it fails to resolve them.
-
-```json
-{
-  "compilerOptions": {
-    "target": "ES2023",
-    "module": "Node16",
-    "moduleResolution": "Node16",
-    "outDir": "dist",
-    "rootDir": "src",
-    "strict": true,
-    "types": ["node"]
-  },
-  "include": ["src"]
-}
-```
-
-Run `npm run build`, run `chmod +x dist/cli.js` on POSIX, and use `npm link` (or install the package) to make `$ myapp` available.
-
-**Direct mode:**
+Run it with arguments and it executes one command and exits:
 
 ```bash
 $ myapp greet World --uppercase
 Hello, WORLD!
 ```
 
-**Interactive shell mode:**
+Run it with none, from a terminal, and the same command is available at an interactive prompt:
 
 ```bash
 $ myapp
@@ -105,173 +66,30 @@ Hello, World!
 > exit
 ```
 
-## Features
-
-### Command System
-
-Fluent API for defining commands with arguments, options, aliases, validation, and subcommands.
-
-```typescript
-cli
-  .command("deploy <env>")
-  .alias("d")
-  .description("Deploy to environment")
-  .option("-t, --tag <tag>", { type: "string", required: true })
-  .option("--force", { type: "boolean" })
-  .validate((ctx) => {
-    if (!["prod", "staging"].includes(ctx.args.env as string)) {
-      throw new Error("Invalid environment");
-    }
-  })
-  .action(async (ctx) => {
-    ctx.stdout.write(`Deploying ${ctx.options.tag} to ${ctx.args.env}...\n`);
-  });
-```
-
-### Subcommands
-
-```typescript
-const user = cli.command("user").description("User management");
-user.command("create <name>").action(/* ... */);
-user.command("delete <name>").action(/* ... */);
-```
-
-### Color Output
-
-Proxy-based chainable color API with zero-dependency ANSI support.
-
-```typescript
-import { color, c } from "@libraz/node-cli";
-
-console.log(color.bold.green("Success!"));
-console.log(c`{red.bold Error}: Something went wrong`);
-```
-
-![Colored terminal output: a bold green success line, a bold red error prefix, and the available colors and modifiers](docs/assets/color.svg)
-
-### Table Display
-
-```typescript
-import { table } from "@libraz/node-cli";
-
-const data = [
-  { name: "Alice", role: "Admin", active: true },
-  { name: "Bob", role: "User", active: false },
-];
-
-console.log(table(data, { border: "rounded", headerStyle: "bold" }));
-```
-
-![Table with rounded borders and a bold header row over two data rows](docs/assets/table.svg)
-
-### Progress Indicators
-
-```typescript
-import { progress } from "@libraz/node-cli";
-
-// Progress bar
-const bar = progress.bar({ total: 100, label: "Downloading" });
-bar.update(50); // 50%
-bar.finish();
-
-// Spinner
-const spinner = progress.spinner({ label: "Processing..." });
-spinner.start();
-spinner.succeed("Done!");
-```
-
-![Progress bar redrawn in place at 30, 50 and 100 percent, followed by a spinner frame and its success line](docs/assets/progress.svg)
-
-### Interactive Prompts
-
-```typescript
-import { prompt } from "@libraz/node-cli";
-
-const name = await prompt.text("Your name:");
-const sure = await prompt.confirm("Are you sure?");
-const env = await prompt.select("Environment:", ["dev", "staging", "prod"]);
-```
-
-![Text prompt, yes-no confirmation with its default hint, and a numbered single-choice list](docs/assets/prompt.svg)
-
-### Logger
-
-```typescript
-import { logger } from "@libraz/node-cli";
-
-const log = logger({ prefix: "app", timestamp: true, level: "debug" });
-log.info("Server started on port %d", 3000);
-log.success("Deployment complete");
-log.warn("Cache miss rate is high");
-log.error("Connection failed");
-
-const db = log.child("db");
-db.debug("Query executed in 12ms");
-```
-
-![Leveled log lines with colored icons, timestamps, and a nested child-logger prefix](docs/assets/logger.svg)
-
-### Event System
-
-```typescript
-cli.on("beforeExecute", (ctx) => {
-  console.log(`Running: ${ctx.commandPath.join(" ")}`);
-});
-
-cli.on("commandError", (error, ctx) => {
-  console.error(`Command failed: ${error.message}`);
-});
-```
-
-### Plugin System
-
-```typescript
-function timestampPlugin(ctx) {
-  ctx.on("beforeExecute", (cmdCtx) => {
-    cmdCtx.stdout.write(`[${new Date().toISOString()}] `);
-  });
-}
-
-cli.use(timestampPlugin);
-```
-
-### Pipe Commands
-
-```typescript
-// In interactive shell
-> produce | transform | consume
-```
-
-### Mode Sub-REPL
-
-```typescript
-cli.command("sql").action((ctx) => {
-  ctx.shell?.enterMode({
-    prompt: "sql> ",
-    message: "Entering SQL mode. Type 'exit' to return.",
-    action: async (input, { stdout }) => {
-      stdout.write(`Executing: ${input}\n`);
-    },
-  });
-});
-```
-
-## Requirements
-
-- Node.js >= 22
-- ESM (type: "module")
+[Getting started](docs/en/getting-started.md) covers the rest of the setup — the `bin` entry, the build step, and making `myapp` available on your path.
 
 ## Documentation
 
-- [Getting Started](docs/en/getting-started.md)
-- [API Reference](docs/en/api.md)
-- [Commands & Options](docs/en/commands.md)
-- [Output Utilities](docs/en/output.md)
+Start with [Introduction](docs/en/introduction.md) for the mental model, or [Getting started](docs/en/getting-started.md) to build a working tool end to end. New to command-line development? The [glossary](docs/en/glossary.md) defines every term the docs use.
+
+| Topic | Pages |
+|---|---|
+| Building commands | [Commands](docs/en/commands.md) · [Options](docs/en/options.md) · [Errors](docs/en/errors.md) |
+| The interactive shell | [Interactive shell](docs/en/interactive-shell.md) |
+| Output | [Colour](docs/en/color.md) · [Tables](docs/en/table.md) · [Progress](docs/en/progress.md) · [Prompts](docs/en/prompts.md) · [Logging](docs/en/logging.md) |
+| Extending | [Events and plugins](docs/en/events-and-plugins.md) |
+| Reference | [API reference](docs/en/api-reference.md) · [Examples](docs/en/examples.md) · [Glossary](docs/en/glossary.md) |
+
+Ten runnable examples live in [`examples/`](examples/).
+
+## What it does not do
+
+- **ESM only.** There is no CommonJS build; `require("@libraz/node-cli")` will not work.
+- **No shell completion scripts.** Tab completion works inside the tool's own interactive shell. Completion for bash, zsh or fish is not generated.
+- **No configuration-file loading.** Reading a config file, merging it with options, and resolving precedence is left to the application.
+- **No positional-argument coercion.** Positional arguments arrive as strings; types, defaults and choices exist on options only.
+- **Built-in messages are English.** Help output and error text are not translated.
 
 ## License
 
 [MIT](LICENSE)
-
-## Author
-
-libraz <libraz@libraz.net>

@@ -4,27 +4,36 @@
 [![npm](https://img.shields.io/npm/v/@libraz/node-cli)](https://www.npmjs.com/package/@libraz/node-cli)
 [![codecov](https://codecov.io/gh/libraz/node-cli/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/node-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/libraz/node-cli/blob/main/LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-6-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=node.js)](https://nodejs.org/)
 
 Zero-dependency, batteries-included CLI framework for Node.js / TypeScript.
 
-## Features
+Define a command once and it works two ways: as `myapp deploy prod` typed at a shell, and as `deploy prod` typed at your tool's own interactive prompt.
 
-- Interactive shell (REPL) with history and tab completion
-- Subcommand hierarchy with fluent builder API
-- Built-in color, table, progress bar, spinner, prompts, logger
-- Command aliases, validation, events, plugins
-- Pipe command chaining, mode sub-REPL
-- TypeScript-first, ESM-first, zero production dependencies
+## What you get
 
-## Quick Start
+- Commands, subcommands, aliases, and typed options with defaults, choices and validation
+- An interactive shell with persistent history, tab completion, pipes, and mode sub-REPLs
+- Colour, tables, progress bars, spinners, prompts and a logger, each usable on its own
+- Lifecycle events and plugins for cross-cutting behaviour
+- TypeScript and ESM first, no production dependencies
+
+## Install
+
+Node.js 22 or later, ESM only.
+
+```bash
+npm install @libraz/node-cli
+```
+
+## Quick start
 
 ```typescript
 #!/usr/bin/env node
 import { createCLI } from "@libraz/node-cli";
 
-const cli = createCLI({ name: "myapp" });
+const cli = createCLI({ name: "myapp", version: "1.0.0" });
 
 cli
   .command("greet <name>")
@@ -32,52 +41,52 @@ cli
   .option("-u, --uppercase", { type: "boolean" })
   .action((ctx) => {
     const name = ctx.args.name as string;
-    const msg = ctx.options.uppercase ? name.toUpperCase() : name;
-    ctx.stdout.write(`Hello, ${msg}!\n`);
+    ctx.stdout.write(`Hello, ${ctx.options.uppercase ? name.toUpperCase() : name}!\n`);
   });
 
 await cli.start();
 ```
 
-## Built-in Utilities
+```bash
+$ myapp greet World --uppercase
+Hello, WORLD!
+
+$ myapp
+myapp v1.0.0
+> greet World
+Hello, World!
+> exit
+```
+
+## Output utilities
+
+Each of these is a plain function and works in any Node script, with or without a `CLI` instance.
 
 ```typescript
 import { color, c, table, progress, prompt, logger } from "@libraz/node-cli";
 
-// Color
 console.log(color.bold.green("Success!"));
 console.log(c`{red Error}: failed`);
-
-// Table
 console.log(table([{ name: "Alice", role: "Admin" }], { border: "rounded" }));
 
-// Progress
 const bar = progress.bar({ total: 100, label: "Download" });
 const spinner = progress.spinner({ label: "Loading..." });
 
-// Prompt
 const name = await prompt.text("Name:");
 const ok = await prompt.confirm("Continue?");
 
-// Logger
-const log = logger({ prefix: "app", timestamp: true });
-log.info("Started");
+logger({ prefix: "app", timestamp: true }).info("Started");
 ```
-
-## Requirements
-
-- Node.js >= 22
-- ESM (`"type": "module"` in package.json)
 
 ## Documentation
 
-Full documentation: https://github.com/libraz/node-cli
+- [Introduction](https://github.com/libraz/node-cli/blob/main/docs/en/introduction.md) — what it is and the mental model
+- [Getting started](https://github.com/libraz/node-cli/blob/main/docs/en/getting-started.md) — from nothing to a working tool
+- [Commands](https://github.com/libraz/node-cli/blob/main/docs/en/commands.md) · [Options](https://github.com/libraz/node-cli/blob/main/docs/en/options.md) · [Interactive shell](https://github.com/libraz/node-cli/blob/main/docs/en/interactive-shell.md)
+- [API reference](https://github.com/libraz/node-cli/blob/main/docs/en/api-reference.md) · [Examples](https://github.com/libraz/node-cli/blob/main/docs/en/examples.md) · [Glossary](https://github.com/libraz/node-cli/blob/main/docs/en/glossary.md)
 
-- [Getting Started](https://github.com/libraz/node-cli/blob/main/docs/en/getting-started.md)
-- [API Reference](https://github.com/libraz/node-cli/blob/main/docs/en/api.md)
-- [Commands & Options](https://github.com/libraz/node-cli/blob/main/docs/en/commands.md)
-- [Output Utilities](https://github.com/libraz/node-cli/blob/main/docs/en/output.md)
+Japanese documentation is under [`docs/ja/`](https://github.com/libraz/node-cli/tree/main/docs/ja).
 
 ## License
 
-MIT
+[MIT](https://github.com/libraz/node-cli/blob/main/LICENSE)
