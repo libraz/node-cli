@@ -31,6 +31,13 @@ try {
   if (packed[0].name !== packageJson.name || packed[0].version !== packageJson.version) {
     throw new Error("Packed artifact metadata does not match package.json");
   }
+  // npm force-includes every root file matching `readme.*`; only one may survive.
+  const readmeEntries = (packed[0].files ?? [])
+    .map((entry) => entry.path)
+    .filter((path) => /^readme(\..*)?$/i.test(path));
+  if (readmeEntries.length !== 1 || readmeEntries[0] !== "README.md") {
+    throw new Error(`Packed tarball must carry exactly one README: ${readmeEntries.join(", ")}`);
+  }
 
   run(npm, ["init", "--yes"], { cwd: fixture });
   run(npm, ["install", tarball, "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: fixture });

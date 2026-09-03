@@ -30,6 +30,9 @@ async function prepare() {
   // recoverable interrupted prepare from an unrelated backup file.
   await writeFile(marker, MARKER_CONTENT, { flag: "wx" });
   await copyFile(npmReadme, readme);
+  // npm force-includes every root file matching `readme.*`, so the npm-specific
+  // source has to be gone at pack time or the tarball ships it twice.
+  await rm(npmReadme);
 }
 
 async function restore() {
@@ -49,6 +52,7 @@ async function restore() {
   }
 
   await copyFile(readmeBackup, readme);
+  await copyFile(npmReadmeBackup, npmReadme);
   await rm(readmeBackup);
   await rm(npmReadmeBackup);
   await rm(marker);
