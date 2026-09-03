@@ -276,4 +276,29 @@ describe("History", () => {
     history.add("login password");
     expect(history.entries()).toEqual(["deploy --token [REDACTED]"]);
   });
+
+  it("warns once when persistence can never succeed", async () => {
+    // A regular file where a directory is required fails with ENOTDIR every
+    // time, so the diagnostic must not repeat for each command.
+    const blocker = join(tempDir, "blocker");
+    await writeFile(blocker, "");
+    const history = new History({ filePath: join(blocker, "history"), maxSize: 100 });
+
+    const warnings: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string) => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      for (const line of ["one", "two", "three"]) {
+        history.add(line);
+        await history.save();
+      }
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    expect(warnings.filter((line) => line.includes("Could not save history"))).toHaveLength(1);
+  });
 });

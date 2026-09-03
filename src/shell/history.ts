@@ -38,6 +38,30 @@ function isNodeError(error: unknown, code: string): boolean {
 }
 
 /**
+ * Error codes that describe the shape of the environment rather than a passing
+ * condition: a symlinked or non-directory path, a read-only or unreachable file
+ * system, denied permissions. Retrying on the next command cannot change any of
+ * them, so persistence is disabled instead of warning once per command.
+ */
+const PERMANENT_ERROR_CODES = new Set(["ELOOP", "EACCES", "EPERM", "EROFS", "ENOTDIR", "EISDIR"]);
+
+/**
+ * True when a save failure will reproduce identically next time. Node's own
+ * codes cover the file-system cases; the ownership and regular-file checks below
+ * raise plain errors, so they are matched by message.
+ */
+function isPermanentFailure(error: unknown): boolean {
+  if (error instanceof Error && "code" in error && typeof error.code === "string") {
+    if (PERMANENT_ERROR_CODES.has(error.code)) return true;
+  }
+  return (
+    error instanceof Error &&
+    (error.message === "history path is not a regular file" ||
+      error.message === "history file is owned by another user")
+  );
+}
+
+/**
  * Strips control characters from a single logical history entry so it stays one
  * physical line and is safe to replay to the terminal on recall. Applied at both
  * trust boundaries: on {@link History.add} (raw or filter-produced input) and on
@@ -62,8 +86,11 @@ export class History {
   private pending: string[] = [];
   /** A full rewrite is needed only after an over-limit load or append. */
   private needsCompaction = false;
-  /** True after a symlink path has been rejected for this shell session. */
-  private symlinkRejected = false;
+  /**
+   * True once a failure that cannot resolve itself has been reported. Retrying
+   * for every command cannot make persistence succeed and only floods stderr.
+   */
+  private persistenceDisabled = false;
 
   /**
    * Creates a new History instance.
@@ -139,7 +166,7 @@ export class History {
       this.lines = [];
       this.pending = [];
       this.needsCompaction = false;
-      if (isNodeError(error, "ELOOP")) this.symlinkRejected = true;
+      if (isPermanentFailure(error)) this.persistenceDisabled = true;
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`Warning: Could not load history from ${this.filePath}: ${message}\n`);
     }
@@ -256,15 +283,24 @@ export class History {
    * Writes a warning to stderr if saving fails.
    */
   async save(): Promise<void> {
-    // readSafeLines has already rejected this path as a symlink and reported it
-    // once. Retrying for every command cannot make persistence succeed and only
-    // floods stderr, while following it would weaken the security guarantee.
-    if (this.symlinkRejected) return;
+    // A failure whose cause is the environment (rejected symlink, read-only or
+    // unreachable path, denied permissions, a foreign owner) has already been
+    // reported once. Retrying for every command cannot make persistence succeed
+    // and only floods stderr; following a symlink would also weaken the security
+    // guarantee that rejected it in the first place.
+    if (this.persistenceDisabled) return;
     let lock: Awaited<ReturnType<typeof open>> | undefined;
     const lockPath = `${this.filePath}.lock`;
     let tempPath: string | undefined;
     try {
-      await mkdir(dirname(this.filePath), { recursive: true });
+      try {
+        await mkdir(dirname(this.filePath), { recursive: true });
+      } catch (err) {
+        // A recursive mkdir reports EEXIST only when the path is already
+        // occupied by something that is not a directory, which no retry fixes.
+        if (isNodeError(err, "EEXIST")) this.persistenceDisabled = true;
+        throw err;
+      }
       lock = await this.acquireLock();
 
       // The common interactive path appends just the newly accepted command.
@@ -311,7 +347,7 @@ export class History {
       this.pending = [];
       this.needsCompaction = false;
     } catch (err) {
-      if (isNodeError(err, "ELOOP")) this.symlinkRejected = true;
+      if (isPermanentFailure(err)) this.persistenceDisabled = true;
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Warning: Could not save history to ${this.filePath}: ${message}\n`);
     } finally {
