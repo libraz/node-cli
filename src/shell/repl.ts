@@ -1,7 +1,7 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
-import { formatErrorMessage, isCancellationError } from "../errors.js";
+import { presentError } from "../errors.js";
 import { streamIsTTY } from "../output/color.js";
 import { releaseAll } from "../output/progress.js";
 import type { CompletionResult } from "./completion.js";
@@ -207,18 +207,38 @@ export class Shell {
 
     this.running = true;
 
+    const releaseProcessListeners = this.registerProcessListeners();
+    try {
+      await this.runLoop(historyEntries);
+    } finally {
+      releaseProcessListeners();
+      await this.history.save();
+      await this.router.emit("exit");
+      if (this.rl) {
+        this.rl.close();
+      }
+    }
+  }
+
+  /**
+   * Installs the process-level listeners a shell session needs and returns the
+   * paired release. Registration and removal live in one place so that however
+   * the loop ends — normally, by throw, or by `stop()` — an embedding
+   * application is left with its own process-level policy and no stray timer.
+   */
+  private registerProcessListeners(): () => void {
     // Readline owns Ctrl-C while it is open and CommandRouter installs a
     // cancellation handler while an action runs. Between those two states we
     // briefly close/reopen readline; keep a process-level listener registered
     // for the shell lifetime so Ctrl-C in that hand-off cannot trigger Node's
     // default process termination.
     const onSigintGap = () => undefined;
-    process.on("SIGINT", onSigintGap);
 
     // Persist history on SIGTERM (e.g. a process manager stopping the app) so a
     // session terminated between the end-of-loop saves does not lose its history.
     // The normal exit path still saves below; this only covers abnormal teardown.
     let terminating = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     const onSigterm = () => {
       if (terminating) return;
       terminating = true;
@@ -226,7 +246,7 @@ export class Shell {
       // SIGTERM exit. A short grace period lets handlers release locks and
       // temporary resources without allowing a hung command to block shutdown.
       this.router.triggerCancel();
-      setTimeout(() => {
+      graceTimer = setTimeout(() => {
         void (async () => {
           await this.history.save();
           await this.router.emit("exit");
@@ -234,7 +254,6 @@ export class Shell {
         })();
       }, 200);
     };
-    process.on("SIGTERM", onSigterm);
 
     // A REPL is a long-lived session: asynchronous work started by a command
     // can reject after its command boundary has returned. Keep those process
@@ -250,9 +269,26 @@ export class Shell {
       releaseAll();
       this.reportError(error);
     };
+
+    process.on("SIGINT", onSigintGap);
+    process.on("SIGTERM", onSigterm);
     process.on("unhandledRejection", onUnhandledRejection);
     process.on("uncaughtException", onUncaughtException);
 
+    return () => {
+      // Dropping the pending grace timer keeps a SIGTERM received during the
+      // final teardown from emitting `exit` a second time and overwriting the
+      // exit code the normal path just settled on.
+      if (graceTimer) clearTimeout(graceTimer);
+      process.removeListener("SIGINT", onSigintGap);
+      process.removeListener("SIGTERM", onSigterm);
+      process.removeListener("unhandledRejection", onUnhandledRejection);
+      process.removeListener("uncaughtException", onUncaughtException);
+    };
+  }
+
+  /** Reads and dispatches input until the session ends. */
+  private async runLoop(historyEntries: string[]): Promise<void> {
     if (this.banner) {
       process.stdout.write(`${this.banner}\n`);
     }
@@ -324,6 +360,7 @@ export class Shell {
           // driven by a dedicated controller: the first Ctrl-C aborts this signal
           // (cooperative), a second force-quits the process.
           const controller = new AbortController();
+          let interrupted = false;
           try {
             await this.router.runWithSigintCancel(
               async () => {
@@ -335,18 +372,20 @@ export class Shell {
               },
               {
                 stderr: process.stderr,
-                onForceQuit: () => void this.router.emit("exit"),
+                onForceQuit: () => this.router.emit("exit"),
                 onInterrupt: () => {
                   if (controller.signal.aborted) return false;
                   controller.abort();
+                  interrupted = true;
                   return true;
                 },
               },
             );
           } catch (err) {
-            this.reportError(err);
+            this.reportError(err, interrupted);
           }
         } else {
+          let interrupted = false;
           try {
             // Drain any pending async plugins (registered but not yet initialized)
             // before running, so a late plugin failure surfaces instead of showing
@@ -360,10 +399,16 @@ export class Shell {
                   stderr: process.stderr,
                 });
               },
-              { onForceQuit: () => void this.router.emit("exit") },
+              {
+                onForceQuit: () => this.router.emit("exit"),
+                onInterrupt: () => {
+                  interrupted = this.router.triggerCancel();
+                  return interrupted;
+                },
+              },
             );
           } catch (err) {
-            this.reportError(err);
+            this.reportError(err, interrupted);
           }
         }
       } finally {
@@ -387,31 +432,17 @@ export class Shell {
         process.stdin.resume();
       }
     }
-
-    process.removeListener("SIGTERM", onSigterm);
-    process.removeListener("SIGINT", onSigintGap);
-    process.removeListener("unhandledRejection", onUnhandledRejection);
-    process.removeListener("uncaughtException", onUncaughtException);
-    await this.history.save();
-    await this.router.emit("exit");
-    if (this.rl) {
-      this.rl.close();
-    }
   }
 
   /**
-   * Writes an error to stderr, presenting a cancelled prompt as a clean message
-   * rather than a raw `Error: Prompt cancelled` line.
+   * Writes an error to stderr through the shared presenter. The shell survives
+   * the failure and keeps prompting, so unlike the direct CLI path it discards
+   * the exit code and does not opt into `NODE_CLI_DEBUG` stacks.
+   * @param interrupted - True when a Ctrl-C caused the failure, which is
+   * presented as a clean `Cancelled` line rather than the abort's own message.
    */
-  private reportError(err: unknown): void {
-    // A user-initiated cancellation (prompt cancel or a SIGINT-aborted signal)
-    // is presented as a clean "Cancelled" line, without the "Error:" prefix.
-    if (isCancellationError(err)) {
-      process.stderr.write(`${formatErrorMessage(err)}\n`);
-      return;
-    }
-    const message = formatErrorMessage(err);
-    process.stderr.write(`Error: ${message}\n`);
+  private reportError(err: unknown, interrupted = false): void {
+    presentError(err, { stream: process.stderr, interrupted });
   }
 
   /**

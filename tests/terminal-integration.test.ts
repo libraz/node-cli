@@ -418,6 +418,39 @@ raise SystemExit(child.returncode)
     expect(output).toContain("\x1b[?25l");
     expect(output).toContain("\x1b[?25h");
     expect(output).toContain("EXIT_EVENT");
+    expect(output).toContain("EXIT_EVENT_LAST");
+  });
+
+  it("runs every exit listener when a programmatic execution is force-quit", async () => {
+    const child = spawn(process.execPath, [resolve("tests/fixtures/exec-force-quit-child.mjs")], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+
+    try {
+      await waitForOutput(() => output, "HANGING");
+      child.kill("SIGINT");
+      await waitForOutput(() => output, "Press Ctrl-C again to force quit");
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
+      child.kill("SIGINT");
+
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
+      clearTimeout(timeout);
+      expect({ code, signal }).toEqual({ code: 130, signal: null });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+
+    expect(output).toContain("EXIT_FIRST");
+    expect(output).toContain("EXIT_LAST");
   });
 
   it("cancels active work and flushes history before a SIGTERM exit", async () => {

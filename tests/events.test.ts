@@ -5,6 +5,30 @@ import { CommandRouter } from "../src/command/router.js";
 import { createMockStdout } from "./helpers.js";
 
 describe("event system", () => {
+  it("hands commandError listeners a null-prototype context on failure paths", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "deploy <env>").action(() => {});
+    const router = new CommandRouter(registry);
+    const seen: Array<Record<string, unknown>> = [];
+    router.on("commandError", (_error, ctx) => {
+      seen.push(ctx.args, ctx.options);
+    });
+    const stdout = createMockStdout();
+    const stderr = createMockStdout();
+
+    // Fails before option resolution, which is the path where the documented
+    // null-prototype guarantee used to be skipped.
+    await expect(router.execute("deploy", { stdout, stderr })).rejects.toThrow();
+    // Fails while parsing options for a resolved command, which reports through
+    // the separate parse-failure context.
+    await expect(router.execute("deploy prod --nope", { stdout, stderr })).rejects.toThrow();
+
+    expect(seen).toHaveLength(4);
+    for (const record of seen) {
+      expect(Object.getPrototypeOf(record)).toBeNull();
+    }
+  });
+
   function createRouter() {
     const registry = new CommandRegistry();
     new CommandBuilder(registry, "deploy <env>").action((ctx) => {

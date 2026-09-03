@@ -4,12 +4,7 @@ import type { Readable, Writable } from "node:stream";
 import { CommandBuilder } from "./command/builder.js";
 import { CommandRegistry } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
-import {
-  CLIError,
-  CommandNotFoundError,
-  formatErrorMessage,
-  isCancellationError,
-} from "./errors.js";
+import { CommandNotFoundError, presentError } from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
 import { streamIsTTY } from "./output/color.js";
 import { Shell } from "./shell/repl.js";
@@ -268,9 +263,14 @@ export class CLI {
   async exec(input: string, options: ExecOptions = {}): Promise<void> {
     await this.drainPendingPlugins();
     const { stdin = null, stdout = process.stdout, stderr = process.stderr, signal } = options;
-    await this.router.runWithSigintCancel(async () => {
-      await this.router.execute(input, { stdin, stdout, stderr, signal });
-    });
+    await this.router.runWithSigintCancel(
+      async () => {
+        await this.router.execute(input, { stdin, stdout, stderr, signal });
+      },
+      // A force quit terminates the whole process, so `exit` listeners must get
+      // the same chance to run here as they do on the direct-argv path.
+      { onForceQuit: () => this.router.emit("exit") },
+    );
   }
 
   /**
@@ -319,7 +319,7 @@ export class CLI {
             });
           },
           {
-            onForceQuit: () => void this.router.emit("exit"),
+            onForceQuit: () => this.router.emit("exit"),
             onInterrupt: () => {
               interrupted = this.router.triggerCancel();
               return interrupted;
@@ -365,24 +365,16 @@ export class CLI {
   }
 
   /**
-   * Reports a fatal error to stderr and sets the process exit code. A
-   * user-initiated cancellation (Ctrl-C / prompt cancel) is presented as a clean
-   * `Cancelled` line with the conventional 130 exit code — consistent with how
-   * the interactive shell reports the same event — rather than an `Error:` line
-   * and exit 1.
+   * Reports a fatal error to stderr and applies the exit code it implies. The
+   * direct CLI path owns the process, so unlike the interactive shell it acts on
+   * the code the presenter returns and opts into `NODE_CLI_DEBUG` stacks.
    */
   private reportFatal(err: unknown, interrupted = false): void {
-    if (interrupted || isCancellationError(err)) {
-      process.stderr.write(`${interrupted ? "Cancelled" : formatErrorMessage(err)}\n`);
-      process.exitCode = 130;
-      return;
-    }
-    if (process.env.NODE_CLI_DEBUG === "1" && err instanceof Error && err.stack) {
-      process.stderr.write(`${err.stack}\n`);
-    } else {
-      process.stderr.write(`Error: ${formatErrorMessage(err)}\n`);
-    }
-    process.exitCode = err instanceof CLIError ? err.exitCode : 1;
+    process.exitCode = presentError(err, {
+      stream: process.stderr,
+      interrupted,
+      debugStack: true,
+    });
   }
 
   private registerHelpCommand(): void {

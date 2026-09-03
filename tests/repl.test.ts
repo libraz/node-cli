@@ -10,6 +10,33 @@ import { Shell } from "../src/shell/repl.js";
 import { createMockStdout } from "./helpers.js";
 
 describe("Shell error and termination handling", () => {
+  it("releases its process listeners even when the loop throws", async () => {
+    const signals = ["SIGINT", "SIGTERM", "unhandledRejection", "uncaughtException"] as const;
+    const before = signals.map((name) => process.listenerCount(name));
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    let exited = 0;
+    router.on("exit", () => {
+      exited++;
+    });
+    const shell = new Shell({
+      router,
+      registry,
+      prompt: "> ",
+      historyFile: join(tmpdir(), "node-cli-teardown-history"),
+    });
+    // Fail inside the loop rather than at a boundary the teardown already
+    // guards, so the assertion is about the teardown running at all.
+    (shell as unknown as { openReadline: (history: string[]) => void }).openReadline = () => {
+      throw new Error("loop failed");
+    };
+
+    await expect(shell.start()).rejects.toThrow("loop failed");
+
+    expect(signals.map((name) => process.listenerCount(name))).toEqual(before);
+    expect(exited).toBe(1);
+  });
+
   it("formats command errors for the interactive stderr stream", () => {
     const shell = new Shell({
       router: new CommandRouter(new CommandRegistry()),

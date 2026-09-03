@@ -3,9 +3,11 @@ import { PassThrough, type Readable, type Writable } from "node:stream";
 import {
   CommandNotFoundError,
   ExtraArgumentError,
+  isAbortError,
   isCancellationError,
   MissingArgumentError,
   ParseError,
+  toError,
 } from "../errors.js";
 import { formatUsage, type HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
@@ -27,10 +29,6 @@ class PipelineStopSignal extends Error {
     super("pipeline stage stopped early");
     this.name = "PipelineStopSignal";
   }
-}
-
-function isAbortError(error: Error): boolean {
-  return error.name === "AbortError";
 }
 
 /** True when a value is a {@link PipelineStopSignal} (the graceful-stop marker). */
@@ -135,7 +133,7 @@ export class CommandRouter {
             `Error in error handler: ${err instanceof Error ? err.message : String(err)}\n`,
           );
         } else {
-          await this.emit("error", err instanceof Error ? err : new Error(String(err)));
+          await this.emit("error", toError(err));
         }
       }
     }
@@ -172,6 +170,57 @@ export class CommandRouter {
   }
 
   /**
+   * Builds the context handed to a command action and to the `commandError` /
+   * `error` listeners. Every context originates here so the null-prototype
+   * guarantee documented on `CommandContext.args` and `.options` holds on the
+   * failure paths too, not only on the path that reaches option resolution.
+   */
+  private createContext(init: {
+    command: CommandDefinition;
+    args?: Record<string, unknown>;
+    rawInput: string;
+    rawArgv?: string[];
+    shell: Shell | null;
+    stdin: Readable | null;
+    stdout: Writable;
+    stderr: Writable;
+    signal: AbortSignal;
+  }): CommandContext {
+    return {
+      args: init.args ?? Object.create(null),
+      options: Object.create(null),
+      rawInput: init.rawInput,
+      rawArgv: init.rawArgv,
+      commandPath: this.registry.getCommandPath(init.command),
+      shell: init.shell,
+      stdin: init.stdin,
+      stdout: init.stdout,
+      stderr: init.stderr,
+      signal: init.signal,
+    };
+  }
+
+  /**
+   * Invokes the fallback handler for input no command matched. Wrapping every
+   * call site here keeps a throwing handler on one path: it is reported through
+   * the `error` event and then rethrown, rather than escaping silently from the
+   * pipe-splitting and tokenizing paths.
+   */
+  private async runCatchHandler(
+    handler: (input: string, ctx: CatchContext) => void | Promise<void>,
+    input: string,
+    ctx: CatchContext,
+  ): Promise<void> {
+    try {
+      await handler(input, ctx);
+    } catch (err) {
+      const error = toError(err);
+      await this.emit("error", error);
+      throw error;
+    }
+  }
+
+  /**
    * Aborts currently executing commands and invokes each cancel handler, if any.
    * Used by the interactive shell to honour SIGINT during a long-running command.
    *
@@ -197,7 +246,7 @@ export class CommandRouter {
       try {
         entry.command.cancelHandler?.(entry.ctx);
       } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         // Signal callbacks cannot await. The event machinery already isolates
         // listener failures, and attaching a rejection handler prevents an
         // unhandled rejection if an async error listener itself fails.
@@ -216,13 +265,15 @@ export class CommandRouter {
    * resolves normally. A command that ignores cancellation cannot otherwise be
    * interrupted, so a second Ctrl-C — or a Ctrl-C that finds nothing left to
    * cancel — restores the terminal cursor and force-terminates the process with
-   * the conventional 130 (128 + SIGINT) status. `onForceQuit` runs synchronously
-   * before termination so callers (e.g. the shell) can persist state.
+   * the conventional 130 (128 + SIGINT) status. `onForceQuit` runs to completion
+   * before termination so callers (e.g. the shell) can persist state and let
+   * every `exit` listener finish; it is bounded so a hung listener cannot defeat
+   * the force quit.
    */
   async runWithSigintCancel(
     action: () => Promise<void>,
     options: {
-      onForceQuit?: () => void;
+      onForceQuit?: () => Promise<void> | void;
       onInterrupt?: () => boolean;
       stderr?: Writable;
     } = {},
@@ -244,17 +295,27 @@ export class CommandRouter {
     let firstInterruptAt = 0;
     let forced = false;
 
+    // Upper bound on force-quit cleanup. Awaiting `onForceQuit` is what lets
+    // every `exit` listener run before the process dies, but a listener that
+    // never settles must not turn "force quit" into "hang".
+    const FORCE_QUIT_CLEANUP_MS = 2_000;
+
     const forceQuit = () => {
       if (forced) return;
       forced = true;
       process.removeListener("SIGINT", onSigint);
       restoreCursor();
-      try {
-        options.onForceQuit?.();
-      } catch {
-        // Never let cleanup failure block termination.
-      }
-      process.exit(130);
+      void (async () => {
+        try {
+          const deadline = new Promise<void>((resolve) => {
+            setTimeout(resolve, FORCE_QUIT_CLEANUP_MS).unref();
+          });
+          await Promise.race([Promise.resolve(options.onForceQuit?.()), deadline]);
+        } catch {
+          // Never let cleanup failure block termination.
+        }
+        process.exit(130);
+      })();
     };
 
     const onSigint = () => {
@@ -344,9 +405,9 @@ export class CommandRouter {
       try {
         segments = splitPipes(input);
       } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         if (error instanceof ParseError && this.catchHandler) {
-          await this.catchHandler(input, { stdout, stderr });
+          await this.runCatchHandler(this.catchHandler, input, { stdout, stderr });
           return;
         }
         await this.emit("error", error);
@@ -363,9 +424,13 @@ export class CommandRouter {
     try {
       tokens = Array.isArray(input) ? input : tokenize(input);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toError(err);
       if (error instanceof ParseError && this.catchHandler) {
-        await this.catchHandler(Array.isArray(input) ? input.join(" ") : input, { stdout, stderr });
+        await this.runCatchHandler(
+          this.catchHandler,
+          Array.isArray(input) ? input.join(" ") : input,
+          { stdout, stderr },
+        );
         return;
       }
       await this.emit("error", error);
@@ -395,21 +460,19 @@ export class CommandRouter {
     try {
       result = parse(input, this.registry);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toError(err);
       if (preliminaryMatch) {
         const command = preliminaryMatch.command;
-        const ctx: CommandContext = {
-          args: Object.create(null),
-          options: Object.create(null),
+        const ctx = this.createContext({
+          command,
           rawInput: Array.isArray(input) ? input.join(" ") : input,
           rawArgv: Array.isArray(input) ? [...input] : undefined,
-          commandPath: this.registry.getCommandPath(command),
           shell,
           stdin,
           stdout,
           stderr,
           signal: new AbortController().signal,
-        };
+        });
         await this.emit("commandError", error, ctx);
       }
       await this.emit("error", error);
@@ -421,13 +484,7 @@ export class CommandRouter {
       const rawInput = Array.isArray(input) ? input.join(" ") : input;
       if (rawInput.trim().length > 0) {
         if (this.catchHandler) {
-          try {
-            await this.catchHandler(rawInput, { stdout, stderr });
-          } catch (err) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            await this.emit("error", error);
-            throw error;
-          }
+          await this.runCatchHandler(this.catchHandler, rawInput, { stdout, stderr });
           return;
         }
         const err = new CommandNotFoundError(tokens[0] ?? rawInput.trim().split(/\s+/)[0]);
@@ -445,13 +502,7 @@ export class CommandRouter {
     if (!command.action && command.subcommands.size > 0 && result.extraArgs?.length) {
       const rawInput = Array.isArray(input) ? input.join(" ") : input;
       if (this.catchHandler) {
-        try {
-          await this.catchHandler(rawInput, { stdout, stderr });
-        } catch (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          await this.emit("error", error);
-          throw error;
-        }
+        await this.runCatchHandler(this.catchHandler, rawInput, { stdout, stderr });
         return;
       }
       const path = [...this.registry.getCommandPath(command), result.extraArgs[0]].join(" ");
@@ -484,18 +535,17 @@ export class CommandRouter {
     // The controller's signal lets actions observe cancellation; triggerCancel
     // aborts it (see the active-entry tracking below).
     const controller = new AbortController();
-    const ctx: CommandContext = {
+    const ctx = this.createContext({
+      command,
       args: result.args,
-      options: {},
       rawInput: result.rawInput,
       rawArgv: result.rawArgv,
-      commandPath: this.registry.getCommandPath(command),
       shell,
       stdin,
       stdout,
       stderr,
       signal: controller.signal,
-    };
+    });
 
     const activeEntry = { command, ctx, controller };
     this.active.add(activeEntry);
@@ -545,7 +595,7 @@ export class CommandRouter {
       await command.action(ctx);
       await this.emit("afterExecute", ctx);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = toError(err);
       const expected = expectedCancellation?.();
       const isExpectedCancellation =
         expected !== undefined &&
@@ -649,7 +699,7 @@ export class CommandRouter {
           if (!isLast) pipes[i].end();
         })
         .catch((err) => {
-          const error = err instanceof Error ? err : new Error(String(err));
+          const error = toError(err);
 
           // Graceful early-stop: this upstream stage was aborted only because a
           // downstream stage finished and no longer needs its output. Close its

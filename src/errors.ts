@@ -203,6 +203,16 @@ export class ParseError extends CLIError {
 }
 
 /**
+ * Reports whether a value is the standard rejection produced by aborting an
+ * `AbortSignal`. This is a low-level shape test with no notion of *whose*
+ * cancellation it was; use {@link isCancellationError} to decide whether a
+ * failure should be presented to the user as a cancellation.
+ */
+export function isAbortError(value: unknown): boolean {
+  return value instanceof Error && value.name === "AbortError";
+}
+
+/**
  * Reports whether an error represents a user-initiated cancellation rather than
  * a genuine failure: a {@link PromptCancelError}, or an `AbortError` associated
  * with the command's aborted signal. Used to present a clean "Cancelled"
@@ -211,7 +221,7 @@ export class ParseError extends CLIError {
  */
 export function isCancellationError(err: unknown, signal?: AbortSignal): boolean {
   if (err instanceof PromptCancelError) return true;
-  return signal?.aborted === true && err instanceof Error && err.name === "AbortError";
+  return signal?.aborted === true && isAbortError(err);
 }
 
 /**
@@ -222,4 +232,50 @@ export function formatErrorMessage(err: unknown, signal?: AbortSignal): string {
     return "Cancelled";
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Normalizes an unknown thrown value into an `Error`, so every failure that
+ * reaches an event listener or a presenter has the same shape.
+ */
+export function toError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+/**
+ * Renders a failure for a human on the given stream and returns the exit code it
+ * implies. Every user-facing failure boundary goes through here, so the direct
+ * CLI path and the interactive shell cannot drift apart in how they present the
+ * same error.
+ *
+ * The caller decides whether to apply the returned code: the direct path sets
+ * `process.exitCode`, while the interactive shell keeps running and ignores it.
+ *
+ * @param err - The thrown value.
+ * @param options.stream - Where to write. Callers with an execution-local stderr
+ * pass it here rather than reaching for `process.stderr`.
+ * @param options.interrupted - True when the failure followed a user interrupt,
+ * which is presented as a clean `Cancelled` line regardless of the error value.
+ * @param options.debugStack - Whether `NODE_CLI_DEBUG=1` may print a stack.
+ * Documented as a direct-argv-path behaviour, so the shell leaves it off.
+ */
+export function presentError(
+  err: unknown,
+  options: {
+    stream: { write(chunk: string): unknown };
+    interrupted?: boolean;
+    debugStack?: boolean;
+  },
+): number {
+  const { stream, interrupted = false, debugStack = false } = options;
+  if (interrupted || isCancellationError(err)) {
+    stream.write(`${interrupted ? "Cancelled" : formatErrorMessage(err)}\n`);
+    return 130;
+  }
+  if (debugStack && process.env.NODE_CLI_DEBUG === "1" && err instanceof Error && err.stack) {
+    stream.write(`${err.stack}\n`);
+  } else {
+    stream.write(`Error: ${formatErrorMessage(err)}\n`);
+  }
+  return err instanceof CLIError ? err.exitCode : 1;
 }
