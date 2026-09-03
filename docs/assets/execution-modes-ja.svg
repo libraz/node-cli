@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 464" width="960" height="464" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">cli.start() が実行モードを選ぶ流れ</title>
+  <desc id="dsc">2つの質問と4つの結末からなる判定フローです。質問1は「引数はあったか」。引数はあるがすべて空、または入力がハイフン2つだけの場合は、ヘルプ一覧を表示して終了します。それ以外で引数があればダイレクトモードとなり、引数を解析し、一致した1つのコマンドを実行し、process.exitCode を設定して終了します。引数がない場合は質問2に進み、stdin と stdout が両方とも本物の端末かを判定します。両方が端末なら対話シェルを開き、バナーを表示してから1行読んで実行する繰り返しを exit・quit・Ctrl-D まで続けます。出力がパイプ、または入力がリダイレクトされている場合はヘルプ一覧を表示して終了します。ページャへパイプしたときに戸惑うのはこの結末です。ダイレクトモードでは縦棒がパイプとして扱われないことも補足しています。</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .warnbox { fill:#ffffff; stroke:#a3401f }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .lnn   { fill:none; stroke:#8c959f; stroke-width:1.4 }
+    .lnw   { fill:none; stroke:#a3401f; stroke-width:1.4 }
+    .ah    { fill:#2f6f4f }
+    .ah2   { fill:#3f6b8a }
+    .ahn   { fill:#8c959f }
+    .ahw   { fill:#a3401f }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .monon { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    .warnt { fill:#a3401f }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .warnbox{fill:#161b22;stroke:#e08a68}
+      .seam{stroke:#484f58}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .lnn{stroke:#6e7681} .lnw{stroke:#e08a68}
+      .ah{fill:#56d364} .ah2{fill:#7fb3d5} .ahn{fill:#6e7681} .ahw{fill:#e08a68}
+      .mono{fill:#56d364} .monon{fill:#e6edf3} .warnt{fill:#e08a68}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="n" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ahn" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="w" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ahw" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="464" rx="12"/>
+
+  <rect class="card" x="40" y="44" width="190" height="36" rx="6"/>
+  <text class="mono" x="135" y="67" text-anchor="middle">await cli.start()</text>
+
+  <path class="ln2" d="M 135 80 V 92" marker-end="url(#b)"/>
+
+  <rect class="alt" x="40" y="96" width="190" height="88" rx="6"/>
+  <text class="lbl" x="52" y="116">質問 1</text>
+  <text class="h" x="52" y="136">引数はありましたか？</text>
+  <text class="monon" x="52" y="154">process.argv.slice(2)</text>
+  <text class="s" x="52" y="170">または渡した配列</text>
+
+  <path class="lnn" d="M 230 120 H 262 V 66 H 296" marker-end="url(#n)"/>
+  <text class="s" x="294" y="58" text-anchor="end">はい、ただし</text>
+
+  <rect class="chip" x="300" y="40" width="380" height="52" rx="6"/>
+  <text class="h" x="314" y="62">ヘルプ一覧を表示して終了</text>
+  <text class="s" x="314" y="79">引数がすべて空、または入力が <tspan class="monon">--</tspan> だけで、実行対象がありません</text>
+
+  <path class="ln" d="M 230 150 H 296" marker-end="url(#a)"/>
+  <text class="s" x="248" y="144">はい</text>
+
+  <rect class="card" x="300" y="104" width="380" height="92" rx="6"/>
+  <text class="h" x="314" y="126">ダイレクトモード</text>
+  <text class="s" x="314" y="146">1. 引数を解析します</text>
+  <text class="s" x="314" y="162">2. 一致した1つのコマンドを実行します</text>
+  <text class="s" x="314" y="178">3. <tspan class="monon">process.exitCode</tspan> を設定して終了します</text>
+
+  <path class="ln2" d="M 135 184 V 234" marker-end="url(#b)"/>
+  <text class="s" x="144" y="214">引数なし</text>
+
+  <rect class="alt" x="40" y="240" width="190" height="88" rx="6"/>
+  <text class="lbl" x="52" y="260">質問 2</text>
+  <text class="h" x="52" y="280">stdin と stdout が</text>
+  <text class="h" x="52" y="296">両方とも端末か？</text>
+  <text class="s" x="52" y="314">引数がないときだけ判定</text>
+
+  <path class="ln" d="M 230 266 H 296" marker-end="url(#a)"/>
+  <text class="s" x="248" y="260">はい</text>
+
+  <rect class="card" x="300" y="216" width="380" height="100" rx="6"/>
+  <text class="h" x="314" y="238">対話シェル</text>
+  <text class="s" x="314" y="258">1. バナーを表示します</text>
+  <text class="s" x="314" y="274">2. 1行読む → 実行する → 繰り返す</text>
+  <text class="s" x="314" y="290">3. <tspan class="monon">exit</tspan> / <tspan class="monon">quit</tspan> / Ctrl-D で抜けます</text>
+
+  <path class="lnw" d="M 230 310 H 262 V 374 H 296" marker-end="url(#w)"/>
+  <text class="s" x="236" y="304">いいえ</text>
+
+  <rect class="warnbox" x="300" y="336" width="380" height="84" rx="6"/>
+  <text class="h warnt" x="314" y="358">ヘルプ一覧を表示して終了</text>
+  <text class="s" x="314" y="376">引数がなく、出力がパイプか入力がリダイレクトされている場合です</text>
+  <text class="s" x="314" y="392"><tspan class="monon">mycli | less</tspan> はシェルではなくヘルプ一覧を表示します</text>
+  <text class="s warnt" x="314" y="408">初心者がつまずくのはここです</text>
+
+  <rect class="chip" x="700" y="104" width="236" height="92" rx="6"/>
+  <text class="lbl" x="712" y="124">補足</text>
+  <text class="s" x="712" y="142">ダイレクトモードでは <tspan class="monon">|</tspan> は</text>
+  <text class="s" x="712" y="158">パイプではありません。OS の</text>
+  <text class="s" x="712" y="174">シェルが処理済みか、ただの</text>
+  <text class="s" x="712" y="190">引数として届きます。</text>
+
+  <path class="seam" d="M 40 436 H 936"/>
+  <text class="s" x="480" y="456" text-anchor="middle">cli.start() は推測しません。引数があれば1つのコマンドを実行し、引数がなければ両端が本物の端末のときだけシェルを開きます。</text>
+</svg>

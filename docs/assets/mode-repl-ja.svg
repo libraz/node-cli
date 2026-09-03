@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 546" width="960" height="546" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">モードのサブ REPL</title>
+  <desc id="dsc">2 つの状態を並べた図です。左のメインシェルは「&gt;」のプロンプトで行を読み、レジストリと突き合わせてコマンドを実行します。右のモードは独自のプロンプトで行を読み、登録した action(input, ctx) を待って繰り返します。入力はルーターに届きません。ctx.shell.enterMode({ prompt, action }) でシェルからモードへ移り、message は入場時に一度だけ表示されます。戻るのは exit・quit・Ctrl+D・ctx.shell.exitMode() です。モードの中では exit と quit が常に優先されること、履歴はセッション内のメモリだけであること、completer が無ければタブ補完が無効であること、Ctrl+C がアクションの signal を中断し 2 回目で強制終了することを併記し、最後にモードの ctx が stdout・stderr・signal だけであることを示しています。</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .warnbox { fill:#ffffff; stroke:#a3401f }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .rule  { fill:none; stroke:#afb8c1; stroke-width:1 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .ah    { fill:#2f6f4f }
+    .ah2   { fill:#3f6b8a }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .n     { font-size:10.5px; fill:#1f2328 }
+    .alt2  { font-size:10.5px; fill:#3f6b8a }
+    .warnt { font-size:10.5px; fill:#a3401f }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .mono2 { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#3f6b8a }
+    .monod { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    .code  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; fill:#1f2328 }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .warnbox{fill:#161b22;stroke:#e08a68}
+      .seam{stroke:#484f58} .rule{stroke:#484f58}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .ah{fill:#56d364} .ah2{fill:#7fb3d5}
+      .mono{fill:#56d364} .mono2{fill:#7fb3d5} .alt2{fill:#7fb3d5} .warnt{fill:#e08a68}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e} .n{fill:#e6edf3} .monod{fill:#e6edf3} .code{fill:#e6edf3}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="546" rx="12"/>
+  <text class="h" x="24" y="34">モードのサブ REPL</text>
+
+  <!-- 状態 A: メインシェル -->
+  <rect class="card" x="40" y="70" width="300" height="180" rx="9"/>
+  <text class="lbl" x="56" y="92">メインシェル</text>
+  <rect class="chip" x="56" y="100" width="60" height="24" rx="6"/>
+  <text class="code" x="68" y="117">&gt;</text>
+  <text class="n" x="56" y="150">1   行を読む</text>
+  <text class="n" x="56" y="168">2   レジストリと突き合わせる</text>
+  <text class="n" x="56" y="186">3   コマンドを実行する</text>
+  <text class="s" x="56" y="216">ここでの <tspan class="monod">Ctrl+D</tspan> はシェルを終了します</text>
+
+  <!-- 状態 B: モード -->
+  <rect class="card" x="560" y="70" width="340" height="180" rx="9"/>
+  <text class="lbl" x="576" y="92">モード</text>
+  <rect class="chip" x="576" y="100" width="72" height="24" rx="6"/>
+  <text class="code" x="588" y="117">sql&gt;</text>
+  <text class="n" x="576" y="150">1   行を読む</text>
+  <text class="n" x="576" y="168">2   登録した <tspan class="monod">action(input, ctx)</tspan> を待つ</text>
+  <text class="n" x="576" y="186">3   繰り返す</text>
+  <text class="alt2" x="576" y="212">入力はルーターに届きません。すべての行が、</text>
+  <text class="alt2" x="576" y="226">そのまま action へ渡されます。</text>
+
+  <!-- A から B へ -->
+  <text class="mono" x="352" y="92">ctx.shell.enterMode({</text>
+  <text class="mono" x="352" y="104">  prompt, action })</text>
+  <path class="ln" d="M 342 118 H 556" marker-end="url(#a)"/>
+  <text class="s" x="352" y="140"><tspan class="monod">message</tspan> は入場時に</text>
+  <text class="s" x="352" y="154">一度だけ表示されます</text>
+
+  <!-- B から A へ -->
+  <path class="ln2" d="M 558 210 H 344" marker-end="url(#b)"/>
+  <text class="monod" x="352" y="228">exit / quit / Ctrl+D</text>
+  <text class="mono2" x="352" y="242">ctx.shell.exitMode()</text>
+
+  <!-- モードの中で成り立つこと -->
+  <rect class="grp" x="40" y="286" width="880" height="144" rx="10"/>
+  <text class="lbl" x="56" y="306">モードの中で成り立つこと</text>
+
+  <rect class="chip" x="56" y="314" width="420" height="50" rx="6"/>
+  <text class="s" x="70" y="334"><tspan class="monod">exit</tspan> と <tspan class="monod">quit</tspan> は常にモードを抜けます。同名の</text>
+  <text class="s" x="70" y="349">アプリコマンドはここでは届きません。</text>
+
+  <rect class="chip" x="496" y="314" width="424" height="50" rx="6"/>
+  <text class="s" x="510" y="334">既定は <tspan class="monod">history: "session"</tspan>。メモリ上だけで、</text>
+  <text class="s" x="510" y="349">履歴ファイルには書き出されません。</text>
+
+  <rect class="chip" x="56" y="372" width="420" height="50" rx="6"/>
+  <text class="s" x="70" y="392"><tspan class="monod">completer</tspan> を渡さないかぎり、</text>
+  <text class="s" x="70" y="407">タブ補完は無効です。</text>
+
+  <rect class="chip" x="496" y="372" width="424" height="50" rx="6"/>
+  <text class="s" x="510" y="392"><tspan class="monod">Ctrl+C</tspan> は実行中のアクションの <tspan class="monod">signal</tspan> を中断します。</text>
+  <text class="s" x="510" y="407">2 回目を押すと強制終了します。</text>
+
+  <!-- モードの ctx -->
+  <rect class="alt" x="40" y="444" width="880" height="44" rx="9"/>
+  <text class="n" x="56" y="470">モードの ctx は <tspan class="monod">{ stdout, stderr, signal }</tspan> だけです。<tspan class="monod">CommandContext</tspan> ではないので、<tspan class="monod">args</tspan> も <tspan class="monod">options</tspan> もありません。</text>
+
+  <path class="seam" d="M 24 506 H 936"/>
+  <text class="s" x="480" y="526" text-anchor="middle">モードは入れ子の読み取りループです。シェルは動き続けますが、抜けるまでルーターは通りません。</text>
+</svg>

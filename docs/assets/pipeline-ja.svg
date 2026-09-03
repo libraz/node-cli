@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 464" width="960" height="464" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">対話シェルでのパイプ連結の走り方</title>
+  <desc id="dsc">入力した produce | transform | consume という 1 行が、左から右に並ぶ 3 つのステージカードとして配線されます。各接続には PassThrough ストリームが挟まり、その左に上流の ctx.stdout、右に下流の ctx.stdin が示されます。1 段目の stdin は呼び出し元から、3 段目の stdout は端末へ向かいます。3 段の下を走るレールは stderr が 1 つだけ共有されることを表し、タイムライン帯は 3 段が順番にではなく重なって走ることを示します。下流が先に終わると上流は正常な停止として中断され、どれか 1 段が失敗すると連結全体が破棄されることも併記しています。</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .warnbox { fill:#ffffff; stroke:#a3401f }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .rule  { fill:none; stroke:#afb8c1; stroke-width:1 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .ah    { fill:#2f6f4f }
+    .ah2   { fill:#3f6b8a }
+    .bar   { fill:#2f6f4f; fill-opacity:.16; stroke:#2f6f4f; stroke-opacity:.55 }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .hi    { font-size:12.5px; fill:#2f6f4f }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .n     { font-size:10.5px; fill:#1f2328 }
+    .warnt { font-size:10.5px; fill:#a3401f }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .mono2 { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#3f6b8a }
+    .monod { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    .code  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; fill:#1f2328 }
+    .name  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; fill:#2f6f4f }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .warnbox{fill:#161b22;stroke:#e08a68}
+      .seam{stroke:#484f58} .rule{stroke:#484f58}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .ah{fill:#56d364} .ah2{fill:#7fb3d5}
+      .bar{fill:#56d364;stroke:#56d364}
+      .mono{fill:#56d364} .mono2{fill:#7fb3d5} .name{fill:#56d364} .hi{fill:#56d364} .warnt{fill:#e08a68}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e} .n{fill:#e6edf3} .monod{fill:#e6edf3} .code{fill:#e6edf3}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="464" rx="12"/>
+  <text class="h" x="24" y="34">対話シェルでのパイプ連結の走り方</text>
+
+  <rect class="chip" x="24" y="48" width="250" height="30" rx="7"/>
+  <text class="code" x="38" y="68">&gt; produce | transform | consume</text>
+  <text class="s" x="290" y="68">シェルのプロンプトで入力した行</text>
+
+  <!-- 入口 -->
+  <path class="ln" d="M 24 141 H 105" marker-end="url(#a)"/>
+  <text class="mono" x="65" y="124" text-anchor="middle">ctx.stdin</text>
+  <text class="s" x="65" y="163" text-anchor="middle">呼び出し元から</text>
+
+  <!-- 各段 -->
+  <rect class="card" x="109" y="112" width="162" height="58" rx="7"/>
+  <text class="name" x="190" y="136" text-anchor="middle">produce</text>
+  <text class="s" x="190" y="155" text-anchor="middle">1 段目</text>
+
+  <text class="mono" x="275" y="124">ctx.stdout</text>
+  <text class="mono" x="395" y="166" text-anchor="end">ctx.stdin</text>
+  <path class="ln" d="M 271 141 H 293"/>
+  <rect class="chip" x="295" y="130" width="80" height="22" rx="6"/>
+  <text class="mono2" x="335" y="145" text-anchor="middle">PassThrough</text>
+  <path class="ln" d="M 377 141 H 397" marker-end="url(#a)"/>
+
+  <rect class="card" x="399" y="112" width="162" height="58" rx="7"/>
+  <text class="name" x="480" y="136" text-anchor="middle">transform</text>
+  <text class="s" x="480" y="155" text-anchor="middle">2 段目</text>
+
+  <text class="mono" x="565" y="124">ctx.stdout</text>
+  <text class="mono" x="685" y="166" text-anchor="end">ctx.stdin</text>
+  <path class="ln" d="M 561 141 H 583"/>
+  <rect class="chip" x="585" y="130" width="80" height="22" rx="6"/>
+  <text class="mono2" x="625" y="145" text-anchor="middle">PassThrough</text>
+  <path class="ln" d="M 667 141 H 687" marker-end="url(#a)"/>
+
+  <rect class="card" x="689" y="112" width="162" height="58" rx="7"/>
+  <text class="name" x="770" y="136" text-anchor="middle">consume</text>
+  <text class="s" x="770" y="155" text-anchor="middle">3 段目</text>
+
+  <!-- 出口 -->
+  <path class="ln" d="M 851 141 H 932" marker-end="url(#a)"/>
+  <text class="mono" x="893" y="124" text-anchor="middle">ctx.stdout</text>
+  <text class="s" x="893" y="163" text-anchor="middle">端末へ</text>
+
+  <!-- 共有 stderr -->
+  <path class="ln2" d="M 190 170 V 204"/>
+  <path class="ln2" d="M 480 170 V 204"/>
+  <path class="ln2" d="M 770 170 V 204"/>
+  <path class="ln2" d="M 190 204 H 770"/>
+  <path class="ln2" d="M 480 204 V 226" marker-end="url(#b)"/>
+  <rect class="chip" x="396" y="228" width="168" height="28" rx="7"/>
+  <text class="mono2" x="480" y="247" text-anchor="middle">stderr</text>
+  <text class="s" x="580" y="247">全段が 1 つの <tspan class="monod">stderr</tspan> を共有します</text>
+
+  <!-- 同時実行 -->
+  <rect class="grp" x="24" y="278" width="452" height="128" rx="10"/>
+  <text class="hi" x="40" y="300">全段は順番にではなく、同時に走ります</text>
+
+  <text class="monod" x="40" y="323">produce</text>
+  <rect class="bar" x="120" y="312" width="250" height="14" rx="5"/>
+  <text class="monod" x="40" y="345">transform</text>
+  <rect class="bar" x="160" y="334" width="250" height="14" rx="5"/>
+  <text class="monod" x="40" y="367">consume</text>
+  <rect class="bar" x="196" y="356" width="248" height="14" rx="5"/>
+
+  <path class="rule" d="M 120 382 H 452"/>
+  <text class="s" x="120" y="396">時間 →</text>
+
+  <!-- ふるまい -->
+  <rect class="alt" x="496" y="278" width="440" height="64" rx="9"/>
+  <text class="n" x="512" y="300">下流の段が先に終わると、上流の段は中断されます。</text>
+  <text class="n" x="512" y="315">これは正常な停止で、error イベントは出ません。</text>
+  <text class="s" x="512" y="331">例: <tspan class="monod">producer | head</tspan></text>
+
+  <rect class="warnbox" x="496" y="352" width="440" height="54" rx="9"/>
+  <text class="warnt" x="512" y="376">どれか 1 段が失敗すると連結全体が破棄され、</text>
+  <text class="warnt" x="512" y="392">その失敗が、そのまま表に出るエラーになります。</text>
+
+  <path class="seam" d="M 24 424 H 936"/>
+  <text class="s" x="480" y="444" text-anchor="middle">パイプが使えるのは対話シェルと <tspan class="monod">cli.</tspan><tspan class="monod">exec</tspan><tspan class="monod">("a | b")</tspan> です。argv を直接渡すモードでは <tspan class="monod">|</tspan> はパイプではありません。</text>
+</svg>

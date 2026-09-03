@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 542" width="960" height="542" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">入力から action までに起きること</title>
+  <desc id="dsc">2段のパイプラインです。上段はフレームワークの処理で、左から順に、入力の行または argv を引用符を保ったままトークン化し、ルートから木を辿りエイリアスを解決してコマンド経路を一致させ、必須・任意・可変長の位置引数を宣言順に割り当て、オプションフラグを解析し、オプションを2回のパスで解決します。1回目は独自の parse または型変換と default と required、2回目は choices と独自の validate です。下段は利用側のコードとイベントで、command.validate(ctx)、beforeExecute イベント、action(ctx)、そして action が成功したときだけ走る afterExecute イベントが順に並びます。下部の警告色の分岐は、どの段階で失敗しても commandError（コマンド経路が解決した後だけ）と error の両方がこの順で発火し、メッセージが stderr に出て process.exitCode が設定されることを示します。</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .warnbox { fill:#ffffff; stroke:#a3401f }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .lnn   { fill:none; stroke:#8c959f; stroke-width:1.4 }
+    .lnw   { fill:none; stroke:#a3401f; stroke-width:1.4 }
+    .ah    { fill:#2f6f4f }
+    .ah2   { fill:#3f6b8a }
+    .ahn   { fill:#8c959f }
+    .ahw   { fill:#a3401f }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .monon { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    .warnt { fill:#a3401f }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .warnbox{fill:#161b22;stroke:#e08a68}
+      .seam{stroke:#484f58}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .lnn{stroke:#6e7681} .lnw{stroke:#e08a68}
+      .ah{fill:#56d364} .ah2{fill:#7fb3d5} .ahn{fill:#6e7681} .ahw{fill:#e08a68}
+      .mono{fill:#56d364} .monon{fill:#e6edf3} .warnt{fill:#e08a68}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="n" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ahn" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="w" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ahw" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="542" rx="12"/>
+
+  <rect class="chip" x="32" y="124" width="88" height="56" rx="6"/>
+  <text class="h" x="44" y="144">入力</text>
+  <text class="s" x="44" y="160">1行または</text>
+  <text class="s" x="44" y="174">argv 配列</text>
+  <path class="lnn" d="M 120 152 H 138" marker-end="url(#n)"/>
+
+  <rect class="grp" x="130" y="68" width="806" height="148" rx="8"/>
+  <text class="lbl" x="144" y="88">フレームワークの処理</text>
+
+  <rect class="chip" x="144" y="100" width="110" height="104" rx="5"/>
+  <text class="h" x="156" y="120">トークン化</text>
+  <text class="s" x="156" y="140">行を分割し、</text>
+  <text class="s" x="156" y="154">引用符は維持</text>
+
+  <path class="lnn" d="M 254 152 H 266" marker-end="url(#n)"/>
+
+  <rect class="chip" x="272" y="100" width="146" height="104" rx="5"/>
+  <text class="h" x="284" y="120">コマンド経路の一致</text>
+  <text class="s" x="284" y="140">ルートから木を辿り</text>
+  <text class="s" x="284" y="156">エイリアスを解決します</text>
+
+  <path class="lnn" d="M 418 152 H 430" marker-end="url(#n)"/>
+
+  <rect class="chip" x="436" y="100" width="146" height="104" rx="5"/>
+  <text class="h" x="448" y="120">位置引数の割り当て</text>
+  <text class="s" x="448" y="138">宣言順に対応づけます</text>
+  <text class="monon" x="448" y="156">&lt;required&gt;</text>
+  <text class="monon" x="448" y="170">[optional]</text>
+  <text class="monon" x="448" y="184">[...variadic]</text>
+
+  <path class="lnn" d="M 582 152 H 594" marker-end="url(#n)"/>
+
+  <rect class="chip" x="600" y="100" width="120" height="104" rx="5"/>
+  <text class="h" x="612" y="120">オプション</text>
+  <text class="h" x="612" y="136">フラグの解析</text>
+  <text class="monon" x="612" y="156">--name value</text>
+  <text class="monon" x="612" y="170">-n, -abc</text>
+  <text class="s" x="612" y="188">短縮形はまとめ可</text>
+
+  <path class="lnn" d="M 720 152 H 732" marker-end="url(#n)"/>
+
+  <rect class="chip" x="738" y="100" width="186" height="104" rx="5"/>
+  <text class="h" x="750" y="120">オプションの解決</text>
+  <text class="s" x="750" y="138">1回目 — 独自の parse</text>
+  <text class="s" x="750" y="152">または型変換、default、</text>
+  <text class="s" x="750" y="166">required の順</text>
+  <text class="s" x="750" y="180">2回目 — choices の後に</text>
+  <text class="s" x="750" y="194">独自の validate</text>
+
+  <path class="lnn" d="M 831 204 V 230 H 234 V 284" marker-end="url(#n)"/>
+  <text class="s" x="532" y="224" text-anchor="middle">フレームワークの処理はここまでです。次は利用側のコードが動きます。</text>
+
+  <rect class="grp" x="130" y="256" width="806" height="112" rx="8"/>
+  <text class="lbl" x="144" y="274">利用側のコードとイベント（この順に実行）</text>
+
+  <rect class="card" x="144" y="288" width="180" height="68" rx="5"/>
+  <text class="lbl" x="156" y="308">利用側が書く</text>
+  <text class="mono" x="156" y="326">command.validate(ctx)</text>
+  <text class="s" x="156" y="344">任意の事前チェック</text>
+
+  <path class="ln" d="M 324 322 H 338" marker-end="url(#a)"/>
+
+  <rect class="alt" x="344" y="288" width="180" height="68" rx="5"/>
+  <text class="lbl" x="356" y="308">イベント</text>
+  <text class="monon" x="356" y="326">beforeExecute</text>
+  <text class="s" x="356" y="344">リスナーが先に走ります</text>
+
+  <path class="ln" d="M 524 322 H 538" marker-end="url(#a)"/>
+
+  <rect class="card" x="544" y="288" width="180" height="68" rx="5"/>
+  <text class="lbl" x="556" y="308">利用側が書く</text>
+  <text class="mono" x="556" y="326">action(ctx)</text>
+  <text class="s" x="556" y="344">コマンド本体の処理</text>
+
+  <path class="ln" d="M 724 322 H 738" marker-end="url(#a)"/>
+
+  <rect class="alt" x="744" y="288" width="180" height="68" rx="5"/>
+  <text class="lbl" x="756" y="308">イベント</text>
+  <text class="monon" x="756" y="326">afterExecute</text>
+  <text class="s" x="756" y="344">action が成功したときだけ</text>
+
+  <path class="seam" d="M 130 386 H 936"/>
+  <path class="lnw" d="M 235 386 V 400" marker-end="url(#w)"/>
+
+  <rect class="warnbox" x="130" y="406" width="210" height="88" rx="6"/>
+  <text class="lbl warnt" x="142" y="426">失敗したとき</text>
+  <text class="h warnt" x="142" y="446">上のどの段階でも</text>
+  <text class="s" x="142" y="464">一致、割り当て、オプション、</text>
+  <text class="s" x="142" y="480">validate、action のいずれでも</text>
+
+  <path class="lnw" d="M 340 450 H 352 V 422 H 366" marker-end="url(#w)"/>
+  <path class="lnw" d="M 340 450 H 352 V 478 H 366" marker-end="url(#w)"/>
+
+  <rect class="chip" x="370" y="406" width="190" height="32" rx="5"/>
+  <text class="monon" x="465" y="426" text-anchor="middle">commandError</text>
+  <text class="s" x="370" y="452">コマンド経路が解決した後だけ</text>
+  <rect class="chip" x="370" y="462" width="190" height="32" rx="5"/>
+  <text class="monon" x="465" y="482" text-anchor="middle">error</text>
+
+  <path class="lnw" d="M 568 412 H 576 V 488 H 568"/>
+  <path class="lnw" d="M 576 450 H 734" marker-end="url(#w)"/>
+  <text class="s warnt" x="656" y="442" text-anchor="middle">両方とも、この順に発生します</text>
+
+  <rect class="chip" x="740" y="406" width="196" height="88" rx="6"/>
+  <text class="h" x="752" y="428">報告</text>
+  <text class="s" x="752" y="448">メッセージは stderr へ</text>
+  <text class="monon" x="752" y="466">process.exitCode</text>
+  <text class="s" x="752" y="482">が設定されます</text>
+
+  <text class="s" x="480" y="518" text-anchor="middle">独自の validate より左はすべてフレームワークの処理です。commandError には action が受け取るはずだった ctx が渡されます。</text>
+</svg>

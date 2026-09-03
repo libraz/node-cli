@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 430" width="960" height="430" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">What is inside node-cli</title>
+  <desc id="dsc">One npm package with two independent halves. On the left, two ways in — process.argv from a direct invocation and a line typed into the interactive shell — both reach createCLI(). In the middle, the command layer: the CLI object, the command registry holding the command tree and aliases, the router that parses and resolves and runs, and your action, which receives a ctx carrying args, options, stdout, stderr, shell and signal. On the right, a separate group holds the output toolkit — color, table, progress, prompt and logger — plain functions that need no CLI instance and are not downstream of the command layer. A dashed seam at the bottom notes that the package has zero runtime dependencies.</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .dash  { fill:none; stroke:#afb8c1; stroke-width:1.4; stroke-dasharray:5 4 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .ah    { fill:#2f6f4f }
+    .ah2   { fill:#3f6b8a }
+    .ahn   { fill:#8c959f }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .monon { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .seam{stroke:#484f58} .dash{stroke:#484f58}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .ah{fill:#56d364} .ah2{fill:#7fb3d5} .ahn{fill:#6e7681}
+      .mono{fill:#56d364} .monon{fill:#e6edf3}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="n" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ahn" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="430" rx="12"/>
+
+  <text class="lbl" x="24" y="60">TWO WAYS IN</text>
+
+  <rect class="chip" x="24" y="70" width="160" height="48" rx="6"/>
+  <text class="monon" x="36" y="92">process.argv</text>
+  <text class="s" x="36" y="108">run straight from a shell</text>
+
+  <path class="ln" d="M 104 118 V 134" marker-end="url(#a)"/>
+
+  <rect class="card" x="24" y="138" width="160" height="36" rx="6"/>
+  <text class="mono" x="104" y="161" text-anchor="middle">createCLI()</text>
+
+  <path class="ln" d="M 104 196 V 180" marker-end="url(#a)"/>
+
+  <rect class="chip" x="24" y="196" width="160" height="48" rx="6"/>
+  <text class="monon" x="36" y="218">&gt; typed line</text>
+  <text class="s" x="36" y="234">typed at the shell prompt</text>
+
+  <path class="ln" d="M 184 156 H 194 V 92 H 214" marker-end="url(#a)"/>
+
+  <rect class="grp" x="204" y="44" width="412" height="306" rx="8"/>
+  <text class="lbl" x="218" y="64">THE COMMAND LAYER</text>
+
+  <rect class="chip" x="218" y="74" width="384" height="36" rx="5"/>
+  <text class="mono" x="232" y="97">CLI</text>
+  <text class="s" x="592" y="97" text-anchor="end">the object createCLI() returns</text>
+
+  <path class="ln" d="M 410 110 V 122" marker-end="url(#a)"/>
+
+  <rect class="chip" x="218" y="124" width="384" height="48" rx="5"/>
+  <text class="h" x="232" y="143">command registry</text>
+  <text class="s" x="232" y="160">the command tree and its aliases, keyed by name</text>
+
+  <path class="ln" d="M 410 172 V 184" marker-end="url(#a)"/>
+
+  <rect class="chip" x="218" y="186" width="384" height="56" rx="5"/>
+  <text class="h" x="232" y="205">router</text>
+  <text class="s" x="232" y="222">parse the line, resolve the command, run it</text>
+  <text class="s" x="232" y="236">emits the lifecycle events along the way</text>
+
+  <path class="ln" d="M 410 242 V 252" marker-end="url(#a)"/>
+
+  <rect class="card" x="218" y="254" width="384" height="36" rx="5"/>
+  <text class="mono" x="232" y="277">your action(ctx)</text>
+  <text class="s" x="592" y="277" text-anchor="end">the only part you write</text>
+
+  <path class="ln" d="M 410 302 V 292" marker-end="url(#a)"/>
+
+  <rect class="chip" x="218" y="302" width="384" height="42" rx="5"/>
+  <text class="lbl" x="232" y="318">ctx — WHAT YOUR ACTION RECEIVES</text>
+  <text class="monon" x="232" y="336">args · options · stdout · stderr · shell · signal</text>
+
+  <path class="dash" d="M 602 272 H 652" marker-end="url(#n)"/>
+  <text class="s" x="629" y="266" text-anchor="middle">may use</text>
+
+  <rect class="grp" x="660" y="44" width="276" height="306" rx="8"/>
+  <text class="lbl" x="674" y="64">THE OUTPUT TOOLKIT</text>
+  <text class="s" x="674" y="80">usable entirely on its own</text>
+
+  <rect class="alt" x="674" y="92" width="248" height="36" rx="5"/>
+  <text class="mono" x="686" y="114">color / c</text>
+  <text class="s" x="910" y="114" text-anchor="end">styling, width-safe</text>
+
+  <rect class="alt" x="674" y="135" width="248" height="36" rx="5"/>
+  <text class="mono" x="686" y="157">table</text>
+  <text class="s" x="910" y="157" text-anchor="end">aligned columns</text>
+
+  <rect class="alt" x="674" y="178" width="248" height="36" rx="5"/>
+  <text class="mono" x="686" y="200">progress</text>
+  <text class="s" x="910" y="200" text-anchor="end">bars and spinners</text>
+
+  <rect class="alt" x="674" y="221" width="248" height="36" rx="5"/>
+  <text class="mono" x="686" y="243">prompt</text>
+  <text class="s" x="910" y="243" text-anchor="end">questions, masked input</text>
+
+  <rect class="alt" x="674" y="264" width="248" height="36" rx="5"/>
+  <text class="mono" x="686" y="286">logger</text>
+  <text class="s" x="910" y="286" text-anchor="end">levelled output</text>
+
+  <text class="s" x="674" y="318">plain functions — they need no CLI instance</text>
+  <text class="s" x="674" y="334">and no command has to exist at all</text>
+
+  <path class="seam" d="M 24 372 H 936"/>
+  <text class="s" x="480" y="392" text-anchor="middle">zero runtime dependencies — everything drawn above ships inside the one package</text>
+  <text class="s" x="480" y="412" text-anchor="middle">The output toolkit is not downstream of the command layer. It is the other half of the package, and an action may use it or not.</text>
+</svg>

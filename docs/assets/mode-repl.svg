@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 546" width="960" height="546" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">The mode sub-REPL</title>
+  <desc id="dsc">A two-state diagram. On the left, the main shell with its "&gt;" prompt reads a line, matches it against the command registry and runs it. On the right, a mode with its own prompt reads a line, awaits your action(input, ctx) and repeats — the input never reaches the router. ctx.shell.enterMode({ prompt, action }) moves from the shell into the mode and prints the optional message once; exit, quit, Ctrl+D or ctx.shell.exitMode() returns. Four notes cover exit and quit always winning inside a mode, session-only in-memory history, tab completion being off without a completer, and Ctrl+C aborting the action's signal with a second press force-quitting. A closing band states that the mode context carries only stdout, stderr and signal.</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .warnbox { fill:#ffffff; stroke:#a3401f }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .rule  { fill:none; stroke:#afb8c1; stroke-width:1 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .ah    { fill:#2f6f4f }
+    .ah2   { fill:#3f6b8a }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .n     { font-size:10.5px; fill:#1f2328 }
+    .alt2  { font-size:10.5px; fill:#3f6b8a }
+    .warnt { font-size:10.5px; fill:#a3401f }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .mono2 { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#3f6b8a }
+    .monod { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    .code  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; fill:#1f2328 }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .warnbox{fill:#161b22;stroke:#e08a68}
+      .seam{stroke:#484f58} .rule{stroke:#484f58}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .ah{fill:#56d364} .ah2{fill:#7fb3d5}
+      .mono{fill:#56d364} .mono2{fill:#7fb3d5} .alt2{fill:#7fb3d5} .warnt{fill:#e08a68}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e} .n{fill:#e6edf3} .monod{fill:#e6edf3} .code{fill:#e6edf3}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="546" rx="12"/>
+  <text class="h" x="24" y="34">The mode sub-REPL</text>
+
+  <!-- state A: main shell -->
+  <rect class="card" x="40" y="70" width="300" height="180" rx="9"/>
+  <text class="lbl" x="56" y="92">main shell</text>
+  <rect class="chip" x="56" y="100" width="60" height="24" rx="6"/>
+  <text class="code" x="68" y="117">&gt;</text>
+  <text class="n" x="56" y="150">1   read a line</text>
+  <text class="n" x="56" y="168">2   match it against the registry</text>
+  <text class="n" x="56" y="186">3   run the command</text>
+  <text class="s" x="56" y="216"><tspan class="monod">Ctrl+D</tspan> here ends the shell</text>
+
+  <!-- state B: mode -->
+  <rect class="card" x="560" y="70" width="340" height="180" rx="9"/>
+  <text class="lbl" x="576" y="92">mode</text>
+  <rect class="chip" x="576" y="100" width="72" height="24" rx="6"/>
+  <text class="code" x="588" y="117">sql&gt;</text>
+  <text class="n" x="576" y="150">1   read a line</text>
+  <text class="n" x="576" y="168">2   await your <tspan class="monod">action(input, ctx)</tspan></text>
+  <text class="n" x="576" y="186">3   repeat</text>
+  <text class="alt2" x="576" y="212">input never reaches the router — every line</text>
+  <text class="alt2" x="576" y="226">goes to your action verbatim</text>
+
+  <!-- A -> B -->
+  <text class="mono" x="352" y="92">ctx.shell.enterMode({</text>
+  <text class="mono" x="352" y="104">  prompt, action })</text>
+  <path class="ln" d="M 342 118 H 556" marker-end="url(#a)"/>
+  <text class="s" x="352" y="140"><tspan class="monod">message</tspan> is printed</text>
+  <text class="s" x="352" y="154">once on entry</text>
+
+  <!-- B -> A -->
+  <path class="ln2" d="M 558 210 H 344" marker-end="url(#b)"/>
+  <text class="monod" x="352" y="228">exit / quit / Ctrl+D</text>
+  <text class="mono2" x="352" y="242">ctx.shell.exitMode()</text>
+
+  <!-- facts -->
+  <rect class="grp" x="40" y="286" width="880" height="144" rx="10"/>
+  <text class="lbl" x="56" y="306">what holds inside a mode</text>
+
+  <rect class="chip" x="56" y="314" width="420" height="50" rx="6"/>
+  <text class="s" x="70" y="334"><tspan class="monod">exit</tspan> and <tspan class="monod">quit</tspan> always leave the mode — an app command</text>
+  <text class="s" x="70" y="349">with that name is unreachable here</text>
+
+  <rect class="chip" x="496" y="314" width="424" height="50" rx="6"/>
+  <text class="s" x="510" y="334"><tspan class="monod">history: "session"</tspan> by default — in memory only,</text>
+  <text class="s" x="510" y="349">never written to the history file</text>
+
+  <rect class="chip" x="56" y="372" width="420" height="50" rx="6"/>
+  <text class="s" x="70" y="392">tab completion is off unless you supply</text>
+  <text class="s" x="70" y="407">a <tspan class="monod">completer</tspan></text>
+
+  <rect class="chip" x="496" y="372" width="424" height="50" rx="6"/>
+  <text class="s" x="510" y="392"><tspan class="monod">Ctrl+C</tspan> aborts the running action's <tspan class="monod">signal</tspan>;</text>
+  <text class="s" x="510" y="407">a second press force-quits</text>
+
+  <!-- mode context -->
+  <rect class="alt" x="40" y="444" width="880" height="44" rx="9"/>
+  <text class="n" x="56" y="470">the mode's ctx is <tspan class="monod">{ stdout, stderr, signal }</tspan> only — not a <tspan class="monod">CommandContext</tspan>: no <tspan class="monod">args</tspan>, no <tspan class="monod">options</tspan></text>
+
+  <path class="seam" d="M 24 506 H 936"/>
+  <text class="s" x="480" y="526" text-anchor="middle">A mode is a nested read loop: the shell keeps running, but the router is bypassed until you leave.</text>
+</svg>

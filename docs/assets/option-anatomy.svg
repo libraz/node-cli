@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 580" width="960" height="580" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">Reading an option declaration</title>
+  <desc id="dsc">The upper half dissects the call .option("-t, --tag &lt;value&gt;", { type: "string", required: true }): leader lines run from the short alias, the long name, the value placeholder and the schema object down to four explanatory cards. The lower half lists the input forms the parser accepts — space form, equals form, alias form, short clustering, negation, the bare double dash and a negative number — each paired with the resulting value, with notes on the equals form being the only way to pass a value starting with a dash and on clustering being boolean-only.</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .rule  { fill:none; stroke:#afb8c1; stroke-width:1 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .lnw   { fill:none; stroke:#a3401f; stroke-width:1.4 }
+    .ah    { fill:#2f6f4f }
+    .ah2   { fill:#3f6b8a }
+    .ahw   { fill:#a3401f }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .monod { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    .warnt { font-size:10.5px; fill:#a3401f }
+    .code  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:14px; fill:#636c76 }
+    .codek { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:14px; fill:#2f6f4f }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .seam{stroke:#484f58} .rule{stroke:#484f58}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .lnw{stroke:#e08a68}
+      .ah{fill:#56d364} .ah2{fill:#7fb3d5} .ahw{fill:#e08a68}
+      .mono{fill:#56d364} .warnt{fill:#e08a68} .codek{fill:#56d364}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e} .monod{fill:#e6edf3} .code{fill:#8b949e}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="w" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ahw" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="580" rx="12"/>
+  <text class="h" x="24" y="34">Reading an option declaration</text>
+
+  <!-- ============ top panel: the declaration, part by part ============ -->
+  <rect class="grp" x="24" y="48" width="912" height="212" rx="10"/>
+  <text class="lbl" x="40" y="70">the declaration, part by part</text>
+
+  <text class="code"  x="150" y="100">.option("</text>
+  <text class="codek" x="232" y="100">-t</text>
+  <text class="code"  x="251" y="100">,</text>
+  <text class="codek" x="268" y="100">--tag</text>
+  <text class="codek" x="319" y="100">&lt;value&gt;</text>
+  <text class="code"  x="382" y="100">",</text>
+  <text class="codek" x="407" y="100">{ type: "string", required: true }</text>
+  <text class="code"  x="704" y="100">)</text>
+
+  <path class="ln" d="M 240 110 V 124 H 142 V 140" marker-end="url(#a)"/>
+  <path class="ln" d="M 289 110 V 124 H 366 V 140" marker-end="url(#a)"/>
+  <path class="ln" d="M 349 110 V 124 H 590 V 140" marker-end="url(#a)"/>
+  <path class="ln" d="M 554 110 V 124 H 814 V 140" marker-end="url(#a)"/>
+
+  <rect class="card" x="36" y="144" width="212" height="104" rx="7"/>
+  <text class="mono" x="50" y="164">-t</text>
+  <text class="s" x="50" y="182">short alias — one character,</text>
+  <text class="s" x="50" y="196">written before the long name</text>
+  <text class="s" x="50" y="210">in the same spec string.</text>
+
+  <rect class="card" x="260" y="144" width="212" height="104" rx="7"/>
+  <text class="mono" x="274" y="164">--tag</text>
+  <text class="s" x="274" y="182">the canonical long name.</text>
+  <text class="s" x="274" y="196">This is the key you read:</text>
+  <text class="monod" x="274" y="212">ctx.options.tag</text>
+
+  <rect class="card" x="484" y="144" width="212" height="104" rx="7"/>
+  <text class="mono" x="498" y="164">&lt;value&gt;</text>
+  <text class="s" x="498" y="182">a value placeholder. The space</text>
+  <text class="s" x="498" y="196">before it is required. Its</text>
+  <text class="s" x="498" y="210">presence makes the type default</text>
+  <text class="s" x="498" y="224">to string; without it the option</text>
+  <text class="s" x="498" y="238">is a boolean.</text>
+
+  <rect class="card" x="708" y="144" width="212" height="104" rx="7"/>
+  <text class="mono" x="722" y="164">{ type, required, ... }</text>
+  <text class="s" x="722" y="182">the schema. Its fields:</text>
+  <text class="monod" x="722" y="198">type, alias, required,</text>
+  <text class="monod" x="722" y="212">default, choices, parse,</text>
+  <text class="monod" x="722" y="226">validate, description,</text>
+  <text class="monod" x="722" y="240">hidden, autocomplete</text>
+
+  <!-- ============ bottom panel: accepted forms ============ -->
+  <rect class="grp" x="24" y="272" width="912" height="268" rx="10"/>
+  <text class="lbl" x="40" y="292">the forms the parser accepts</text>
+
+  <rect class="chip" x="40" y="302" width="140" height="26" rx="6"/>
+  <text class="monod" x="52" y="320">--tag v1</text>
+  <path class="ln" d="M 186 315 H 200" marker-end="url(#a)"/>
+  <rect class="chip" x="206" y="302" width="176" height="26" rx="6"/>
+  <text class="mono" x="218" y="320">tag: "v1"</text>
+  <text class="s" x="396" y="320">the plain form: a space, then the value</text>
+
+  <rect class="chip" x="40" y="336" width="140" height="26" rx="6"/>
+  <text class="monod" x="52" y="354">--tag=v1</text>
+  <path class="ln" d="M 186 349 H 200" marker-end="url(#a)"/>
+  <rect class="chip" x="206" y="336" width="176" height="26" rx="6"/>
+  <text class="mono" x="218" y="354">tag: "v1"</text>
+  <text class="s" x="396" y="354">the only way to pass a value starting with <tspan class="monod">-</tspan></text>
+
+  <rect class="chip" x="40" y="370" width="140" height="26" rx="6"/>
+  <text class="monod" x="52" y="388">-t v1</text>
+  <text class="s" x="90" y="388">or</text>
+  <text class="monod" x="110" y="388">-t=v1</text>
+  <path class="ln" d="M 186 383 H 200" marker-end="url(#a)"/>
+  <rect class="chip" x="206" y="370" width="176" height="26" rx="6"/>
+  <text class="mono" x="218" y="388">tag: "v1"</text>
+  <text class="s" x="396" y="388">an alias is resolved to the long name</text>
+
+  <rect class="chip" x="40" y="404" width="140" height="26" rx="6"/>
+  <text class="monod" x="52" y="422">-abc</text>
+  <path class="lnw" d="M 186 417 H 200" marker-end="url(#w)"/>
+  <rect class="chip" x="206" y="404" width="176" height="26" rx="6"/>
+  <text class="mono" x="218" y="422">a: true, b: true, c: true</text>
+  <text class="warnt" x="396" y="422">short clustering is boolean-only; a value-taking flag in a cluster is an error</text>
+
+  <rect class="chip" x="40" y="438" width="140" height="26" rx="6"/>
+  <text class="monod" x="52" y="456">--no-force</text>
+  <path class="ln" d="M 186 451 H 200" marker-end="url(#a)"/>
+  <rect class="chip" x="206" y="438" width="176" height="26" rx="6"/>
+  <text class="mono" x="218" y="456">force: false</text>
+  <text class="s" x="396" y="456">negation, boolean options only</text>
+
+  <rect class="chip" x="40" y="472" width="140" height="26" rx="6"/>
+  <text class="monod" x="52" y="490">--</text>
+  <path class="ln2" d="M 186 485 H 200" marker-end="url(#b)"/>
+  <text class="s" x="208" y="490">everything after it is a positional argument, verbatim</text>
+
+  <rect class="chip" x="40" y="506" width="140" height="26" rx="6"/>
+  <text class="monod" x="52" y="524">--offset -5</text>
+  <path class="ln" d="M 186 519 H 200" marker-end="url(#a)"/>
+  <rect class="chip" x="206" y="506" width="176" height="26" rx="6"/>
+  <text class="mono" x="218" y="524">offset: -5</text>
+  <text class="s" x="396" y="524">a negative number binds to a <tspan class="monod">number</tspan> option</text>
+
+  <path class="seam" d="M 24 552 H 936"/>
+  <text class="s" x="480" y="572" text-anchor="middle"><tspan class="monod">ctx.options</tspan> is keyed by the long name, never by an alias. An omitted boolean is <tspan class="monod">false</tspan>, not <tspan class="monod">undefined</tspan>.</text>
+</svg>

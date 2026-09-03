@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 588" width="960" height="588" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">コマンド経路が解決される仕組み</title>
+  <desc id="dsc">myapp という CLI のコマンドツリーです。ルートの子は3つあります。env 引数を取り d というエイリアスを持つ deploy、アクションを持たないグループで migrate と seed を子に持つ db、同じくアクションを持たないグループで name 引数を取る create と delete を子に持つ user です。右側の注記では、エイリアスは実名に解決されるため ctx.commandPath が常に正式名であること、db はアクションを持たないため myapp db だけを実行するとそのグループのヘルプが出ること、入力行 myapp db migrate --steps 2 がコマンド経路 db migrate とオプション --steps 2 に分かれることを説明しています。下部の警告色の枠は落とし穴を示します。位置引数とサブコマンドを両方持つコマンドはサブコマンドを隠します。アクションを持ち引数を取る最初のコマンドで一致が止まるためで、report file とその到達不能な子 daily で例示しています。</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .warnbox { fill:#ffffff; stroke:#a3401f }
+    .ghost { fill:#eaeef2; stroke:#d0d7de }
+    .tl    { fill:none; stroke:#afb8c1; stroke-width:1.2 }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .strike { fill:none; stroke:#8c959f; stroke-width:1.2 }
+    .ah    { fill:#2f6f4f }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .monon { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    .monog { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#8c959f }
+    .gt    { fill:#8c959f }
+    .warnt { fill:#a3401f }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .warnbox{fill:#161b22;stroke:#e08a68} .ghost{fill:#12171d;stroke:#30363d}
+      .tl{stroke:#484f58} .seam{stroke:#484f58} .strike{stroke:#6e7681}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .ah{fill:#56d364}
+      .mono{fill:#56d364} .monon{fill:#e6edf3} .monog{fill:#6e7681} .gt{fill:#6e7681}
+      .warnt{fill:#e08a68}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="588" rx="12"/>
+
+  <text class="lbl" x="40" y="52">コマンドツリー</text>
+
+  <rect class="chip" x="40" y="64" width="104" height="32" rx="6"/>
+  <text class="mono" x="92" y="85" text-anchor="middle">myapp</text>
+
+  <path class="tl" d="M 72 96 V 304"/>
+  <path class="tl" d="M 72 128 H 172"/>
+  <path class="tl" d="M 72 180 H 172"/>
+  <path class="tl" d="M 72 304 H 172"/>
+
+  <rect class="chip" x="176" y="112" width="176" height="32" rx="5"/>
+  <text class="mono" x="190" y="133">deploy &lt;env&gt;</text>
+
+  <path class="seam" d="M 352 128 H 392"/>
+  <rect class="alt" x="396" y="112" width="180" height="32" rx="5"/>
+  <text class="monon" x="408" y="133">alias: d</text>
+
+  <rect class="chip" x="176" y="164" width="176" height="32" rx="5"/>
+  <text class="mono" x="190" y="185">db</text>
+  <text class="s" x="340" y="185" text-anchor="end">アクションなし</text>
+
+  <path class="tl" d="M 208 196 V 254"/>
+  <path class="tl" d="M 208 218 H 392"/>
+  <path class="tl" d="M 208 254 H 392"/>
+
+  <rect class="chip" x="396" y="204" width="180" height="28" rx="5"/>
+  <text class="mono" x="408" y="222">migrate</text>
+
+  <rect class="chip" x="396" y="240" width="180" height="28" rx="5"/>
+  <text class="mono" x="408" y="258">seed</text>
+
+  <rect class="chip" x="176" y="288" width="176" height="32" rx="5"/>
+  <text class="mono" x="190" y="309">user</text>
+  <text class="s" x="340" y="309" text-anchor="end">アクションなし</text>
+
+  <path class="tl" d="M 208 320 V 378"/>
+  <path class="tl" d="M 208 342 H 392"/>
+  <path class="tl" d="M 208 378 H 392"/>
+
+  <rect class="chip" x="396" y="328" width="180" height="28" rx="5"/>
+  <text class="mono" x="408" y="346">create &lt;name&gt;</text>
+
+  <rect class="chip" x="396" y="364" width="180" height="28" rx="5"/>
+  <text class="mono" x="408" y="382">delete &lt;name&gt;</text>
+
+  <rect class="chip" x="600" y="100" width="336" height="76" rx="6"/>
+  <text class="lbl" x="614" y="120">エイリアス</text>
+  <text class="s" x="614" y="138"><tspan class="monon">myapp d prod</tspan> は <tspan class="monon">myapp deploy prod</tspan> と</text>
+  <text class="s" x="614" y="154">同じコマンドを実行します。エイリアスは</text>
+  <text class="s" x="614" y="170">実名に解決され、<tspan class="monon">ctx.commandPath</tspan> は常に正式名です。</text>
+
+  <rect class="chip" x="600" y="196" width="336" height="76" rx="6"/>
+  <text class="lbl" x="614" y="216">アクションを持たないグループ</text>
+  <text class="s" x="614" y="234"><tspan class="monon">db</tspan> 自身は action を持たないので、</text>
+  <text class="s" x="614" y="250"><tspan class="monon">myapp db</tspan> だけを実行すると、そのグループの</text>
+  <text class="s" x="614" y="266">ヘルプを表示します。</text>
+
+  <rect class="chip" x="600" y="292" width="336" height="104" rx="6"/>
+  <text class="lbl" x="614" y="312">入力行の分かれ方</text>
+  <text class="monon" x="616" y="334">myapp db migrate --steps 2</text>
+  <path class="ln" d="M 654 340 V 347 H 717 V 340"/>
+  <path class="ln2" d="M 723 340 V 347 H 780 V 340"/>
+  <text class="s" x="685" y="362" text-anchor="middle">コマンド経路</text>
+  <text class="s" x="751" y="362" text-anchor="middle">オプション</text>
+  <text class="s" x="614" y="384"><tspan class="monon">myapp</tspan> はプログラム名で、コマンドではありません</text>
+
+  <rect class="warnbox" x="24" y="424" width="912" height="120" rx="8"/>
+  <text class="lbl warnt" x="40" y="446">落とし穴</text>
+  <text class="h warnt" x="40" y="466">位置引数とサブコマンドを両方持つコマンドは、そのサブコマンドを隠します</text>
+  <text class="s" x="40" y="486">アクションを持ち位置引数を取る最初のコマンドで一致が止まるため、</text>
+  <text class="s" x="40" y="502">その後のトークンはサブコマンド名ではなく、その引数として読まれます</text>
+
+  <rect class="chip" x="630" y="450" width="150" height="30" rx="5"/>
+  <text class="monon" x="642" y="470">report &lt;file&gt;</text>
+  <path class="tl" d="M 662 480 V 506 H 696"/>
+  <rect class="ghost" x="700" y="492" width="150" height="30" rx="5"/>
+  <text class="monog" x="712" y="512">report daily</text>
+  <path class="strike" d="M 707 508 H 793"/>
+  <text class="s warnt" x="858" y="511">到達不能</text>
+
+  <text class="s" x="480" y="566" text-anchor="middle">解決はルートから下り、エイリアスを解決しながら進み、アクションを持ち位置引数を宣言している最初のコマンドで止まります。</text>
+</svg>

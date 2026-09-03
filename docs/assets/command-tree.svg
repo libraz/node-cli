@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 588" width="960" height="588" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">How a command path is resolved</title>
+  <desc id="dsc">A command tree for a CLI called myapp. The root has three children: deploy, which takes an env argument and carries the alias d; db, a group with no action whose children are migrate and seed; and user, a group with no action whose children are create and delete, each taking a name argument. Notes on the right explain that an alias resolves to the real name so ctx.commandPath is always canonical, that running myapp db alone prints that group's help because db has no action, and how the typed line myapp db migrate --steps 2 splits into the command path db migrate and the options --steps 2. A warn-coloured box at the bottom marks the pitfall: a command that has both positional arguments and subcommands hides those subcommands, because matching stops at the first command that has an action and takes arguments — shown with report file and its unreachable child daily.</desc>
+
+  <style>
+    .bg    { fill:#f6f8fa }
+    .grp   { fill:#eaeef2 }
+    .chip  { fill:#ffffff; stroke:#d0d7de }
+    .card  { fill:#ffffff; stroke:#2f6f4f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .warnbox { fill:#ffffff; stroke:#a3401f }
+    .ghost { fill:#eaeef2; stroke:#d0d7de }
+    .tl    { fill:none; stroke:#afb8c1; stroke-width:1.2 }
+    .seam  { fill:none; stroke:#afb8c1; stroke-dasharray:6 5 }
+    .ln    { fill:none; stroke:#2f6f4f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .strike { fill:none; stroke:#8c959f; stroke-width:1.2 }
+    .ah    { fill:#2f6f4f }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .lbl   { font-size:11px; fill:#636c76; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#636c76 }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#2f6f4f }
+    .monon { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#1f2328 }
+    .monog { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#8c959f }
+    .gt    { fill:#8c959f }
+    .warnt { fill:#a3401f }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#56d364} .alt{fill:#161b22;stroke:#7fb3d5}
+      .warnbox{fill:#161b22;stroke:#e08a68} .ghost{fill:#12171d;stroke:#30363d}
+      .tl{stroke:#484f58} .seam{stroke:#484f58} .strike{stroke:#6e7681}
+      .ln{stroke:#56d364} .ln2{stroke:#7fb3d5} .ah{fill:#56d364}
+      .mono{fill:#56d364} .monon{fill:#e6edf3} .monog{fill:#6e7681} .gt{fill:#6e7681}
+      .warnt{fill:#e08a68}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="588" rx="12"/>
+
+  <text class="lbl" x="40" y="52">THE COMMAND TREE</text>
+
+  <rect class="chip" x="40" y="64" width="104" height="32" rx="6"/>
+  <text class="mono" x="92" y="85" text-anchor="middle">myapp</text>
+
+  <path class="tl" d="M 72 96 V 304"/>
+  <path class="tl" d="M 72 128 H 172"/>
+  <path class="tl" d="M 72 180 H 172"/>
+  <path class="tl" d="M 72 304 H 172"/>
+
+  <rect class="chip" x="176" y="112" width="176" height="32" rx="5"/>
+  <text class="mono" x="190" y="133">deploy &lt;env&gt;</text>
+
+  <path class="seam" d="M 352 128 H 392"/>
+  <rect class="alt" x="396" y="112" width="180" height="32" rx="5"/>
+  <text class="monon" x="408" y="133">alias: d</text>
+
+  <rect class="chip" x="176" y="164" width="176" height="32" rx="5"/>
+  <text class="mono" x="190" y="185">db</text>
+  <text class="s" x="340" y="185" text-anchor="end">no action — a group</text>
+
+  <path class="tl" d="M 208 196 V 254"/>
+  <path class="tl" d="M 208 218 H 392"/>
+  <path class="tl" d="M 208 254 H 392"/>
+
+  <rect class="chip" x="396" y="204" width="180" height="28" rx="5"/>
+  <text class="mono" x="408" y="222">migrate</text>
+
+  <rect class="chip" x="396" y="240" width="180" height="28" rx="5"/>
+  <text class="mono" x="408" y="258">seed</text>
+
+  <rect class="chip" x="176" y="288" width="176" height="32" rx="5"/>
+  <text class="mono" x="190" y="309">user</text>
+  <text class="s" x="340" y="309" text-anchor="end">no action — a group</text>
+
+  <path class="tl" d="M 208 320 V 378"/>
+  <path class="tl" d="M 208 342 H 392"/>
+  <path class="tl" d="M 208 378 H 392"/>
+
+  <rect class="chip" x="396" y="328" width="180" height="28" rx="5"/>
+  <text class="mono" x="408" y="346">create &lt;name&gt;</text>
+
+  <rect class="chip" x="396" y="364" width="180" height="28" rx="5"/>
+  <text class="mono" x="408" y="382">delete &lt;name&gt;</text>
+
+  <rect class="chip" x="600" y="100" width="336" height="76" rx="6"/>
+  <text class="lbl" x="614" y="120">ALIASES</text>
+  <text class="s" x="614" y="138"><tspan class="monon">myapp d prod</tspan> runs the same command as</text>
+  <text class="s" x="614" y="154"><tspan class="monon">myapp deploy prod</tspan>. An alias resolves to the</text>
+  <text class="s" x="614" y="170">real name, so <tspan class="monon">ctx.commandPath</tspan> is canonical.</text>
+
+  <rect class="chip" x="600" y="196" width="336" height="76" rx="6"/>
+  <text class="lbl" x="614" y="216">A GROUP WITH NO ACTION</text>
+  <text class="s" x="614" y="234"><tspan class="monon">db</tspan> has no action of its own, so running</text>
+  <text class="s" x="614" y="250"><tspan class="monon">myapp db</tspan> on its own prints that group's help</text>
+  <text class="s" x="614" y="266">instead of executing anything.</text>
+
+  <rect class="chip" x="600" y="292" width="336" height="104" rx="6"/>
+  <text class="lbl" x="614" y="312">HOW A TYPED LINE SPLITS</text>
+  <text class="monon" x="616" y="334">myapp db migrate --steps 2</text>
+  <path class="ln" d="M 654 340 V 347 H 717 V 340"/>
+  <path class="ln2" d="M 723 340 V 347 H 780 V 340"/>
+  <text class="s" x="685" y="362" text-anchor="middle">command path</text>
+  <text class="s" x="751" y="362" text-anchor="middle">options</text>
+  <text class="s" x="614" y="384"><tspan class="monon">myapp</tspan> is the program name, not a command</text>
+
+  <rect class="warnbox" x="24" y="424" width="912" height="120" rx="8"/>
+  <text class="lbl warnt" x="40" y="446">PITFALL</text>
+  <text class="h warnt" x="40" y="466">a command with BOTH positional arguments and subcommands hides them</text>
+  <text class="s" x="40" y="486">matching stops at the first command that has an action and takes positional arguments,</text>
+  <text class="s" x="40" y="502">so every token after it is read as one of its arguments, never as a subcommand name</text>
+
+  <rect class="chip" x="630" y="450" width="150" height="30" rx="5"/>
+  <text class="monon" x="642" y="470">report &lt;file&gt;</text>
+  <path class="tl" d="M 662 480 V 506 H 696"/>
+  <rect class="ghost" x="700" y="492" width="150" height="30" rx="5"/>
+  <text class="monog" x="712" y="512">report daily</text>
+  <path class="strike" d="M 707 508 H 793"/>
+  <text class="s warnt" x="858" y="511">unreachable</text>
+
+  <text class="s" x="480" y="566" text-anchor="middle">Resolution walks down from the root, resolving aliases, and stops at the first command that has an action and declares positional arguments.</text>
+</svg>
