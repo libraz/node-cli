@@ -59,7 +59,18 @@ describe("color", () => {
     // biome-ignore lint/suspicious/noExplicitAny: testing proxy property access
     expect(() => (color.red as any).name).toThrow("Unknown style: name");
     // biome-ignore lint/suspicious/noExplicitAny: testing proxy property access
-    expect(() => (color as any).toString).toThrow("Unknown style: toString");
+    expect(() => (color as any).foobar).toThrow("Unknown style: foobar");
+  });
+
+  it("survives the protocol properties the runtime reads on its own", async () => {
+    expect(String(color.red)).toBeTypeOf("string");
+    expect(`${color.red.bold}`).toBeTypeOf("string");
+    // A colorizer carried across an await is read for `then`; a crash there
+    // would surface far from the code that passed it along.
+    await expect(Promise.resolve(color.red)).resolves.toBeTypeOf("function");
+    expect(() => JSON.stringify({ style: color.red })).not.toThrow();
+    // biome-ignore lint/suspicious/noExplicitAny: testing proxy property access
+    expect((color as any).then).toBeUndefined();
   });
 });
 

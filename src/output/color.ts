@@ -133,31 +133,41 @@ interface ColorFn {
   [key: string]: ColorFn;
 }
 
+/**
+ * String-keyed properties the language and the runtime read on their own, without
+ * the holder ever writing them: awaiting a value reads `then`, string coercion
+ * reads `toString` and `valueOf`, and serialization reads `toJSON`. Treating them
+ * as style names would turn passing a colorizer through an `await`, a template
+ * literal, or `JSON.stringify` into a crash naming a property nobody typed.
+ */
+const protocolProperties = new Set(["then", "toString", "valueOf", "toJSON", "constructor"]);
+
+function styleTrap<T extends object>(
+  target: T,
+  prop: string | symbol,
+  resolve: (name: string) => ColorFn,
+): unknown {
+  // Symbols are protocol hooks too, so they never name a style.
+  if (typeof prop !== "string" || protocolProperties.has(prop)) return Reflect.get(target, prop);
+  if (!Object.hasOwn(styles, prop)) {
+    throw new Error(`Unknown style: ${prop}`);
+  }
+  return resolve(prop);
+}
+
 function createChain(accumulated: [number, number][], isEnabled: () => boolean): ColorFn {
   const apply = (text: string): string => applyStyle(text, accumulated, isEnabled());
 
   return new Proxy(apply, {
-    get(target, prop: string | symbol): unknown {
-      // Symbols are used by language/runtime protocols; string properties are
-      // styles only, so inherited Function/Object members must not leak through.
-      if (typeof prop !== "string") return Reflect.get(target, prop);
-      if (!Object.hasOwn(styles, prop)) {
-        throw new Error(`Unknown style: ${prop}`);
-      }
-      return createChain([...accumulated, styles[prop]], isEnabled);
-    },
+    get: (target, prop) =>
+      styleTrap(target, prop, (name) => createChain([...accumulated, styles[name]], isEnabled)),
   }) as ColorFn;
 }
 
 function createColorProxy(isEnabled: () => boolean): Record<string, ColorFn> {
   return new Proxy({} as Record<string, ColorFn>, {
-    get(target, prop: string | symbol): unknown {
-      if (typeof prop !== "string") return Reflect.get(target, prop);
-      if (!Object.hasOwn(styles, prop)) {
-        throw new Error(`Unknown style: ${prop}`);
-      }
-      return createChain([styles[prop]], isEnabled);
-    },
+    get: (target, prop) =>
+      styleTrap(target, prop, (name) => createChain([styles[name]], isEnabled)),
   });
 }
 
