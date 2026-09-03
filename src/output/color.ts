@@ -255,7 +255,10 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
         // Values are substituted after inline styles have been rendered. If an
         // interpolated ANSI fragment closes a shared color/style code, reopen
         // every surrounding inline style before the following literal text.
-        result += token + activeCodes.map(([open]) => `\x1b[${open}m`).join("");
+        // With color disabled no style was ever opened, so reopening one would
+        // put escapes into output that must be plain.
+        result += token;
+        if (enabled) result += activeCodes.map(([open]) => `\x1b[${open}m`).join("");
         i += token.length - 1;
         continue;
       }
@@ -405,12 +408,20 @@ export function sanitizeTerminalText(
       }
 
       let result = "";
-      for (const character of segment.text) {
+      // Windows line endings collapse to a bare newline so the carriage return
+      // below does not leave a trailing space on every line.
+      const text = singleLine ? segment.text : segment.text.replace(/\r\n/g, "\n");
+      for (const character of text) {
         const code = character.codePointAt(0) as number;
-        if (
-          singleLine &&
-          (code === 0x09 || code === 0x0a || code === 0x0b || code === 0x0c || code === 0x0d)
-        ) {
+        if (code === 0x0a) {
+          // A newline is the one whitespace control that carries structure, so
+          // it survives unless the caller asked for a single line.
+          result += singleLine ? " " : "\n";
+        } else if (code === 0x09 || code === 0x0b || code === 0x0c || code === 0x0d) {
+          // Tab, vertical tab, form feed and carriage return can reposition the
+          // cursor, so none of them are emitted; each becomes a space rather
+          // than nothing, because dropping them would join words the input kept
+          // apart — which is how a stack trace turned into "Error:file".
           result += " ";
         } else if (isControlCode(code)) {
           // Drop remaining C0 controls, DEL, and C1 controls.
