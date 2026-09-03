@@ -4,6 +4,7 @@ import type { CommandRouter } from "../command/router.js";
 import { presentError } from "../errors.js";
 import { streamIsTTY } from "../output/color.js";
 import { releaseAll } from "../output/progress.js";
+import { isShellCommand } from "./builtins.js";
 import type { CompletionResult } from "./completion.js";
 import { ShellCompleter } from "./completion.js";
 import { History } from "./history.js";
@@ -316,7 +317,7 @@ export class Shell {
         continue;
       }
 
-      if ((trimmed === "exit" || trimmed === "quit") && !this.registry.resolve([trimmed])) {
+      if (isShellCommand(trimmed) && !this.registry.resolve([trimmed])) {
         if (this.mode) {
           this.exitMode();
           this.reopeningReadline = true;

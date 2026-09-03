@@ -10,6 +10,7 @@ import {
 import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
 import { ParseError } from "../errors.js";
 import type { CommandDefinition, OptionDef } from "../types.js";
+import { SHELL_COMMANDS } from "./builtins.js";
 
 /**
  * Result of a completion operation.
@@ -332,8 +333,9 @@ export class ShellCompleter {
         }
       }
     }
-    if (!this.registry.resolve(["exit"])) names.push("exit");
-    if (!this.registry.resolve(["quit"])) names.push("quit");
+    for (const name of SHELL_COMMANDS) {
+      if (!this.registry.resolve([name])) names.push(name);
+    }
     return names;
   }
 

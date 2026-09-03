@@ -12,6 +12,7 @@ import {
   isCancellationError,
   MissingArgumentError,
   MissingOptionError,
+  PromptCancelError,
   UnknownOptionError,
   ValidationError,
 } from "../src/errors.js";
@@ -743,9 +744,7 @@ describe("prompting after end of input", () => {
     stdin.push(null);
     await new Promise((resolve) => stdin.once("end", resolve).resume());
 
-    await expect(
-      prompt.text({ message: "name", stdin, stdout: createMockStdout() }),
-    ).rejects.toThrow();
+    await expect(prompt.text("name", { stdin, stdout: createMockStdout() })).rejects.toThrow();
   });
 });
 
@@ -765,5 +764,57 @@ describe("logging with non-string messages", () => {
     const written = out.getOutput();
     expect(written).toContain("msg");
     expect(written).toContain("boom");
+  });
+});
+
+// ── Shell commands the help footer advertises ──
+
+describe("help for the shell's own commands", () => {
+  it("describes exit and quit instead of failing as unknown", async () => {
+    for (const name of ["exit", "quit"]) {
+      const cli = createCLI();
+      const out = createMockStdout();
+      await cli.exec(`help ${name}`, { stdout: out, stderr: out });
+      expect(out.getOutput()).toContain(`Usage: ${name}`);
+    }
+  });
+
+  it("offers them when completing the help target", () => {
+    const cli = createCLI();
+    const registry = (cli as unknown as { registry: CommandRegistry }).registry;
+    const [candidates] = new ShellCompleter(registry).complete("help ex") as [string[], string];
+    expect(candidates).toContain("exit");
+  });
+
+  it("lets an application command of the same name win", async () => {
+    const cli = createCLI();
+    cli
+      .command("exit <code>")
+      .description("Leave with a status")
+      .action(() => {});
+    const out = createMockStdout();
+
+    await cli.exec("help exit", { stdout: out, stderr: out });
+    expect(out.getOutput()).toContain("Leave with a status");
+    expect(out.getOutput()).not.toContain("Exit the interactive shell.");
+  });
+});
+
+// ── Prompt terminal mode ──
+
+describe("prompt terminal mode", () => {
+  it("keeps readline's Ctrl-C handling when only stdout is redirected", async () => {
+    const stdin = createMockStdin();
+    (stdin as unknown as Record<string, boolean>).isTTY = true;
+    // A captured stdout, as produced by `mycli init | tee setup.log`.
+    const stdout = createMockStdout();
+
+    const pending = prompt.text("name", { stdin, stdout });
+    // Readline only translates the ETX byte into a SIGINT event in terminal
+    // mode; without it the byte would be swallowed and the prompt would hang.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stdin.feed("\u0003");
+
+    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
   });
 });

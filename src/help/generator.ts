@@ -1,6 +1,7 @@
 import { formatOptionFlag, helpFlagBindings } from "../command/parser.js";
 import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
 import { stringWidth } from "../output/color.js";
+import { isShellCommand, SHELL_COMMANDS_LABEL } from "../shell/builtins.js";
 import type { ArgDef, CommandDefinition, OptionDef } from "../types.js";
 
 /**
@@ -53,7 +54,7 @@ export class HelpGenerator {
       // commands. Keep application registration order while listing that helper
       // last, so it does not occupy the first, most prominent command slot.
       .sort((left, right) => (left.name === "help" ? 1 : right.name === "help" ? -1 : 0));
-    if (commands.length === 0) return "No commands available.\n\nShell commands: exit, quit";
+    if (commands.length === 0) return `No commands available.\n\n${SHELL_COMMANDS_LABEL}`;
 
     const lines: string[] = [];
 
@@ -85,7 +86,7 @@ export class HelpGenerator {
     if (version) {
       lines.push("", "Options:", "  -V, --version    Show the CLI version");
     }
-    lines.push("", "Shell commands: exit, quit", 'Type "help <command>" for more information.');
+    lines.push("", SHELL_COMMANDS_LABEL, 'Type "help <command>" for more information.');
 
     return lines.join("\n");
   }
@@ -102,10 +103,12 @@ export class HelpGenerator {
    *   message if the path cannot be resolved.
    */
   generateCommand(commandPath: string[]): string {
-    if (commandPath.length === 1 && (commandPath[0] === "exit" || commandPath[0] === "quit")) {
+    const command = this.registry.resolve(commandPath);
+    // The shell's own commands have no registry entry, so describe them here —
+    // but never in place of an application command that took the same name.
+    if (!command && commandPath.length === 1 && isShellCommand(commandPath[0])) {
       return `Usage: ${commandPath[0]}\n\nExit the interactive shell.`;
     }
-    const command = this.registry.resolve(commandPath);
     if (!command) return `Unknown command: ${commandPath.join(" ")}`;
 
     const lines: string[] = [];

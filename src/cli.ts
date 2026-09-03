@@ -7,6 +7,7 @@ import { CommandRouter } from "./command/router.js";
 import { CommandNotFoundError, presentError } from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
 import { streamIsTTY } from "./output/color.js";
+import { isShellCommand, SHELL_COMMANDS } from "./shell/builtins.js";
 import { Shell } from "./shell/repl.js";
 import type { CatchContext, CLIEventMap, CLIOptions } from "./types.js";
 
@@ -392,10 +393,15 @@ export class CLI {
         const commands = parent
           ? [...new Set(parent.subcommands.values())]
           : registry.allTopLevel();
-        return commands
+        const names = commands
           .filter((command) => !command.hidden)
-          .flatMap((command) => [command.name, ...(command.aliases ?? [])])
-          .filter((name) => name.startsWith(current));
+          .flatMap((command) => [command.name, ...(command.aliases ?? [])]);
+        // At the top level, offer the shell's own commands too: the help footer
+        // advertises them, so completion must be able to reach them.
+        if (!parent) {
+          names.push(...SHELL_COMMANDS.filter((name) => !registry.resolve([name])));
+        }
+        return names.filter((name) => name.startsWith(current));
       })
       .action((ctx) => {
         const commandParts = ctx.args.command as string[] | undefined;
@@ -407,7 +413,12 @@ export class CLI {
 
         // Unknown target: report on stderr with a non-zero exit, matching how a
         // bare unrecognized command is surfaced (not a silent stdout + exit 0).
-        if (!registry.resolve(commandParts)) {
+        // The shell's own commands have no registry entry, yet the generated
+        // help footer advertises them, so they must resolve here too.
+        if (
+          !registry.resolve(commandParts) &&
+          !(commandParts.length === 1 && isShellCommand(commandParts[0]))
+        ) {
           throw new CommandNotFoundError(commandParts.join(" "));
         }
 
