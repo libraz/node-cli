@@ -25,7 +25,7 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install -g npm@11.18.0
+      - run: npm install -g npm@11.19.1
       - run: corepack enable
       - run: corepack prepare yarn@4.18.0 --activate
 
@@ -64,9 +64,9 @@ jobs:
       - name: Publish verified tarball to npm
         run: npm publish "${{ steps.artifact.outputs.tarball }}" --access public --tag "${{ steps.metadata.outputs.dist_tag }}"
 
-      # v3.0.2
+      # v3.0.3
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
         with:
           name: Release ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
