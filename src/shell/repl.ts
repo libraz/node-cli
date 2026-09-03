@@ -142,17 +142,15 @@ export class Shell {
     // using a one-shot listener would accept the first and silently discard the
     // rest before the shell loop gets a chance to subscribe again.
     this.rl.on("line", (line: string) => {
-      const pendingPartialLine = this.pendingPartialLine;
-      this.pendingPartialLine = undefined;
-      const completeLine = pendingPartialLine === undefined ? line : `${pendingPartialLine}${line}`;
       const resolve = this.pendingLineResolver;
       if (resolve) {
         this.pendingLineResolver = undefined;
-        resolve(completeLine);
+        resolve(line);
       } else {
-        this.pendingLines.push(completeLine);
+        this.pendingLines.push(line);
       }
     });
+
     // Ctrl+C at the prompt cancels the current line instead of exiting the shell.
     this.rl.on("SIGINT", () => {
       const rl = this.rl;
@@ -298,6 +296,16 @@ export class Shell {
 
     while (this.running) {
       this.rl?.prompt();
+      // Text the previous interface had buffered but never submitted is typed
+      // back in after the prompt is drawn, so the line on screen is always a
+      // prefix of what pressing Enter will run. Prepending it invisibly at
+      // submit time made the two diverge. `prompt()` resets the cursor, so this
+      // has to follow it.
+      if (this.pendingPartialLine !== undefined) {
+        const carried = this.pendingPartialLine;
+        this.pendingPartialLine = undefined;
+        this.rl?.write(carried);
+      }
 
       const line = await this.readNextLine();
       if (line === null) {

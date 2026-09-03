@@ -849,3 +849,41 @@ describe("numeric option bounds", () => {
     ).toThrow(/safe integer range/);
   });
 });
+
+// ── Actionless command groups ──
+
+describe("actionless command groups", () => {
+  function group(withChild: boolean) {
+    const registry = new CommandRegistry();
+    const db = new CommandBuilder(registry, "db");
+    if (withChild) db.command("status").action(() => {});
+    return new CommandRouter(registry);
+  }
+
+  it("gives the catch handler the first chance whether or not children exist", async () => {
+    for (const withChild of [true, false]) {
+      const router = group(withChild);
+      const seen: string[] = [];
+      router.setCatchHandler((input) => {
+        seen.push(input);
+      });
+
+      await router.execute("db nope");
+      expect(seen).toEqual(["db nope"]);
+    }
+  });
+
+  it("throws the same error class either way when nothing catches", async () => {
+    const thrown: string[] = [];
+    for (const withChild of [true, false]) {
+      const router = group(withChild);
+      router.on("error", () => {});
+      try {
+        await router.execute("db nope");
+      } catch (err) {
+        thrown.push((err as Error).constructor.name);
+      }
+    }
+    expect(thrown).toEqual(["CommandNotFoundError", "CommandNotFoundError"]);
+  });
+});

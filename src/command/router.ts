@@ -530,10 +530,12 @@ export class CommandRouter {
 
     const command = result.command as CommandDefinition;
 
-    // An actionless command with children is a command group, not a command
-    // accepting arbitrary positional input. Report an unknown child uniformly
-    // so nested `catch()` fallbacks get the same opportunity as top-level ones.
-    if (!command.action && command.subcommands.size > 0 && result.extraArgs?.length) {
+    // An actionless command is a command group, not a command accepting
+    // arbitrary positional input. Report an unknown child uniformly so nested
+    // `catch()` fallbacks get the same opportunity as top-level ones. The
+    // current child count does not change that: a group registered before its
+    // children, or a placeholder that has none yet, is still a group.
+    if (!command.action && result.extraArgs?.length) {
       const rawInput = Array.isArray(input) ? input.join(" ") : input;
       if (this.catchHandler) {
         await this.runCatchHandler(this.catchHandler, rawInput, { stdout, stderr });

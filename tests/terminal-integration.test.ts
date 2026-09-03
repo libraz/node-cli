@@ -221,6 +221,10 @@ raise SystemExit(child.returncode)
       await waitForOutput(() => output, "PASTE_ONE");
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
       expect(output).not.toContain("PASTE_TWO");
+      // The carried text is on screen, so the prompt line matches what Enter
+      // would submit rather than looking empty.
+      const afterFirst = output.slice(output.indexOf("PASTE_ONE"));
+      expect(afterFirst).toContain("tw");
 
       child.stdin.write("o\n");
       await waitForOutput(() => output, "PASTE_TWO");
