@@ -236,7 +236,10 @@ function createCancelableRl(
   if (externalSignal?.aborted) onAbort();
   else externalSignal?.addEventListener("abort", onAbort, { once: true });
 
-  let closed = false;
+  // An input that already reached EOF has emitted its `end` event, so readline
+  // will never emit `close` for it and a question would wait forever. Treat that
+  // as closed from the start rather than waiting for an event that cannot come.
+  let closed = input.readableEnded;
   const onClose = () => {
     closed = true;
   };

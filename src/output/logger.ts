@@ -211,7 +211,11 @@ export function logger(options: LoggerOptions = {}, inheritLevel?: () => LogLeve
     const effectiveLevel = level === "success" ? "info" : (level as LogLevel);
     if (!shouldLog(effectiveLevel)) return;
 
-    const formatted = args.length > 0 ? format(message, ...args) : message;
+    // Always go through `format`, even with no extra arguments. A logging call
+    // must never throw, and this module is reachable from plain JavaScript where
+    // `message` can be an Error or an object; `format` renders those instead of
+    // handing a non-string to the text pipeline. Strings pass through unchanged.
+    const formatted = args.length > 0 ? format(message, ...args) : format(message);
 
     const parts: string[] = [];
     const colored = colorOn();

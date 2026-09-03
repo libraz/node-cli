@@ -703,3 +703,67 @@ describe("cancellation classification", () => {
     expect(isCancellationError(new Error("boom"))).toBe(false);
   });
 });
+
+// ── Cancel-handler failures ──
+
+describe("cancel handler failures", () => {
+  it("routes a rejected async cancel handler to the error event", async () => {
+    const registry = new CommandRegistry();
+    new CommandBuilder(registry, "hang")
+      .cancel(async () => {
+        throw new Error("cleanup failed");
+      })
+      .action(
+        (ctx) =>
+          new Promise<void>((resolve) => ctx.signal?.addEventListener("abort", () => resolve())),
+      );
+    const r = new CommandRouter(registry);
+    const errors: Error[] = [];
+    r.on("error", (err) => {
+      errors.push(err);
+    });
+
+    const running = r.execute("hang");
+    // Let the router register the active entry before interrupting it.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(r.triggerCancel()).toBe(true);
+    await running;
+    // The rejection is adopted, not awaited, so it settles one turn later.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(errors.map((err) => err.message)).toEqual(["cleanup failed"]);
+  });
+});
+
+// ── Prompting after end of input ──
+
+describe("prompting after end of input", () => {
+  it("cancels instead of hanging when the input stream already ended", async () => {
+    const stdin = createMockStdin();
+    stdin.push(null);
+    await new Promise((resolve) => stdin.once("end", resolve).resume());
+
+    await expect(
+      prompt.text({ message: "name", stdin, stdout: createMockStdout() }),
+    ).rejects.toThrow();
+  });
+});
+
+// ── Logging never throws ──
+
+describe("logging with non-string messages", () => {
+  it("renders an object or an Error instead of throwing", () => {
+    const out = createMockStdout();
+    const log = logger({ stream: out });
+
+    // Reachable from plain JavaScript, where the `string` type is not enforced.
+    const info = log.info as unknown as (value: unknown) => void;
+    const error = log.error as unknown as (value: unknown) => void;
+    expect(() => info({ msg: "x" })).not.toThrow();
+    expect(() => error(new Error("boom"))).not.toThrow();
+
+    const written = out.getOutput();
+    expect(written).toContain("msg");
+    expect(written).toContain("boom");
+  });
+});

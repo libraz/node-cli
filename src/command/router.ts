@@ -245,16 +245,27 @@ export class CommandRouter {
 
     for (const entry of snapshot) {
       try {
-        entry.command.cancelHandler?.(entry.ctx);
+        // The handler is declared to return `void`, but an async function is
+        // assignable to that signature. Adopt whatever it returns so a rejected
+        // cleanup surfaces on `error` instead of terminating the process.
+        const result: unknown = entry.command.cancelHandler?.(entry.ctx);
+        if (result instanceof Promise) {
+          result.catch((err: unknown) => this.reportCancelFailure(err));
+        }
       } catch (err) {
-        const error = toError(err);
-        // Signal callbacks cannot await. The event machinery already isolates
-        // listener failures, and attaching a rejection handler prevents an
-        // unhandled rejection if an async error listener itself fails.
-        void this.emit("error", error).catch(() => {});
+        this.reportCancelFailure(err);
       }
     }
     return true;
+  }
+
+  /**
+   * Routes a cancel-handler failure to the `error` event. Signal callbacks cannot
+   * await, so the emit is fire-and-forget; the trailing catch keeps a failing
+   * `error` listener from raising an unhandled rejection of its own.
+   */
+  private reportCancelFailure(err: unknown): void {
+    void this.emit("error", toError(err)).catch(() => {});
   }
 
   /**
