@@ -21,7 +21,9 @@ describe("logger", () => {
     const stream = createMockStdout();
     logger({ stream }).info("\x1b]2;spoofed\x07hello\rworld");
     expect(stream.getOutput()).not.toContain("\x1b]2;");
-    expect(stream.getOutput()).toContain("helloworld");
+    // The carriage return is removed, but as a space: dropping it outright
+    // would join two words the caller kept apart.
+    expect(stream.getOutput()).toContain("hello world");
     expect(stream.getOutput()).not.toContain("\r");
   });
 

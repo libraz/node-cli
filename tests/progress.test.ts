@@ -701,3 +701,58 @@ describe("multi bar after close", () => {
     expect(stream.getOutput().length).toBe(before);
   });
 });
+
+describe("using declarations release every indicator", () => {
+  beforeEach(() => {
+    restoreCursor();
+  });
+
+  it("restores the cursor when a bar, spinner or multi-bar goes out of scope", () => {
+    // A never-drawn indicator releases without touching the terminal, so each
+    // one has to render before the scope ends for the restore to be observable.
+    const draw: ((stream: Writable) => Disposable)[] = [
+      (stream) => {
+        const bar = progress.bar({ total: 10, stream });
+        bar.update(1);
+        return bar;
+      },
+      (stream) => {
+        const spinner = progress.spinner({ text: "work", stream });
+        spinner.start();
+        return spinner;
+      },
+      (stream) => {
+        const multi = progress.multi();
+        multi.add({ total: 10, stream }).update(1);
+        return multi;
+      },
+    ];
+    for (const create of draw) {
+      const stream = createMockTTY();
+      {
+        using indicator = create(stream);
+        expect(indicator).toBeDefined();
+      }
+      expect(stream.getOutput()).toContain("\x1b[?25h");
+    }
+  });
+});
+
+describe("documented cursor helpers", () => {
+  it("restoreCursor and releaseAll bring the cursor back", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ text: "work", stream });
+    spinner.start();
+    expect(stream.getOutput()).toContain("\x1b[?25l");
+
+    progress.releaseAll();
+    expect(stream.getOutput()).toContain("\x1b[?25h");
+
+    // restoreCursor is the process-wide fallback the exit handlers use.
+    const bare = createMockTTY();
+    const bar = progress.bar({ total: 1, stream: bare });
+    bar.update(0);
+    restoreCursor();
+    expect(bare.getOutput()).toContain("\x1b[?25h");
+  });
+});

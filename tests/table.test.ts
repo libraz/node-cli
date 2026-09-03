@@ -123,13 +123,16 @@ describe("table", () => {
   });
 
   it("normalizes negative and non-finite padding", () => {
-    expect(() => table([["Name"], ["alice"]], { padding: -1 })).not.toThrow();
-    expect(() =>
-      table([["Name"], ["alice"]], {
-        border: "single",
-        style: { "padding-left": -1, "padding-right": Number.POSITIVE_INFINITY },
-      }),
-    ).not.toThrow();
+    const borderless = table([["Name"], ["alice"]], { padding: -1 });
+    expect(new Set(borderless.split("\n").map(stringWidth)).size).toBe(1);
+
+    const bordered = table([["Name"], ["alice"]], {
+      border: "single",
+      style: { "padding-left": -1, "padding-right": Number.POSITIVE_INFINITY },
+    });
+    // Every row lines up: an unclamped padding would produce ragged rows or a
+    // RangeError from repeating a non-finite count.
+    expect(new Set(bordered.split("\n").map(stringWidth)).size).toBe(1);
   });
 
   it("renders the header for a header-only array", () => {

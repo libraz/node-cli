@@ -230,7 +230,7 @@ describe("mode command", () => {
     expect(typeof shell.setPrompt).toBe("function");
   });
 
-  it("setPrompt updates the prompt string", () => {
+  it("setPrompt records the new prompt even before start() creates readline", () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
     const shell = new Shell({
@@ -240,8 +240,11 @@ describe("mode command", () => {
       historyFile: "mode-history-test",
     });
 
-    // Should not throw when called before start() (no rl yet)
     shell.setPrompt("myapp> ");
+
+    // No readline exists yet, so the new value has to be kept for the one
+    // start() will create rather than written to a live interface.
+    expect((shell as unknown as { promptStr: string }).promptStr).toBe("myapp> ");
   });
 
   it("updates an active parent prompt and stops the shell", () => {
@@ -292,22 +295,32 @@ describe("mode command", () => {
     expect(setPrompt).toHaveBeenNthCalledWith(2, "> ");
   });
 
-  it("command action can enter mode via shell", () => {
+  it("command action can enter mode via shell", async () => {
     const registry = new CommandRegistry();
-    const _router = new CommandRouter(registry);
+    const router = new CommandRouter(registry);
+    const shell = new Shell({
+      router,
+      registry,
+      prompt: "> ",
+      historyFile: "mode-history-test",
+    });
 
     const modeAction = vi.fn();
     new CommandBuilder(registry, "sql").action((ctx) => {
-      if (ctx.shell) {
-        ctx.shell.enterMode({
-          prompt: "sql> ",
-          action: modeAction,
-          message: "Entering SQL mode",
-        });
-      }
+      ctx.shell?.enterMode({
+        prompt: "sql> ",
+        action: modeAction,
+        message: "Entering SQL mode",
+      });
     });
 
-    expect(registry.resolve(["sql"])).toBeDefined();
+    const stdout = createMockTTY();
+    await router.execute("sql", { shell, stdout, stderr: stdout });
+
+    // The action ran and the shell is now in the mode it asked for.
+    const entered = (shell as unknown as { mode: ModeConfig | null }).mode;
+    expect(entered?.prompt).toBe("sql> ");
+    expect(entered?.action).toBe(modeAction);
   });
 
   it("runs the interactive loop through command mode, mode input, mode exit, and shell exit", async () => {

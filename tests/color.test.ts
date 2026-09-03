@@ -5,7 +5,11 @@ import {
   color,
   isColorEnabled,
   resetColorEnabled,
+  sanitizeTerminalText,
   setColorEnabled,
+  splitAnsi,
+  splitGraphemes,
+  streamIsTTY,
   stringWidth,
   stripAnsi,
   truncateAnsi,
@@ -107,6 +111,20 @@ describe("color environment detection", () => {
     process.env.TERM = "dumb";
     expect(isColorEnabled(stream)).toBe(false);
   });
+
+  it("treats FORCE_COLOR=0 and FORCE_COLOR=false as off", () => {
+    for (const value of ["0", "false"]) {
+      process.env.FORCE_COLOR = value;
+      expect(isColorEnabled(stream)).toBe(false);
+    }
+  });
+
+  it("does not let an empty NO_COLOR decide on its own", () => {
+    // An empty NO_COLOR is not set; resolution continues to FORCE_COLOR.
+    process.env.NO_COLOR = "";
+    process.env.FORCE_COLOR = "1";
+    expect(isColorEnabled(stream)).toBe(true);
+  });
 });
 
 describe("c (template tag)", () => {
@@ -144,8 +162,14 @@ describe("c (template tag)", () => {
 
   it("returns plain text when disabled", () => {
     setColorEnabled(false);
-    const result = c`{red hello}`;
-    expect(result).toBe("hello");
+    expect(c`{red hello}`).toBe("hello");
+
+    // The interpolating branch runs through the same enablement gate, so a
+    // regression that only reopens styling around a value has to be covered.
+    const value = color.green("world");
+    const interpolated = c`{red hello ${value} tail}`;
+    expect(interpolated).not.toContain("\x1b");
+    expect(interpolated).toBe("hello world tail");
   });
 
   it("does not support nested style blocks (documented limitation)", () => {
@@ -335,5 +359,38 @@ describe("SGR recognition and display width", () => {
     for (const emoji of ["\u2705", "\u274c", "\u{1f7e2}", "\u26a1", "\u2728", "\u2b1b"]) {
       expect(stringWidth(emoji)).toBe(2);
     }
+  });
+});
+
+describe("documented parsing and terminal helpers", () => {
+  it("tags each run of splitAnsi as escape or text", () => {
+    const segments = splitAnsi(`${"\x1b[31m"}red${"\x1b[39m"}`);
+    // The field names are part of the documented shape.
+    expect(segments).toEqual([
+      { ansi: true, text: "\x1b[31m" },
+      { ansi: false, text: "red" },
+      { ansi: true, text: "\x1b[39m" },
+    ]);
+  });
+
+  it("splits graphemes rather than code units", () => {
+    expect(splitGraphemes("a\u{1f1ef}\u{1f1f5}b")).toEqual(["a", "\u{1f1ef}\u{1f1f5}", "b"]);
+  });
+
+  it("honours both sanitizeTerminalText options", () => {
+    const multiline = "one\ntwo\tthree";
+    // singleLine: false keeps the line structure; either way the word
+    // boundaries survive rather than collapsing into "onetwothree".
+    expect(sanitizeTerminalText(multiline, { singleLine: false })).toBe("one\ntwo three");
+    expect(sanitizeTerminalText(multiline)).toBe("one two three");
+
+    const link = "\x1b]8;;https://example.com\x07link\x1b]8;;\x07";
+    expect(sanitizeTerminalText(link, { allowHyperlinks: true })).toContain("\x1b]8;;");
+    expect(sanitizeTerminalText(link, { allowHyperlinks: false })).not.toContain("\x1b]8;;");
+  });
+
+  it("reports TTY-ness of a stream", () => {
+    expect(streamIsTTY({ isTTY: true } as NodeJS.WritableStream)).toBe(true);
+    expect(streamIsTTY({} as NodeJS.WritableStream)).toBe(false);
   });
 });

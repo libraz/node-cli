@@ -115,9 +115,11 @@ describe("CLI (integration)", () => {
     const origWrite = process.stderr.write;
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
-    await cli.start(["nonexistent"]);
-
-    process.stderr.write = origWrite;
+    try {
+      await cli.start(["nonexistent"]);
+    } finally {
+      process.stderr.write = origWrite;
+    }
     expect(process.exitCode).toBe(1);
     expect(stderr.getOutput()).toContain("Command not found");
 
@@ -133,9 +135,11 @@ describe("CLI (integration)", () => {
     const origWrite = process.stdout.write;
     process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
 
-    await cli.start(["help"]);
-
-    process.stdout.write = origWrite;
+    try {
+      await cli.start(["help"]);
+    } finally {
+      process.stdout.write = origWrite;
+    }
     expect(stdout.getOutput()).toContain("deploy <env>");
     expect(stdout.getOutput()).toContain("Deploy app");
   });
@@ -151,9 +155,11 @@ describe("CLI (integration)", () => {
     const origWrite = process.stdout.write;
     process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
 
-    await cli.start(["help", "deploy"]);
-
-    process.stdout.write = origWrite;
+    try {
+      await cli.start(["help", "deploy"]);
+    } finally {
+      process.stdout.write = origWrite;
+    }
     expect(stdout.getOutput()).toContain("Deploy to environment");
     expect(stdout.getOutput()).toContain("--force");
   });
@@ -203,9 +209,11 @@ describe("CLI (integration)", () => {
     const origWrite = process.stderr.write;
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
-    await cli.start(["login", "--token", "abc"]);
-
-    process.stderr.write = origWrite;
+    try {
+      await cli.start(["login", "--token", "abc"]);
+    } finally {
+      process.stderr.write = origWrite;
+    }
     expect(stderr.getOutput()).toContain("Token too short");
 
     // Reset exit code

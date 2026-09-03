@@ -1,3 +1,4 @@
+import type { Readable, Writable } from "node:stream";
 import { PassThrough } from "node:stream";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { PromptCancelError } from "../src/errors.js";
@@ -12,6 +13,7 @@ import type {
   TextOptions,
 } from "../src/index.js";
 import { resetColorEnabled } from "../src/output/color.js";
+import { createMockStdin, createMockStdout } from "./helpers.js";
 
 function createPromptStreams() {
   const stdin = new PassThrough();
@@ -663,5 +665,51 @@ describe("prompt", () => {
     // misreport width. Only the trailing visible text is masked.
     const osc = `${String.fromCharCode(27)}]0;window-title${String.fromCharCode(7)}`;
     expect(maskInput(`${osc}secret`)).toBe(`${osc}******`);
+  });
+});
+
+describe("terminal state is handled the same way by every prompt kind", () => {
+  type Start = (stdin: Readable, stdout: Writable, signal?: AbortSignal) => Promise<unknown>;
+
+  const kinds: Record<string, Start> = {
+    text: async (stdin, stdout, signal) => (await load()).text("name", { stdin, stdout, signal }),
+    confirm: async (stdin, stdout, signal) =>
+      (await load()).confirm("ok?", { stdin, stdout, signal }),
+    select: async (stdin, stdout, signal) =>
+      (await load()).select("pick", ["a", "b"], { stdin, stdout, signal }),
+    multiselect: async (stdin, stdout, signal) =>
+      (await load()).multiselect("pick", ["a", "b"], { stdin, stdout, signal }),
+    password: async (stdin, stdout, signal) =>
+      (await load()).password("secret", { stdin, stdout, signal }),
+  };
+
+  async function load() {
+    return (await import("../src/output/prompt.js")).prompt;
+  }
+
+  it.each(Object.keys(kinds))("releases the input lock after an abort: %s", async (name) => {
+    const start = kinds[name];
+    const stdin = createMockStdin();
+    const stdout = createMockStdout();
+    const controller = new AbortController();
+
+    const aborted = start(stdin, stdout, controller.signal);
+    controller.abort();
+    await expect(aborted).rejects.toBeInstanceOf(PromptCancelError);
+
+    // The lock is per call, so the same stream must be usable immediately.
+    const second = start(stdin, stdout);
+    // Input each kind accepts: a bare word for text/password, a yes for
+    // confirm, an index for the two list prompts.
+    stdin.feed(name === "confirm" ? "y\n" : name === "text" || name === "password" ? "a\n" : "1\n");
+    await expect(second).resolves.toBeDefined();
+  });
+
+  it.each(Object.keys(kinds))("rejects when input already ended: %s", async (name) => {
+    const stdin = createMockStdin();
+    stdin.push(null);
+    await new Promise((resolve) => stdin.once("end", resolve).resume());
+
+    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(PromptCancelError);
   });
 });

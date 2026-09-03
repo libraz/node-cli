@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { CLI } from "../src/cli.js";
-import { createMockTTY } from "./helpers.js";
+import { createMockStdout, createMockTTY } from "./helpers.js";
 
 async function captureInteractiveOutput(cli: CLI): Promise<string> {
   const originalStdin = process.stdin;
@@ -79,14 +79,26 @@ describe("Banner and Description", () => {
   });
 
   describe("options constructor", () => {
-    it("accepts description and banner in options", () => {
+    it("accepts description and banner in options", async () => {
       const cli = new CLI({
         name: "myapp",
         version: "1.0.0",
         description: "A test CLI",
         banner: "Welcome to myapp!",
       });
-      expect(cli).toBeDefined();
+      const stdout = createMockStdout();
+      const originalWrite = process.stdout.write;
+      process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
+      try {
+        await cli.start(["--help"]);
+      } finally {
+        process.stdout.write = originalWrite;
+      }
+
+      // The description reaches the rendered help; a constructor that silently
+      // dropped either option would still return an object.
+      expect(stdout.getOutput()).toContain("A test CLI");
+      expect((cli as unknown as { bannerStr?: string }).bannerStr).toBe("Welcome to myapp!");
     });
   });
 
