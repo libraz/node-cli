@@ -109,6 +109,8 @@ use(plugin: (ctx: PluginContext) => void | Promise<void>): this
 | `options.stderr` | `Writable` | `process.stderr` | エラーストリーム |
 | `options.signal` | `AbortSignal` | — | `ctx.signal` と `.cancel()` に連結する外部キャンセルシグナル |
 
+オプションオブジェクトの型は、エクスポートされている `ExecOptions` である。
+
 #### `start(argv?: string[]): Promise<void>`
 
 CLI を開始。`argv` が提供された場合 (または `process.argv` に引数がある場合) はダイレクトモードで実行。引数がない場合、stdin と stdout の両方が TTY のときだけインタラクティブシェルを起動し、それ以外はヘルプ一覧を出力。
@@ -345,6 +347,14 @@ interface CLIEventMap {
 `error` イベントは全般的な捕捉ハンドラです。コマンド解決前の失敗（command-not-found
 など）を含む、入力処理中のあらゆるエラーで発火します。コマンド失敗時は
 `commandError` に加えて発火します。
+
+`CLIEventHandler<K>` は単一イベントのハンドラ型です。リスナーを `on` の呼び出しと
+分けて宣言する場合に使います。
+
+```typescript
+const onExit: CLIEventHandler<"exit"> = () => { /* ... */ };
+cli.on("exit", onExit);
+```
 
 ---
 
@@ -635,6 +645,15 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 | `stdin` | `Readable` | `process.stdin` | 入力ストリーム |
 | `stdout` | `Writable` | `process.stdout` | 出力ストリーム |
 | `signal` | `AbortSignal` | — | abort されると待機中のプロンプトを `PromptCancelError` で reject |
+
+### プロンプト共通の型
+
+各プロンプトのオプション型はいずれも `PromptBaseOptions<T>` を継承する。
+`validate` / `required` / `prefix` / `stdin` / `stdout` / `stderr` / `signal` を持つ。
+
+`SelectChoice<T>` は選択肢のオブジェクト形式（`{ label, value, hint? }`）、
+`Choice<T>` は素の値または `SelectChoice<T>` のいずれかを表す。
+`prompt.select` と `prompt.multiselect` は `Choice<T>[]` を受け取る。
 
 ### prompt.select
 

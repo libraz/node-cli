@@ -109,6 +109,8 @@ Execute a command programmatically.
 | `options.stderr` | `Writable` | `process.stderr` | Error stream |
 | `options.signal` | `AbortSignal` | — | External cancellation signal linked to `ctx.signal` and `.cancel()` |
 
+The options object is the exported `ExecOptions` type.
+
 #### `start(argv?: string[]): Promise<void>`
 
 Start the CLI. If `argv` is provided (or `process.argv` has args), runs in direct mode. With no arguments it starts the interactive shell only when both stdin and stdout are TTYs; otherwise it prints the help index.
@@ -347,6 +349,14 @@ The `error` event is a catch-all: it fires for any error raised while handling
 input, including failures that occur before a command is resolved (e.g.
 command-not-found). It also fires for command failures, in addition to
 `commandError`.
+
+`CLIEventHandler<K>` names the handler type for a single event, for declaring a
+listener separately from the `on` call:
+
+```typescript
+const onExit: CLIEventHandler<"exit"> = () => { /* ... */ };
+cli.on("exit", onExit);
+```
 
 ---
 
@@ -638,6 +648,15 @@ function prompt.confirm(message: string, options?: ConfirmOptions): Promise<bool
 | `stdin` | `Readable` | `process.stdin` | Input stream |
 | `stdout` | `Writable` | `process.stdout` | Output stream |
 | `signal` | `AbortSignal` | — | Rejects the pending prompt with `PromptCancelError` when aborted |
+
+### Shared prompt types
+
+Every prompt option type extends `PromptBaseOptions<T>`, which carries
+`validate`, `required`, `prefix`, `stdin`, `stdout`, `stderr` and `signal`.
+
+`SelectChoice<T>` is the object form of a choice — `{ label, value, hint? }` —
+and `Choice<T>` is either a bare value or a `SelectChoice<T>`. `prompt.select`
+and `prompt.multiselect` accept `Choice<T>[]`.
 
 ### prompt.select
 
