@@ -4,6 +4,7 @@ import {
   closeAnsiState,
   color,
   isColorEnabled,
+  renderSafe,
   resetColorEnabled,
   sanitizeTerminalText,
   setColorEnabled,
@@ -14,6 +15,9 @@ import {
   stripAnsi,
   truncateAnsi,
 } from "../src/output/color.js";
+import { restoreProcessStateAfterEach } from "./helpers.js";
+
+restoreProcessStateAfterEach(["NO_COLOR", "FORCE_COLOR", "TERM"]);
 
 describe("color", () => {
   beforeEach(() => {
@@ -80,11 +84,6 @@ describe("color", () => {
 
 describe("color environment detection", () => {
   const stream = { isTTY: true } as NodeJS.WritableStream;
-  const saved = {
-    noColor: process.env.NO_COLOR,
-    forceColor: process.env.FORCE_COLOR,
-    term: process.env.TERM,
-  };
 
   beforeEach(() => {
     resetColorEnabled();
@@ -95,12 +94,6 @@ describe("color environment detection", () => {
 
   afterEach(() => {
     resetColorEnabled();
-    if (saved.noColor === undefined) delete process.env.NO_COLOR;
-    else process.env.NO_COLOR = saved.noColor;
-    if (saved.forceColor === undefined) delete process.env.FORCE_COLOR;
-    else process.env.FORCE_COLOR = saved.forceColor;
-    if (saved.term === undefined) delete process.env.TERM;
-    else process.env.TERM = saved.term;
   });
 
   it("disables color for NO_COLOR and TERM=dumb", () => {
@@ -117,6 +110,23 @@ describe("color environment detection", () => {
       process.env.FORCE_COLOR = value;
       expect(isColorEnabled(stream)).toBe(false);
     }
+  });
+
+  it("lets an explicit setColorEnabled(true) beat NO_COLOR", () => {
+    process.env.NO_COLOR = "1";
+    setColorEnabled(true);
+    expect(isColorEnabled(stream)).toBe(true);
+  });
+
+  it("lets FORCE_COLOR=1 beat a stream that is not a terminal", () => {
+    process.env.FORCE_COLOR = "1";
+    expect(isColorEnabled({ isTTY: false } as NodeJS.WritableStream)).toBe(true);
+  });
+
+  it("falls back to the stream's terminal status", () => {
+    expect(isColorEnabled(stream)).toBe(true);
+    expect(isColorEnabled({ isTTY: false } as NodeJS.WritableStream)).toBe(false);
+    expect(isColorEnabled({} as NodeJS.WritableStream)).toBe(false);
   });
 
   it("does not let an empty NO_COLOR decide on its own", () => {
@@ -314,7 +324,7 @@ describe("truncateAnsi", () => {
   it("closes active SGR styles after truncation", () => {
     const result = truncateAnsi("\x1b[31malexander", 5);
     expect(stripAnsi(result)).toBe("alex…");
-    expect(result.endsWith("\x1b[0m")).toBe(true);
+    expect(result.endsWith("\x1b[39m")).toBe(true);
   });
 
   it("fits an oversized marker within the requested display width", () => {
@@ -325,11 +335,8 @@ describe("truncateAnsi", () => {
 });
 
 describe("color detection precedence", () => {
-  const original = { ...process.env };
-
   afterEach(() => {
     resetColorEnabled();
-    process.env = { ...original };
   });
 
   it("honors FORCE_COLOR over TERM=dumb", async () => {
@@ -347,10 +354,10 @@ describe("SGR recognition and display width", () => {
     // The colon spelling carries the colour as sub-parameters of one parameter;
     // reading it as separate parameters mistakes a component for a reset and
     // leaves the colour open, which then bleeds into a table frame.
-    expect(closeAnsiState("\x1b[38:2::255:0:0mred")).toBe("\x1b[38:2::255:0:0mred\x1b[0m");
-    expect(closeAnsiState("\x1b[38:5:196mred")).toBe("\x1b[38:5:196mred\x1b[0m");
+    expect(closeAnsiState("\x1b[38:2::255:0:0mred")).toBe("\x1b[38:2::255:0:0mred\x1b[39m");
+    expect(closeAnsiState("\x1b[38:5:196mred")).toBe("\x1b[38:5:196mred\x1b[39m");
     // The semicolon spelling keeps working.
-    expect(closeAnsiState("\x1b[38;2;255;0;0mred")).toBe("\x1b[38;2;255;0;0mred\x1b[0m");
+    expect(closeAnsiState("\x1b[38;2;255;0;0mred")).toBe("\x1b[38;2;255;0;0mred\x1b[39m");
     // An explicit reset still closes the state.
     expect(closeAnsiState("\x1b[38:2::255:0:0mred\x1b[0m")).toBe("\x1b[38:2::255:0:0mred\x1b[0m");
   });
@@ -392,5 +399,178 @@ describe("documented parsing and terminal helpers", () => {
   it("reports TTY-ness of a stream", () => {
     expect(streamIsTTY({ isTTY: true } as NodeJS.WritableStream)).toBe(true);
     expect(streamIsTTY({} as NodeJS.WritableStream)).toBe(false);
+  });
+});
+
+describe("escape-sequence grammar", () => {
+  const ESC = "\x1b";
+  const ST = `${ESC}\\`;
+
+  it("removes DCS, SOS, PM and APC control strings whole", () => {
+    for (const introducer of ["P", "X", "^", "_"]) {
+      const text = `a${ESC}${introducer}q#0;2;0;0;0${ST}b`;
+      expect(stripAnsi(text)).toBe("ab");
+      expect(sanitizeTerminalText(text)).toBe("ab");
+      expect(stringWidth(text)).toBe(2);
+    }
+  });
+
+  it("matches an OSC whatever punctuation its payload carries", () => {
+    for (const payload of ["0;a,b", "0;a+b", "0;Foo_(bar)", "0;my title", "2;x!*'\"$"]) {
+      for (const terminator of ["\x07", ST]) {
+        const text = `a${ESC}]${payload}${terminator}b`;
+        expect(stripAnsi(text)).toBe("ab");
+        expect(sanitizeTerminalText(text)).toBe("ab");
+        expect(stringWidth(text)).toBe(2);
+        expect(truncateAnsi(text, 10)).toBe(text);
+      }
+    }
+  });
+
+  it("keeps an OSC 8 link with punctuation in its URI intact", () => {
+    const link = `${ESC}]8;;https://x.invalid/wiki/A_(b),c+d${ST}text${ESC}]8;;${ST}`;
+    expect(sanitizeTerminalText(link)).toBe(link);
+    expect(stringWidth(link)).toBe(4);
+  });
+
+  it("treats an unterminated OSC as running to the end of input", () => {
+    const text = `a${ESC}]0;title without end`;
+    expect(stripAnsi(text)).toBe("a");
+    expect(sanitizeTerminalText(text)).toBe("a");
+    expect(stringWidth(text)).toBe(1);
+    // The cut-off string is terminated so it cannot swallow following output.
+    expect(truncateAnsi(text, 10)).toBe(`${text}${ST}`);
+  });
+
+  it("removes CSI sequences with private markers or intermediate bytes", () => {
+    for (const sequence of ["[>4;2m", "[<0;1;1M", "[=1c", "[2 q", "[!p", '["q', "[$p", "[?1049m"]) {
+      const text = `a${ESC}${sequence}b`;
+      expect(stripAnsi(text)).toBe("ab");
+      expect(sanitizeTerminalText(text)).toBe("ab");
+      expect(stringWidth(text)).toBe(2);
+    }
+  });
+
+  it("keeps only plain SGR sequences as colour", () => {
+    for (const sgr of [`${ESC}[31m`, `${ESC}[38:2::255:0:0m`, `${ESC}[m`, `${ESC}[1;4m`]) {
+      expect(sanitizeTerminalText(`a${sgr}b`)).toBe(`a${sgr}b`);
+    }
+  });
+
+  it("keeps OSC 8 links that carry params, opener and closer together", () => {
+    const link = `${ESC}]8;id=x;https://x.invalid${ST}hi${ESC}]8;;${ST}`;
+    expect(sanitizeTerminalText(link)).toBe(link);
+    expect(sanitizeTerminalText(link, { allowHyperlinks: false })).toBe("hi");
+  });
+});
+
+describe("closing ANSI state", () => {
+  const ESC = "\x1b";
+  const ST = `${ESC}\\`;
+
+  beforeEach(() => {
+    setColorEnabled(true);
+  });
+
+  afterEach(() => {
+    resetColorEnabled();
+  });
+
+  it("closes inner styling without ending an outer color.* style", () => {
+    const inner = truncateAnsi(color.green("long text"), 5);
+    const viaColor = color.red(`${inner} tail`);
+    expect(viaColor).toBe(c`{red ${inner} tail}`);
+    expect(viaColor).toBe(`${ESC}[31m${ESC}[32mlong…${ESC}[39m${ESC}[31m tail${ESC}[39m`);
+  });
+
+  it("tracks underline colour separately from the foreground", () => {
+    expect(closeAnsiState(`${ESC}[31mred${ESC}[59m`)).toBe(`${ESC}[31mred${ESC}[59m${ESC}[39m`);
+    expect(closeAnsiState(`${ESC}[58;5;1mu${ESC}[39m`)).toBe(`${ESC}[58;5;1mu${ESC}[39m${ESC}[59m`);
+  });
+
+  it("closes an OSC 8 link opened with params, whichever terminator it used", () => {
+    for (const terminator of ["\x07", ST]) {
+      const link = `${ESC}]8;id=a;https://x.invalid${terminator}linked text`;
+      expect(truncateAnsi(link, 50)).toBe(`${link}${ESC}]8;;${ST}`);
+      expect(truncateAnsi(link, 5)).toBe(
+        `${ESC}]8;id=a;https://x.invalid${terminator}link…${ESC}]8;;${ST}`,
+      );
+    }
+  });
+
+  it("leaves nothing set for any SGR attribute sanitizing lets through", () => {
+    const opening = [1, 2, 3, 4, 5, 7, 8, 9, 20, 21, 26, 51, 52, 53, 56, 57, 73, 74, 99];
+    for (let code = 11; code <= 19; code++) opening.push(code);
+    for (let code = 60; code <= 64; code++) opening.push(code);
+    for (const code of opening) {
+      const text = renderSafe(`x${ESC}[${code}my`);
+      expect(text.length, `code ${code}`).toBeGreaterThan(`x${ESC}[${code}my`.length);
+      // Closing again owes nothing once every attribute has been reset.
+      expect(closeAnsiState(text), `code ${code}`).toBe(text);
+    }
+  });
+
+  it("uses a targeted reset for each attribute and a full reset only when none exists", () => {
+    expect(closeAnsiState(`${ESC}[1;4mx`)).toBe(`${ESC}[1;4mx${ESC}[22m${ESC}[24m`);
+    expect(closeAnsiState(`${ESC}[11mx`)).toBe(`${ESC}[11mx${ESC}[10m`);
+    expect(closeAnsiState(`${ESC}[56mx`)).toBe(`${ESC}[56mx${ESC}[0m`);
+    expect(closeAnsiState(`${ESC}[4:3mx${ESC}[4:0m`)).toBe(`${ESC}[4:3mx${ESC}[4:0m`);
+  });
+
+  it("renderSafe closes the styling and link it leaves open", () => {
+    const text = `${ESC}[31m${ESC}]8;id=a;https://x.invalid\x07link`;
+    expect(renderSafe(text)).toBe(`${text}${ESC}]8;;${ST}${ESC}[39m`);
+  });
+});
+
+describe("truncateAnsi width argument", () => {
+  it("treats NaN and Infinity as no limit", () => {
+    expect(truncateAnsi("hello world", Number.NaN)).toBe("hello world");
+    expect(truncateAnsi("hello world", Number.POSITIVE_INFINITY)).toBe("hello world");
+  });
+
+  it("returns an empty string below one column", () => {
+    expect(truncateAnsi("hello world", Number.NEGATIVE_INFINITY)).toBe("");
+    expect(truncateAnsi("hello world", 0.5)).toBe("");
+  });
+});
+
+describe("stringWidth Unicode properties", () => {
+  it("counts East Asian Wide and Fullwidth code points as two columns", () => {
+    for (const code of [0x1f7f0, 0x1aff0, 0x1b132, 0x1b155, 0x16fe0, 0x17000, 0xa960, 0xff01]) {
+      expect(stringWidth(String.fromCodePoint(code)), code.toString(16)).toBe(2);
+    }
+  });
+
+  it("counts neutral and ambiguous pictographs as one column", () => {
+    for (const code of [0x1f130, 0x1f321, 0x1f5a5, 0x1f000, 0x303f]) {
+      expect(stringWidth(String.fromCodePoint(code)), code.toString(16)).toBe(1);
+    }
+  });
+
+  it("counts format characters as zero columns", () => {
+    const format = [0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2064];
+    for (const code of [...format, 0x2066, 0x2067, 0x2068, 0x2069]) {
+      expect(stringWidth(`a${String.fromCodePoint(code)}b`), code.toString(16)).toBe(2);
+    }
+  });
+});
+
+describe("c (template tag) interpolation", () => {
+  afterEach(() => {
+    resetColorEnabled();
+  });
+
+  it("inserts values containing replacement patterns verbatim", () => {
+    for (const enabled of [true, false]) {
+      setColorEnabled(enabled);
+      for (const value of ["$&", "$`", "$'", "$$", "$1", "$<name>"]) {
+        const plain = c`a ${value} b`;
+        expect(stripAnsi(plain)).toBe(`a ${value} b`);
+        const styled = c`{red x ${value} y}`;
+        expect(stripAnsi(styled)).toBe(`x ${value} y`);
+        expect(styled).not.toContain("\u{f0000}");
+      }
+    }
   });
 });

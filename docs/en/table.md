@@ -98,7 +98,7 @@ console.log(
 | `header` | `boolean` | `true` | `false` suppresses the header row. |
 | `headerLabels` | `Record<string, string>` | — | Replacement display text, keyed by column **key**. |
 | `border` | `"none" \| "simple" \| "rounded" \| "single" \| "double" \| "custom"` | `"none"`, or `"custom"` when `chars` is supplied | Border preset. |
-| `chars` | `TableChars` | — | Custom border glyphs, merged over the `single` preset. |
+| `chars` | `TableChars` | — | Custom border glyphs, merged over the preset that `border` selects (`single` when `border` is omitted or `"custom"`). |
 | `align` | `Record<string, "left" \| "right" \| "center">` | `"left"` | Alignment keyed by column **key**. |
 | `colAligns` | `("left" \| "right" \| "center")[]` | — | Alignment by column index. **Takes precedence over `align`.** |
 | `colWidths` | `number[]` | — | Fixed **total** width per column by index, padding included. A value of `0` or less means "size this column automatically". |
@@ -116,7 +116,7 @@ console.log(
 | `padding-right` | `number` | same as above | Spaces inside each cell, on the right. |
 | `head` | `string` | — | A dot-chained style name applied to header cells, for example `"cyan"` or `"cyan.bold"`. |
 | `border` | `string` | — | The same, applied to the border glyphs. |
-| `compact` | `boolean` | `true` | `false` inserts a separator line between every pair of data rows. |
+| `compact` | `boolean` | `true` | `false` inserts a separator line between every pair of data rows in the `"simple"` and framed borders. It has no effect with `border: "none"`, which has no separator glyph. |
 
 An unknown name in `head` or `border` degrades to plain, unstyled text rather than throwing. The available style names are listed in [Color](color.md).
 

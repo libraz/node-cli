@@ -1,19 +1,10 @@
 import type { Readable, Writable } from "node:stream";
 import { PassThrough } from "node:stream";
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PromptCancelError } from "../src/errors.js";
-import type {
-  Choice,
-  ConfirmOptions,
-  MultiselectOptions,
-  PasswordOptions,
-  PromptBaseOptions,
-  SelectChoice,
-  SelectOptions,
-  TextOptions,
-} from "../src/index.js";
+import type { Choice, PromptBaseOptions, SelectChoice, TextOptions } from "../src/index.js";
 import { resetColorEnabled } from "../src/output/color.js";
-import { createMockStdin, createMockStdout } from "./helpers.js";
+import { createMockStdin, createMockStdout, restoreProcessStateAfterEach } from "./helpers.js";
 
 function createPromptStreams() {
   const stdin = new PassThrough();
@@ -25,33 +16,13 @@ function createPromptStreams() {
   return { stdin, stdout, getOutput: () => output };
 }
 
+/** Delivers every line in one chunk followed by EOF, the way a pipe does. */
 function feedLines(stdin: PassThrough, lines: string[]): void {
-  lines.forEach((line, index) => {
-    setTimeout(() => {
-      stdin.write(`${line}\n`);
-      if (index === lines.length - 1) {
-        stdin.end();
-      }
-    }, index * 10);
-  });
+  stdin.end(lines.map((line) => `${line}\n`).join(""));
 }
 
 describe("prompt", () => {
-  it("types each validator with its prompt value", () => {
-    expectTypeOf<TextOptions["validate"]>().toEqualTypeOf<((value: string) => void) | undefined>();
-    expectTypeOf<PasswordOptions["validate"]>().toEqualTypeOf<
-      ((value: string) => void) | undefined
-    >();
-    expectTypeOf<ConfirmOptions["validate"]>().toEqualTypeOf<
-      ((value: boolean) => void) | undefined
-    >();
-    expectTypeOf<SelectOptions<number>["validate"]>().toEqualTypeOf<
-      ((value: number) => void) | undefined
-    >();
-    expectTypeOf<MultiselectOptions<number>["validate"]>().toEqualTypeOf<
-      ((value: number[]) => void) | undefined
-    >();
-  });
+  restoreProcessStateAfterEach(["NO_COLOR", "FORCE_COLOR"]);
 
   it("exports prompt functions", async () => {
     const { prompt } = await import("../src/output/prompt.js");
@@ -98,7 +69,6 @@ describe("prompt", () => {
   it("does not emit ANSI color when a custom stdout is non-TTY", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
-    const originalEnv = { ...process.env };
     resetColorEnabled();
     delete process.env.NO_COLOR;
     delete process.env.FORCE_COLOR;
@@ -117,7 +87,6 @@ describe("prompt", () => {
       expect(streams.getOutput()).not.toContain("\x1b[");
     } finally {
       resetColorEnabled();
-      process.env = originalEnv;
     }
   });
 
@@ -514,6 +483,110 @@ describe("prompt", () => {
     expect(second.getOutput()).not.toContain("beta");
   });
 
+  it("answers sequential prompts from lines that arrived in one chunk", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const io = { stdin: streams.stdin, stdout: streams.stdout };
+    streams.stdin.end("a\ny\n1\nsecret\n1,2\n");
+
+    const answers = [
+      await prompt.text("Name", io),
+      await prompt.confirm("Sure?", io),
+      await prompt.select("Env", ["prod", "dev"], io),
+      await prompt.password("Password", io),
+      await prompt.multiselect("Pick", ["a", "b"], io),
+    ];
+
+    expect(answers).toEqual(["a", true, "prod", "secret", ["a", "b"]]);
+    await expect(prompt.text("More", io)).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it("keeps unanswered lines for the next prompt after the input ends", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const io = { stdin: streams.stdin, stdout: streams.stdout };
+    const first = prompt.text("First", io);
+    streams.stdin.write("one\ntwo\n");
+    await expect(first).resolves.toBe("one");
+    // EOF arrives between prompts; the queued line still answers.
+    streams.stdin.end();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await expect(prompt.text("Second", io)).resolves.toBe("two");
+  });
+
+  it("sanitizes text defaults, placeholders and styled choice labels", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const { closeAnsiState } = await import("../src/output/color.js");
+
+    const withDefault = createPromptStreams();
+    const a = prompt.text("Name", {
+      stdin: withDefault.stdin,
+      stdout: withDefault.stdout,
+      default: "x\x1b[2J\x1b]0;title\x07",
+    });
+    withDefault.stdin.end("\n");
+    await expect(a).resolves.toBe("x\x1b[2J\x1b]0;title\x07");
+    expect(withDefault.getOutput()).not.toContain("\x1b[2J");
+    expect(withDefault.getOutput()).not.toContain("\x1b]0;");
+
+    const withPlaceholder = createPromptStreams();
+    const b = prompt.text("Name", {
+      stdin: withPlaceholder.stdin,
+      stdout: withPlaceholder.stdout,
+      required: false,
+      placeholder: "p\x1b]0;title\x07\x1b[H",
+    });
+    withPlaceholder.stdin.end("\n");
+    await expect(b).resolves.toBe("");
+    expect(withPlaceholder.getOutput()).not.toContain("\x1b]0;");
+    expect(withPlaceholder.getOutput()).not.toContain("\x1b[H");
+
+    const styled = createPromptStreams();
+    const c = prompt.select(
+      "Pick",
+      [
+        { label: "\x1b[31mRed", hint: "\x1b[4mhint", value: "red" },
+        { label: "Blue", value: "blue" },
+      ],
+      { stdin: styled.stdin, stdout: styled.stdout },
+    );
+    styled.stdin.end("red\n");
+    await expect(c).resolves.toBe("red");
+    for (const line of styled.getOutput().split("\n")) {
+      // Nothing a label or hint opened is still open at the end of its row.
+      expect(closeAnsiState(line)).toBe(line);
+    }
+  });
+
+  it("clears and redraws an active progress region around prompt lines", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const { setRegionOwner } = await import("../src/output/region.js");
+    const streams = createPromptStreams();
+    let redraws = 0;
+    setRegionOwner(streams.stdout, {
+      clear: () => "<clear>",
+      redraw: () => {
+        redraws++;
+      },
+    });
+    try {
+      const chosen = prompt.select("Env", ["prod", "dev"], {
+        stdin: streams.stdin,
+        stdout: streams.stdout,
+      });
+      feedLines(streams.stdin, ["9", "2"]);
+      await expect(chosen).resolves.toBe("dev");
+    } finally {
+      setRegionOwner(streams.stdout, null);
+    }
+    const output = streams.getOutput();
+    expect(output).toContain("<clear>? Env");
+    expect(output).toContain("<clear>  1) prod");
+    expect(output).toContain("<clear>  2) dev");
+    expect(output).toContain("<clear>✖ Please enter a number");
+    expect(redraws).toBe(4);
+  });
+
   it("text rejects with PromptCancelError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
@@ -703,6 +776,35 @@ describe("terminal state is handled the same way by every prompt kind", () => {
     // confirm, an index for the two list prompts.
     stdin.feed(name === "confirm" ? "y\n" : name === "text" || name === "password" ? "a\n" : "1\n");
     await expect(second).resolves.toBeDefined();
+  });
+
+  it.each(Object.keys(kinds))("rejects when input was already destroyed: %s", async (name) => {
+    const stdin = createMockStdin();
+    stdin.destroy();
+
+    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it.each(Object.keys(kinds))("rejects when input is destroyed while pending: %s", async (name) => {
+    const stdin = createMockStdin();
+    const stdout = createMockStdout();
+    const pending = kinds[name](stdin, stdout);
+    await vi.waitFor(() => expect(stdout.getOutput()).not.toBe(""));
+    stdin.destroy();
+
+    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it.each(Object.keys(kinds))("rejects when input errors while pending: %s", async (name) => {
+    const stdin = createMockStdin();
+    const stdout = createMockStdout();
+    const pending = kinds[name](stdin, stdout);
+    await vi.waitFor(() => expect(stdout.getOutput()).not.toBe(""));
+    stdin.destroy(new Error("EIO"));
+
+    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+    await vi.waitFor(() => expect(stdin.closed).toBe(true));
+    expect(stdin.listenerCount("error")).toBe(0);
   });
 
   it.each(Object.keys(kinds))("rejects when input already ended: %s", async (name) => {

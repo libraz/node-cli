@@ -1,4 +1,5 @@
 import type { Writable } from "node:stream";
+import { guardCall } from "../guard.js";
 
 /**
  * How the renderer that owns a stream's drawn region cooperates with other
@@ -31,11 +32,16 @@ export function setRegionOwner(stream: Writable, owner: RegionOwner | null): voi
 /**
  * Writes to `stream` without corrupting a region another renderer is drawing.
  *
- * Every framework-owned writer that is not the region's owner goes through here.
- * Writing directly instead appends to a frame that has no trailing newline, and
- * the owner's next redraw then erases the merged row — splicing the two outputs
- * together in the terminal's scrollback for good. Logging beside a running
- * spinner is the common case, and one the shipped examples demonstrate.
+ * Every framework-owned writer that is not the region's owner goes through here:
+ * the logger, the router's diagnostics, and the lines a prompt prints itself.
+ * Readline's own question line and input echo cannot be routed. Writing directly
+ * instead appends to a frame that has no trailing newline, and the owner's next
+ * redraw then erases the merged row — splicing the two outputs together in the
+ * terminal's scrollback for good. Only writes to the stream the owner draws on
+ * cooperate; logging to the same stream as a running spinner is the common case.
+ *
+ * A throwing owner never loses the caller's text: a failed clear writes the text
+ * as is, and a failed redraw releases the claim.
  *
  * @returns Whatever the underlying write returned, so callers can keep applying
  * their own backpressure policy.
@@ -43,7 +49,14 @@ export function setRegionOwner(stream: Writable, owner: RegionOwner | null): voi
 export function writeThrough(stream: Writable, text: string): boolean {
   const owner = regionOwners.get(stream);
   if (!owner) return stream.write(text);
-  const accepted = stream.write(`${owner.clear()}${text}`);
-  owner.redraw();
+  const erase = guardCall(
+    () => owner.clear(),
+    () => "",
+  );
+  const accepted = stream.write(`${erase}${text}`);
+  guardCall(
+    () => owner.redraw(),
+    () => setRegionOwner(stream, null),
+  );
   return accepted;
 }

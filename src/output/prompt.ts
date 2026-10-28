@@ -1,4 +1,3 @@
-import { createInterface, type Interface } from "node:readline/promises";
 import { type Readable, Writable } from "node:stream";
 import { PromptCancelError } from "../errors.js";
 import {
@@ -6,11 +5,13 @@ import {
   createColorizer,
   isControlCode,
   renderSafe,
-  sanitizeTerminalText,
   splitAnsi,
   splitGraphemes,
   streamIsTTY,
+  stripAnsi,
 } from "./color.js";
+import { type LineReader, openLineReader } from "./line-reader.js";
+import { writeThrough } from "./region.js";
 
 // ── Types ──
 
@@ -120,11 +121,11 @@ function normalizeChoices<T>(choices: Choice<T>[]): SelectChoice<T>[] {
       const choice = ch as SelectChoice<T>;
       return {
         ...choice,
-        label: sanitizeTerminalText(choice.label),
-        hint: choice.hint === undefined ? undefined : sanitizeTerminalText(choice.hint),
+        label: renderSafe(choice.label),
+        hint: choice.hint === undefined ? undefined : renderSafe(choice.hint),
       };
     }
-    return { label: sanitizeTerminalText(String(ch)), value: ch as T };
+    return { label: renderSafe(String(ch)), value: ch as T };
   });
 }
 
@@ -167,24 +168,22 @@ function warnDuplicateLabels<T>(
     seen.add(ch.label);
   }
   for (const label of duplicates) {
-    stdout.write(`${col.yellow("!")} Duplicate label "${label}"; select it by its number\n`);
+    writeThrough(
+      stdout,
+      `${col.yellow("!")} Duplicate label "${label}"; select it by its number\n`,
+    );
   }
 }
 
 /**
- * A cancelable readline session: the interface, a cancellation signal that is
- * aborted on Ctrl+C (SIGINT), and a flag/promise tracking end-of-input (EOF,
- * Ctrl+D) so a pending or future question can reject rather than hang.
+ * A prompt's line-reader session plus a cancellation signal that is aborted on
+ * Ctrl+C (SIGINT) or when the caller's signal aborts.
  */
-interface CancelableRl {
-  rl: Interface;
+interface CancelableReader {
+  reader: LineReader;
   signal: AbortSignal;
-  /** Whether the input stream has ended (EOF / Ctrl+D). */
-  isClosed: () => boolean;
   dispose: () => void;
 }
-
-const activePromptInputs = new WeakSet<Readable>();
 
 /**
  * Builds the question line every prompt kind shows. Caller-supplied prefix and
@@ -205,27 +204,21 @@ function validationLine(col: ReturnType<typeof createColorizer>, err: unknown): 
 }
 
 /**
- * Creates a readline interface plus a cancellation signal that is aborted when
- * the user presses Ctrl+C (SIGINT). Callers pass `signal` to `rl.question` so a
- * cancellation rejects the pending question rather than hanging. The interface's
- * `close` event (EOF / Ctrl+D) is tracked so questions reject instead of hanging
- * when input ends without a submitted line.
+ * Opens a line reader plus a cancellation signal that is aborted when the user
+ * presses Ctrl+C (SIGINT) or `externalSignal` aborts. Unanswered lines stay with
+ * the input for the next prompt when the session is disposed.
  *
  * @param stdin - Input stream. Defaults to process.stdin.
  * @param stdout - Output stream. Defaults to process.stdout.
- * @returns The readline interface, an abort signal, a closed flag, and teardown.
+ * @returns The reader, an abort signal, and teardown.
  */
-function createCancelableRl(
+function createCancelableReader(
   stdin?: Readable,
   stdout?: Writable,
   terminalOverride?: boolean,
   externalSignal?: AbortSignal,
-): CancelableRl {
+): CancelableReader {
   const input = stdin ?? process.stdin;
-  if (activePromptInputs.has(input)) {
-    throw new Error("Another prompt is already reading from this input stream");
-  }
-  activePromptInputs.add(input);
   const output = stdout ?? process.stdout;
   // Terminal mode follows the input alone. Readline's own SIGINT hook and
   // character-level editing exist only in that mode, so deciding it from the
@@ -233,76 +226,38 @@ function createCancelableRl(
   // real terminal: Ctrl-C killed the process instead of raising
   // PromptCancelError, and arrow keys arrived as raw escape sequences.
   const terminal = terminalOverride ?? streamIsTTY(input);
-  const rl = createInterface({
-    input,
-    output,
-    terminal,
-  });
+  const reader = openLineReader({ input, output, terminal });
   const controller = new AbortController();
   const onSigint = () => controller.abort();
   const onAbort = () => controller.abort(externalSignal?.reason);
-  rl.on("SIGINT", onSigint);
+  reader.rl.on("SIGINT", onSigint);
   if (externalSignal?.aborted) onAbort();
   else externalSignal?.addEventListener("abort", onAbort, { once: true });
 
-  // An input that already reached EOF has emitted its `end` event, so readline
-  // will never emit `close` for it and a question would wait forever. Treat that
-  // as closed from the start rather than waiting for an event that cannot come.
-  let closed = input.readableEnded;
-  const onClose = () => {
-    closed = true;
-  };
-  rl.on("close", onClose);
-
   const dispose = () => {
-    rl.off("SIGINT", onSigint);
-    rl.off("close", onClose);
+    reader.rl.off("SIGINT", onSigint);
     externalSignal?.removeEventListener("abort", onAbort);
-    activePromptInputs.delete(input);
-    rl.close();
+    reader.close();
   };
 
-  return { rl, signal: controller.signal, isClosed: () => closed, dispose };
+  return { reader, signal: controller.signal, dispose };
 }
 
 /**
- * Asks a single readline question, translating a Ctrl+C abort or an EOF
- * (Ctrl+D, end of input) into a {@link PromptCancelError}. The question is raced
- * against the interface's `close` event so an EOF that arrives while the
- * question is pending settles the promise instead of hanging forever.
+ * Asks a single question, translating a Ctrl+C abort, the end of input (Ctrl+D,
+ * EOF, a destroyed stream) or an input error into a {@link PromptCancelError}.
  */
-async function ask(
-  rl: Interface,
-  query: string,
-  signal: AbortSignal,
-  isClosed: () => boolean,
-): Promise<string> {
-  if (isClosed()) {
+async function ask(reader: LineReader, query: string, signal: AbortSignal): Promise<string> {
+  if (signal.aborted) throw new PromptCancelError();
+  reader.prompt(query);
+  let line: string | null;
+  try {
+    line = await reader.read(signal);
+  } catch {
     throw new PromptCancelError();
   }
-  const closeMarker = Symbol("rl-closed");
-  const onClose = (resolve: (value: typeof closeMarker) => void) => () => resolve(closeMarker);
-  let resolveClose: (() => void) | undefined;
-  const closed = new Promise<typeof closeMarker>((resolve) => {
-    const handler = onClose(resolve);
-    rl.once("close", handler);
-    resolveClose = () => rl.off("close", handler);
-  });
-
-  try {
-    const result = await Promise.race([rl.question(query, { signal }), closed]);
-    if (result === closeMarker) {
-      throw new PromptCancelError();
-    }
-    return result;
-  } catch (err) {
-    if (signal.aborted || (err instanceof Error && err.name === "AbortError")) {
-      throw new PromptCancelError();
-    }
-    throw err;
-  } finally {
-    resolveClose?.();
-  }
+  if (line === null) throw new PromptCancelError();
+  return line;
 }
 
 // ── Text ──
@@ -320,7 +275,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
   const stdout = options.stdout ?? process.stdout;
   const col = createColorizer(stdout);
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(
+  const { reader, signal, dispose } = createCancelableReader(
     options.stdin,
     stdout,
     undefined,
@@ -328,19 +283,14 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
   );
   const hint =
     defaultValue !== undefined
-      ? col.dim(` (${defaultValue})`)
+      ? col.dim(` (${renderSafe(String(defaultValue))})`)
       : options.placeholder
-        ? col.dim(` (${options.placeholder})`)
+        ? col.dim(` (${renderSafe(options.placeholder)})`)
         : "";
 
   try {
     while (true) {
-      const answer = await ask(
-        rl,
-        `${promptHeading(col, prefix, message)}${hint} `,
-        signal,
-        isClosed,
-      );
+      const answer = await ask(reader, `${promptHeading(col, prefix, message)}${hint} `, signal);
 
       let value = trim ? answer.trim() : answer;
       // An explicit default (including an empty string) fills an empty
@@ -351,7 +301,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
       }
 
       if (!usedDefault && required && value === "") {
-        stdout.write(`${col.red("✖")} Value is required\n`);
+        writeThrough(stdout, `${col.red("✖")} Value is required\n`);
         continue;
       }
 
@@ -359,7 +309,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
         try {
           validate(value);
         } catch (err) {
-          stdout.write(validationLine(col, err));
+          writeThrough(stdout, validationLine(col, err));
           continue;
         }
       }
@@ -386,7 +336,7 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
   const stdout = options.stdout ?? process.stdout;
   const col = createColorizer(stdout);
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(
+  const { reader, signal, dispose } = createCancelableReader(
     options.stdin,
     stdout,
     undefined,
@@ -396,15 +346,10 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
 
   try {
     while (true) {
-      const answer = await ask(
-        rl,
-        `${promptHeading(col, prefix, message)}${hint} `,
-        signal,
-        isClosed,
-      );
+      const answer = await ask(reader, `${promptHeading(col, prefix, message)}${hint} `, signal);
       const trimmed = answer.trim().toLowerCase();
       if (trimmed !== "" && !["y", "yes", "n", "no"].includes(trimmed)) {
-        stdout.write(`${col.red("✖")} Please enter yes or no\n`);
+        writeThrough(stdout, `${col.red("✖")} Please enter yes or no\n`);
         continue;
       }
       const value = trimmed === "" ? defaultValue : trimmed === "y" || trimmed === "yes";
@@ -412,7 +357,7 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
         try {
           options.validate(value);
         } catch (err) {
-          stdout.write(validationLine(col, err));
+          writeThrough(stdout, validationLine(col, err));
           continue;
         }
       }
@@ -452,7 +397,7 @@ async function select<T = string>(
   }
   const defaultIndex = findDefaultIndex(normalized, defaultValue);
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(
+  const { reader, signal, dispose } = createCancelableReader(
     options.stdin,
     stdout,
     undefined,
@@ -460,13 +405,13 @@ async function select<T = string>(
   );
 
   try {
-    stdout.write(`${promptHeading(col, prefix, message)}\n`);
+    writeThrough(stdout, `${promptHeading(col, prefix, message)}\n`);
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
       const isDefault = i === defaultIndex;
       const hint = ch.hint ? col.dim(` (${ch.hint})`) : "";
       const marker = isDefault ? col.dim(" [default]") : "";
-      stdout.write(`  ${col.cyan(`${i + 1})`)} ${ch.label}${hint}${marker}\n`);
+      writeThrough(stdout, `  ${col.cyan(`${i + 1})`)} ${ch.label}${hint}${marker}\n`);
     }
     warnDuplicateLabels(normalized, stdout, col);
 
@@ -474,15 +419,15 @@ async function select<T = string>(
       defaultIndex >= 0 ? `Enter number (default ${defaultIndex + 1}):` : "Enter number:";
 
     while (true) {
-      const answer = await ask(rl, `${col.dim(promptLabel)} `, signal, isClosed);
+      const answer = await ask(reader, `${col.dim(promptLabel)} `, signal);
       const trimmed = answer.trim();
 
       let chosen: SelectChoice<T> | undefined;
       if (trimmed === "" && defaultIndex >= 0) {
         chosen = normalized[defaultIndex];
       } else {
-        // Number entry is the canonical selector; a numeric input always picks
-        // by index, so numeric-looking labels remain reachable by their number.
+        // An in-range number picks by index; anything else matches a label
+        // case-insensitively.
         const num = Number.parseInt(trimmed, 10);
         if (/^\d+$/.test(trimmed) && num >= 1 && num <= normalized.length) {
           chosen = normalized[num - 1];
@@ -490,12 +435,17 @@ async function select<T = string>(
           // Match the first choice whose label equals the input. Duplicate
           // labels resolve to the first occurrence; use the number to reach a
           // later one (a warning is shown above when duplicates exist).
-          chosen = normalized.find((ch) => ch.label.toLowerCase() === trimmed.toLowerCase());
+          chosen = normalized.find(
+            (ch) => stripAnsi(ch.label).toLowerCase() === trimmed.toLowerCase(),
+          );
         }
       }
 
       if (!chosen) {
-        stdout.write(`${col.red("✖")} Please enter a number between 1 and ${normalized.length}\n`);
+        writeThrough(
+          stdout,
+          `${col.red("✖")} Please enter a number between 1 and ${normalized.length}\n`,
+        );
         continue;
       }
 
@@ -503,7 +453,7 @@ async function select<T = string>(
         try {
           validate(chosen.value);
         } catch (err) {
-          stdout.write(validationLine(col, err));
+          writeThrough(stdout, validationLine(col, err));
           continue;
         }
       }
@@ -560,7 +510,7 @@ async function multiselect<T = string>(
     (defaults ?? []).map((d) => findDefaultIndex(normalized, d)).filter((i) => i >= 0),
   );
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(
+  const { reader, signal, dispose } = createCancelableReader(
     options.stdin,
     stdout,
     undefined,
@@ -568,18 +518,19 @@ async function multiselect<T = string>(
   );
 
   try {
-    stdout.write(
+    writeThrough(
+      stdout,
       `${promptHeading(col, prefix, message)} ${col.dim("(comma-separated numbers)")}\n`,
     );
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
       const marker = defaultIndexes.has(i) ? col.dim(" [default]") : "";
-      stdout.write(`  ${col.cyan(`${i + 1})`)} ${ch.label}${marker}\n`);
+      writeThrough(stdout, `  ${col.cyan(`${i + 1})`)} ${ch.label}${marker}\n`);
     }
     warnDuplicateLabels(normalized, stdout, col);
 
     while (true) {
-      const answer = await ask(rl, `${col.dim("Enter numbers:")} `, signal, isClosed);
+      const answer = await ask(reader, `${col.dim("Enter numbers:")} `, signal);
       const trimmed = answer.trim();
 
       // Deduplicate selected indices so min/max count distinct items.
@@ -596,19 +547,20 @@ async function multiselect<T = string>(
 
       const valid = numericInputValid && indices.every((i) => i >= 0 && i < normalized.length);
       if (!valid) {
-        stdout.write(
+        writeThrough(
+          stdout,
           `${col.red("✖")} Please enter valid numbers between 1 and ${normalized.length}\n`,
         );
         continue;
       }
 
       if (min !== undefined && indices.length < min) {
-        stdout.write(`${col.red("✖")} Select at least ${min} items\n`);
+        writeThrough(stdout, `${col.red("✖")} Select at least ${min} items\n`);
         continue;
       }
 
       if (max !== undefined && indices.length > max) {
-        stdout.write(`${col.red("✖")} Select at most ${max} items\n`);
+        writeThrough(stdout, `${col.red("✖")} Select at most ${max} items\n`);
         continue;
       }
 
@@ -618,7 +570,7 @@ async function multiselect<T = string>(
         try {
           validate(values);
         } catch (err) {
-          stdout.write(validationLine(col, err));
+          writeThrough(stdout, validationLine(col, err));
           continue;
         }
       }
@@ -771,7 +723,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
   (maskingOutput as unknown as Record<string, unknown>).columns = ttyPromptOutput.columns ?? 80;
   (maskingOutput as unknown as Record<string, unknown>).rows = ttyPromptOutput.rows ?? 24;
 
-  const { rl, signal, isClosed, dispose } = createCancelableRl(
+  const { reader, signal, dispose } = createCancelableReader(
     stdin,
     maskingOutput,
     stdinIsTTY,
@@ -787,7 +739,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
 
       let answer: string;
       try {
-        answer = await ask(rl, query, signal, isClosed);
+        answer = await ask(reader, query, signal);
       } finally {
         masking = false;
         promptQuery = "";
@@ -797,7 +749,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
       const value = trim ? answer.trim() : answer;
 
       if (required && value === "") {
-        promptOutput.write(`${col.red("✖")} Value is required\n`);
+        writeThrough(promptOutput, `${col.red("✖")} Value is required\n`);
         continue;
       }
 
@@ -805,7 +757,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
         try {
           validate(value);
         } catch (err) {
-          promptOutput.write(validationLine(col, err));
+          writeThrough(promptOutput, validationLine(col, err));
           continue;
         }
       }

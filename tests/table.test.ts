@@ -90,10 +90,7 @@ describe("table", () => {
       columns: ["val"],
       align: { val: "right" },
     });
-    const lines = result.split("\n");
-    // Right-aligned numbers should have leading spaces
-    const dataLine = lines.find((l) => l.includes("1") && !l.includes("100"));
-    expect(dataLine).toBeDefined();
+    expect(result.split("\n").slice(1)).toEqual(["  1", "100"]);
   });
 
   it("keeps framed rows equally wide with CJK and status symbols", () => {
@@ -297,6 +294,7 @@ describe("table", () => {
       const idx = line.indexOf("1");
       expect(idx).toBeGreaterThan(0); // has leading space
     }
+    expect(lines.slice(1)).toEqual(["  1  hello", "100   hi  "]);
   });
 
   it("supports colWidths (fixed column widths)", () => {
@@ -411,13 +409,13 @@ describe("table", () => {
   it("closes an unclosed SGR sequence before the table frame", () => {
     const result = table([{ value: "\x1b[31mred" }], { border: "single" });
     const open = result.indexOf("\x1b[31m");
-    const reset = result.indexOf("\x1b[0m", open);
+    const reset = result.indexOf("\x1b[39m", open);
     const borderAfterReset = result.indexOf("│", reset);
 
     expect(open).toBeGreaterThan(-1);
     expect(reset).toBeGreaterThan(-1);
     expect(borderAfterReset).toBeGreaterThan(reset);
-    expect(result.slice(reset + "\x1b[0m".length, borderAfterReset)).not.toContain("\x1b");
+    expect(result.slice(reset + "\x1b[39m".length, borderAfterReset)).not.toContain("\x1b");
   });
 
   it("closes an unclosed OSC 8 hyperlink before the table frame", () => {
@@ -530,7 +528,7 @@ describe("untrusted table decoration", () => {
     });
     expect(marked).not.toContain("\x1b[2J");
 
-    const bordered = table([{ a: "x" }], { chars: { horizontal: "\x1b[2J-" } });
+    const bordered = table([{ a: "x" }], { chars: { top: "\x1b[2J-" } });
     expect(bordered).not.toContain("\x1b[2J");
   });
 });
@@ -543,6 +541,80 @@ describe("per-column settings from untrusted keys", () => {
     expect(rendered).not.toContain("native code");
     expect(rendered).toContain("constructor");
     expect(rendered).toContain("value");
+  });
+});
+
+describe("table input hardening", () => {
+  afterEach(() => {
+    resetColorEnabled();
+  });
+
+  it("renders a missing key as an empty cell without widening the column", () => {
+    const rows = [{ constructor: "own" }, {}] as Record<string, unknown>[];
+    for (const border of ["none", "simple", "single"] as const) {
+      const lines = table(rows, { border }).split("\n");
+      expect(lines.join("\n")).not.toContain("native code");
+      expect(new Set(lines.map(stringWidth)).size).toBe(1);
+    }
+    const proto = table([JSON.parse('{"__proto__":"own","a":1}'), { a: 2 }], { columns: ["a"] });
+    expect(proto).not.toContain("[object Object]");
+    const named = table([{ a: 1 }], { columns: ["a", "toString", "hasOwnProperty"] });
+    expect(named).not.toContain("native code");
+  });
+
+  it("leaves text unstyled for protocol names in style.head and style.border", () => {
+    setColorEnabled(true);
+    for (const border of ["none", "simple", "single"] as const) {
+      for (const name of ["toString", "constructor", "red.constructor", "valueOf"]) {
+        const out = table([{ a: "x" }], { border, style: { head: name, border: name } });
+        expect(out).not.toContain("native code");
+        expect(out).not.toContain("[object");
+        expect(out).toContain("x");
+      }
+    }
+  });
+
+  it("survives infinite, huge and fractional widths and padding", () => {
+    const rows = [{ header: "abc" }, { header: "de" }];
+    for (const border of ["none", "simple", "single"] as const) {
+      expect(() =>
+        table(rows, {
+          border,
+          colWidths: [Number.POSITIVE_INFINITY],
+          padding: 1e10,
+          style: { "padding-left": 1e10, "padding-right": Number.POSITIVE_INFINITY },
+        }),
+      ).not.toThrow();
+      expect(() => table(rows, { border, colWidths: [1e10] })).not.toThrow();
+    }
+    const out = table(rows, { maxWidth: { header: 0.5 } });
+    expect(stringWidth(out.split("\n")[0])).toBe(1);
+    expect(out.split("\n")[0]).not.toBe("");
+    expect(table(rows, { maxWidth: { header: Number.NaN } })).toContain("abc");
+  });
+
+  it("converts cell values String() cannot convert", () => {
+    const throwing = {
+      toString() {
+        throw new Error("no");
+      },
+    };
+    const out = table([{ a: Object.create(null), b: throwing }], { border: "single" });
+    expect(out).toContain("[object Object]");
+  });
+
+  it("renders a null or missing object row as a full-width empty row", () => {
+    const rows = [{ a: "x", b: "y" }, null, { a: "z", b: "w" }] as unknown as Record<
+      string,
+      unknown
+    >[];
+    for (const border of ["none", "simple", "single"] as const) {
+      const lines = table(rows, { border }).split("\n");
+      expect(new Set(lines.map(stringWidth)).size).toBe(1);
+    }
+    const boxed = table(rows, { border: "single" }).split("\n");
+    expect(boxed.filter((l) => l.startsWith("│")).length).toBe(4);
+    expect(boxed[4].split("│").length).toBe(boxed[3].split("│").length);
   });
 });
 

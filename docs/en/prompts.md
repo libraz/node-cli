@@ -179,6 +179,7 @@ Prompts throw `PromptCancelError` â€” code `PROMPT_CANCELLED`, exit code `130` â
 - Ctrl+C is pressed;
 - Ctrl+D is pressed, or input otherwise reaches its end;
 - the input stream had already ended before the prompt started;
+- the input stream is destroyed or fails with an error, before or during the prompt;
 - a supplied `signal` aborts, including a signal that was already aborted.
 
 Detect it with `isCancellationError`:
@@ -229,10 +230,10 @@ With piped input the situation changes:
 
 - there is no SIGINT event, so Ctrl+C terminates the process the usual way rather than raising `PromptCancelError`;
 - there is no character echo, so nothing visible is masked;
-- lines are read from the pipe as answers;
+- lines are read from the pipe as answers, one per question in order; lines a question did not use stay with the stream for the next prompt, so a whole script of answers can arrive at once;
 - reaching the end of the input becomes a `PromptCancelError`.
 
-Prompt output is colorized per stream, so a redirected stdout receives no escape codes at all.
+Color is decided per stream, so a redirected stdout receives no color codes. It still receives the questions, and when stdin is a terminal it also receives what readline echoes: the typed answer and the cursor sequences of line editing. Only `password` sends its question and masked entry to stderr in that case.
 
 ## Concurrency
 

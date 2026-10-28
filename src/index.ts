@@ -22,7 +22,7 @@ export {
   UnknownOptionError,
   ValidationError,
 } from "./errors.js";
-export type { AnsiSegment } from "./output/color.js";
+export type { AnsiSegment, ColorFn } from "./output/color.js";
 export {
   c,
   color,

@@ -1,3 +1,5 @@
+import { finiteInteger } from "../guard.js";
+
 // ── ANSI codes ──
 
 /**
@@ -128,7 +130,7 @@ function applyStyle(text: string, codes: [number, number][], enabled: boolean): 
  * Can be called directly with a string, or chained with other style names
  * (e.g. `color.bold.red("hello")`).
  */
-interface ColorFn {
+export interface ColorFn {
   (text: string): string;
   [key: string]: ColorFn;
 }
@@ -140,6 +142,15 @@ interface ColorFn {
  * as style names would turn passing a colorizer through an `await`, a template
  * literal, or `JSON.stringify` into a crash naming a property nobody typed.
  */
+/**
+ * True when `name` is one of the built-in style names. Callers that resolve a
+ * style chosen by option (table borders and headers, bar colour) check here so
+ * inherited members such as `toString` never resolve.
+ */
+export function isStyleName(name: string): boolean {
+  return Object.hasOwn(styles, name);
+}
+
 const protocolProperties = new Set(["then", "toString", "valueOf", "toJSON", "constructor"]);
 
 function styleTrap<T extends object>(
@@ -149,7 +160,7 @@ function styleTrap<T extends object>(
 ): unknown {
   // Symbols are protocol hooks too, so they never name a style.
   if (typeof prop !== "string" || protocolProperties.has(prop)) return Reflect.get(target, prop);
-  if (!Object.hasOwn(styles, prop)) {
+  if (!isStyleName(prop)) {
     throw new Error(`Unknown style: ${prop}`);
   }
   return resolve(prop);
@@ -275,7 +286,7 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
 
       const styleChain = text.slice(i + 1, styleEnd);
       const names = styleChain.split(".");
-      if (names.length === 0 || names.some((name) => !Object.hasOwn(styles, name))) {
+      if (names.length === 0 || names.some((name) => !isStyleName(name))) {
         result += text[i];
         continue;
       }
@@ -305,22 +316,80 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
 
   let result = formatInline(raw);
   for (let index = 0; index < tokens.length; index++) {
-    result = result.replaceAll(tokens[index], valueStrings[index]);
+    // A replacer function inserts the value verbatim; a replacement string
+    // would expand `$&`, `$$` and the other substitution patterns.
+    result = result.replaceAll(tokens[index], () => valueStrings[index]);
   }
   return result;
 }
 
 // ── Strip ANSI ──
 
-/** Regular expression matching ANSI escape sequences (CSI and OSC). */
-const ansiRegex =
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape sequence matching requires control characters
-  /[\x1b\x9b][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?(?:\x07|\x1b\\))|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+/**
+ * ECMA-48 escape-sequence grammar: an introducer, a body and a terminator per
+ * kind. Every scanner in this module classifies sequences through the patterns
+ * built from this one table. Control strings take 7-bit introducers only, since
+ * their body runs to ST and a stray 8-bit introducer would swallow the text.
+ */
+const ansiGrammar = {
+  /** CSI: parameter bytes 0x30-0x3F, intermediate bytes 0x20-0x2F, one final byte. */
+  csi: {
+    open: String.raw`(?:\x1b\[|\x9b)`,
+    body: String.raw`[\x30-\x3f]*[\x20-\x2f]*`,
+    close: String.raw`[\x40-\x7e]`,
+  },
+  /** OSC: payload up to BEL or ST; any other ESC aborts it. */
+  osc: {
+    open: String.raw`\x1b\]`,
+    body: String.raw`[^\x07\x1b]*`,
+    close: String.raw`(?:\x07|\x1b\\)`,
+  },
+  /** DCS, SOS, PM and APC: payload up to ST. */
+  controlString: {
+    open: String.raw`\x1b[PX^_]`,
+    body: String.raw`[^\x1b]*`,
+    close: String.raw`\x1b\\`,
+  },
+  /** Any other escape: intermediate bytes, then one final byte. */
+  escape: {
+    open: String.raw`\x1b`,
+    body: String.raw`[\x20-\x2f]*`,
+    close: String.raw`[\x30-\x7e]`,
+  },
+};
+
+const grammarParts = Object.values(ansiGrammar);
+
+/**
+ * Matches one escape sequence, complete or cut off (an incomplete one runs to
+ * the next ESC or the end of input, as a terminal would consume it).
+ */
+const ansiRegex = new RegExp(
+  grammarParts.map(({ open, body, close }) => `${open}${body}(?:${close})?`).join("|"),
+  "g",
+);
+
+/** Matches a whole segment that is a complete escape sequence. */
+const completeAnsiPattern = new RegExp(
+  `^(?:${grammarParts.map(({ open, body, close }) => `${open}${body}${close}`).join("|")})$`,
+);
+
+/** SGR: a CSI with only digit, `;` and `:` parameters and final `m`. Captures the parameters. */
+const sgrPattern = new RegExp(`^${ansiGrammar.csi.open}([0-9;:]*)m$`);
+
+/** OSC 8 hyperlink, terminated or not. Captures the params field and the URI. */
+const hyperlinkPattern = new RegExp(
+  `^${ansiGrammar.osc.open}8;([^;\\x07\\x1b]*);(${ansiGrammar.osc.body})(?:${ansiGrammar.osc.close})?$`,
+);
+
+/** String terminator; also aborts a cut-off CSI or escape. */
+const stringTerminator = "\x1b\\";
 
 /**
  * Remove all ANSI escape sequences from the given string.
  *
- * Handles SGR color codes as well as cursor, erase, and OSC sequences.
+ * Handles CSI sequences (colour, cursor, erase), OSC sequences, DCS/SOS/PM/APC
+ * control strings and every other escape.
  *
  * @param text - A string potentially containing ANSI codes.
  * @returns The input string with all ANSI escape sequences removed.
@@ -398,10 +467,12 @@ export function sanitizeTerminalText(
   return splitAnsi(text)
     .map((segment) => {
       if (segment.ansi) {
-        if (segment.text.startsWith("\x1b[") && segment.text.endsWith("m")) {
-          return segment.text;
-        }
-        if (allowHyperlinks && segment.text.startsWith("\x1b]8;;")) {
+        if (sgrPattern.test(segment.text)) return segment.text;
+        if (
+          allowHyperlinks &&
+          hyperlinkPattern.test(segment.text) &&
+          completeAnsiPattern.test(segment.text)
+        ) {
           return segment.text;
         }
         return "";
@@ -482,7 +553,7 @@ function graphemeWidth(grapheme: string): number {
   if (grapheme.includes("\ufe0f") || grapheme.includes("\u20e3")) return 2;
   let width = 0;
   for (const char of grapheme) {
-    width = Math.max(width, getCharWidth(char.codePointAt(0) as number));
+    width = Math.max(width, getCharWidth(char));
   }
   return width;
 }
@@ -520,94 +591,112 @@ function* iterateGraphemes(text: string): Iterable<string> {
   yield* text;
 }
 
-/**
- * Appends the terminal escapes required to close styling or an OSC 8 hyperlink
- * that remains active at the end of text. Structured renderers use this at
- * cell boundaries so untrusted content cannot style or link their frame.
- */
-export function closeAnsiState(text: string): string {
-  const active = new Set<string>();
-  let hasOpenHyperlink = false;
-
-  for (const segment of splitAnsi(text)) {
-    if (!segment.ansi) continue;
-    if (segment.text.startsWith("\x1b[") && segment.text.endsWith("m")) {
-      const params = parseSgrParameters(segment.text.slice(2, -1));
-      for (let index = 0; index < params.length; index++) {
-        const parameter = params[index];
-        const code = parameter[0];
-        if (!Number.isFinite(code)) continue;
-        if (code === 0) {
-          active.clear();
-        } else if (code === 1 || code === 2) {
-          active.add("intensity");
-        } else if (code === 22) {
-          active.delete("intensity");
-        } else if (code === 3) {
-          active.add("italic");
-        } else if (code === 23) {
-          active.delete("italic");
-        } else if (code === 4 || code === 21) {
-          active.add("underline");
-        } else if (code === 24) {
-          active.delete("underline");
-        } else if (code === 5 || code === 6) {
-          active.add("blink");
-        } else if (code === 25) {
-          active.delete("blink");
-        } else if (code === 7) {
-          active.add("inverse");
-        } else if (code === 27) {
-          active.delete("inverse");
-        } else if (code === 8) {
-          active.add("conceal");
-        } else if (code === 28) {
-          active.delete("conceal");
-        } else if (code === 9) {
-          active.add("strikethrough");
-        } else if (code === 29) {
-          active.delete("strikethrough");
-        } else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
-          active.add("foreground");
-        } else if (code === 39) {
-          active.delete("foreground");
-        } else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
-          active.add("background");
-        } else if (code === 49) {
-          active.delete("background");
-        } else if (code === 38 || code === 48 || code === 58) {
-          active.add(code === 48 ? "background" : "foreground");
-          // The colon spelling carries the whole colour spec as sub-parameters of
-          // this one parameter, so there is nothing to skip; the semicolon
-          // spelling spreads it across the parameters that follow.
-          if (parameter.length === 1) {
-            const mode = params[index + 1]?.[0];
-            index += mode === 2 ? 4 : mode === 5 ? 2 : 0;
-          }
-        } else if (code === 59) {
-          active.delete("foreground");
-        } else if (code === 51 || code === 52) {
-          active.add("frame");
-        } else if (code === 54) {
-          active.delete("frame");
-        } else if (code === 53) {
-          active.add("overline");
-        } else if (code === 55) {
-          active.delete("overline");
-        }
-      }
-    } else if (segment.text.startsWith("\x1b]8;;")) {
-      hasOpenHyperlink = !["\x1b]8;;\x07", "\x1b]8;;\x1b\\"].includes(segment.text);
-    }
-  }
-
-  return text + (hasOpenHyperlink ? "\x1b]8;;\x1b\\" : "") + (active.size > 0 ? "\x1b[0m" : "");
+/** Consecutive integers from `from` to `to`, inclusive. */
+function codeSpan(from: number, to: number): number[] {
+  return Array.from({ length: to - from + 1 }, (_, offset) => from + offset);
 }
 
-/** Truncates terminal text without splitting graphemes or leaking active ANSI state. */
+/**
+ * SGR attributes as `[reset, opening codes]`: each reset ends only its own
+ * attribute, so closing one never ends a style an outer layer opened.
+ */
+const sgrAttributes: [reset: number, opens: number[]][] = [
+  [22, [1, 2]],
+  [23, [3, 20]],
+  [24, [4, 21]],
+  [25, [5, 6]],
+  [27, [7]],
+  [28, [8]],
+  [29, [9]],
+  [10, codeSpan(11, 19)],
+  [39, [...codeSpan(30, 38), ...codeSpan(90, 97)]],
+  [49, [...codeSpan(40, 48), ...codeSpan(100, 107)]],
+  [50, [26]],
+  [54, [51, 52]],
+  [55, [53]],
+  [59, [58]],
+  [65, codeSpan(60, 64)],
+  [75, [73, 74]],
+];
+
+const sgrResetFor = new Map(
+  sgrAttributes.flatMap(([reset, opens]) => opens.map((code) => [code, reset])),
+);
+const sgrResets = new Set(sgrAttributes.map(([reset]) => reset));
+
+/**
+ * Applies one SGR parameter body to `owed`, the set of reset codes needed to
+ * return to the default state. A code with no targeted reset owes `0`.
+ */
+function trackSgr(body: string, owed: Set<number>): void {
+  const params = parseSgrParameters(body);
+  for (let index = 0; index < params.length; index++) {
+    const parameter = params[index];
+    const code = parameter[0];
+    if (code === 0) {
+      owed.clear();
+    } else if (sgrResets.has(code)) {
+      owed.delete(code);
+    } else if (code === 4 && parameter[1] === 0) {
+      // 4:0 is the colon spelling of "underline off".
+      owed.delete(24);
+    } else {
+      owed.add(sgrResetFor.get(code) ?? 0);
+      // The colon spelling carries the whole colour spec as sub-parameters of
+      // this one parameter; the semicolon spelling spreads it across the
+      // parameters that follow.
+      if ((code === 38 || code === 48 || code === 58) && parameter.length === 1) {
+        const mode = params[index + 1]?.[0];
+        index += mode === 2 ? 4 : mode === 5 ? 2 : 0;
+      }
+    }
+  }
+}
+
+/**
+ * Appends the escapes that return the terminal to its default state at the end
+ * of `text`: ST for a sequence the text cuts off, an OSC 8 close for a link
+ * left open (whatever its params), and the targeted reset of each SGR attribute
+ * left set. A full reset is emitted only for an SGR code that has no targeted
+ * reset. Structured renderers use this at cell boundaries so untrusted content
+ * cannot style or link their frame.
+ */
+export function closeAnsiState(text: string): string {
+  const owed = new Set<number>();
+  let hyperlinkOpen = false;
+  let last: AnsiSegment | undefined;
+
+  for (const segment of splitAnsi(text)) {
+    last = segment;
+    if (!segment.ansi) continue;
+    const sgr = sgrPattern.exec(segment.text);
+    if (sgr) {
+      trackSgr(sgr[1], owed);
+      continue;
+    }
+    const link = hyperlinkPattern.exec(segment.text);
+    if (link) hyperlinkOpen = link[2] !== "";
+  }
+
+  let suffix = last?.ansi && !completeAnsiPattern.test(last.text) ? stringTerminator : "";
+  if (hyperlinkOpen) suffix += `\x1b]8;;${stringTerminator}`;
+  if (owed.has(0)) {
+    suffix += "\x1b[0m";
+  } else {
+    for (const [reset] of sgrAttributes) if (owed.has(reset)) suffix += `\x1b[${reset}m`;
+  }
+  return text + suffix;
+}
+
+/**
+ * Truncates terminal text without splitting graphemes or leaking active ANSI
+ * state. A `NaN` or `Infinity` width means no limit; a width below 1 returns "".
+ */
 export function truncateAnsi(text: string, maxWidth: number, marker = "…"): string {
-  if (maxWidth <= 0) return "";
-  if (stringWidth(text) <= maxWidth) return closeAnsiState(text);
+  const limit = finiteInteger(maxWidth, 0);
+  if (limit === undefined) return maxWidth < 0 ? "" : closeAnsiState(text);
+  if (limit === 0) return "";
+  if (stringWidth(text) <= limit) return closeAnsiState(text);
 
   const takePlain = (value: string, widthLimit: number) => {
     let width = 0;
@@ -621,8 +710,8 @@ export function truncateAnsi(text: string, maxWidth: number, marker = "…"): st
     return result;
   };
 
-  const fittedMarker = takePlain(stripAnsi(marker), maxWidth);
-  const contentLimit = maxWidth - stringWidth(fittedMarker);
+  const fittedMarker = takePlain(stripAnsi(marker), limit);
+  const contentLimit = limit - stringWidth(fittedMarker);
   let visibleWidth = 0;
   let result = "";
   outer: for (const segment of splitAnsi(text)) {
@@ -641,97 +730,124 @@ export function truncateAnsi(text: string, maxWidth: number, marker = "…"): st
 }
 
 /**
- * Returns true for zero-width code points: combining marks, joiners,
- * variation selectors, and other format characters that should not
- * advance the cursor.
+ * Combining marks (Mn, Me) and format characters (Cf, which includes the
+ * zero-width joiners and the BOM) do not advance the cursor.
  */
-function isZeroWidth(code: number): boolean {
-  return (
-    code === 0x200b || // zero-width space
-    code === 0x200c || // zero-width non-joiner
-    code === 0x200d || // zero-width joiner
-    code === 0xfeff || // zero-width no-break space (BOM)
-    (code >= 0x0300 && code <= 0x036f) || // combining diacritical marks
-    (code >= 0x0483 && code <= 0x0489) || // combining Cyrillic
-    (code >= 0x0591 && code <= 0x05bd) || // Hebrew points
-    (code >= 0x0610 && code <= 0x061a) || // Arabic
-    (code >= 0x064b && code <= 0x065f) ||
-    (code >= 0x06d6 && code <= 0x06dc) ||
-    (code >= 0x1ab0 && code <= 0x1aff) || // combining diacritical marks extended
-    (code >= 0x1dc0 && code <= 0x1dff) || // combining diacritical marks supplement
-    (code >= 0x20d0 && code <= 0x20ff) || // combining marks for symbols
-    (code >= 0xfe00 && code <= 0xfe0f) || // variation selectors
-    (code >= 0xfe20 && code <= 0xfe2f) || // combining half marks
-    (code >= 0xe0100 && code <= 0xe01ef) // variation selectors supplement
-  );
-}
+const zeroWidthPattern = /^[\p{Mn}\p{Me}\p{Cf}]$/u;
 
 /**
- * Returns true for code points that occupy two terminal columns:
- * East Asian wide/fullwidth characters and emoji.
+ * Code points that occupy two columns, as sorted inclusive `[start, end]` pairs:
+ * the East_Asian_Width W and F runs of Unicode 17.0 EastAsianWidth.txt with
+ * unassigned gaps bridged, plus the regional indicators (Emoji_Presentation).
  */
+const wideRanges: readonly (readonly [number, number])[] = [
+  [0x1100, 0x115f],
+  [0x231a, 0x231b],
+  [0x2329, 0x232a],
+  [0x23e9, 0x23ec],
+  [0x23f0, 0x23f0],
+  [0x23f3, 0x23f3],
+  [0x25fd, 0x25fe],
+  [0x2614, 0x2615],
+  [0x2630, 0x2637],
+  [0x2648, 0x2653],
+  [0x267f, 0x267f],
+  [0x268a, 0x268f],
+  [0x2693, 0x2693],
+  [0x26a1, 0x26a1],
+  [0x26aa, 0x26ab],
+  [0x26bd, 0x26be],
+  [0x26c4, 0x26c5],
+  [0x26ce, 0x26ce],
+  [0x26d4, 0x26d4],
+  [0x26ea, 0x26ea],
+  [0x26f2, 0x26f3],
+  [0x26f5, 0x26f5],
+  [0x26fa, 0x26fa],
+  [0x26fd, 0x26fd],
+  [0x2705, 0x2705],
+  [0x270a, 0x270b],
+  [0x2728, 0x2728],
+  [0x274c, 0x274c],
+  [0x274e, 0x274e],
+  [0x2753, 0x2755],
+  [0x2757, 0x2757],
+  [0x2795, 0x2797],
+  [0x27b0, 0x27b0],
+  [0x27bf, 0x27bf],
+  [0x2b1b, 0x2b1c],
+  [0x2b50, 0x2b50],
+  [0x2b55, 0x2b55],
+  [0x2e80, 0x303e],
+  [0x3041, 0x3247],
+  [0x3250, 0xa4c6],
+  [0xa960, 0xa97c],
+  [0xac00, 0xd7a3],
+  [0xf900, 0xfaff],
+  [0xfe10, 0xfe19],
+  [0xfe30, 0xfe6b],
+  [0xff01, 0xff60],
+  [0xffe0, 0xffe6],
+  [0x16fe0, 0x1b2fb],
+  [0x1d300, 0x1d376],
+  [0x1f004, 0x1f004],
+  [0x1f0cf, 0x1f0cf],
+  [0x1f18e, 0x1f18e],
+  [0x1f191, 0x1f19a],
+  [0x1f1e6, 0x1f320],
+  [0x1f32d, 0x1f335],
+  [0x1f337, 0x1f37c],
+  [0x1f37e, 0x1f393],
+  [0x1f3a0, 0x1f3ca],
+  [0x1f3cf, 0x1f3d3],
+  [0x1f3e0, 0x1f3f0],
+  [0x1f3f4, 0x1f3f4],
+  [0x1f3f8, 0x1f43e],
+  [0x1f440, 0x1f440],
+  [0x1f442, 0x1f4fc],
+  [0x1f4ff, 0x1f53d],
+  [0x1f54b, 0x1f54e],
+  [0x1f550, 0x1f567],
+  [0x1f57a, 0x1f57a],
+  [0x1f595, 0x1f596],
+  [0x1f5a4, 0x1f5a4],
+  [0x1f5fb, 0x1f64f],
+  [0x1f680, 0x1f6c5],
+  [0x1f6cc, 0x1f6cc],
+  [0x1f6d0, 0x1f6d2],
+  [0x1f6d5, 0x1f6df],
+  [0x1f6eb, 0x1f6ec],
+  [0x1f6f4, 0x1f6fc],
+  [0x1f7e0, 0x1f7f0],
+  [0x1f90c, 0x1f93a],
+  [0x1f93c, 0x1f945],
+  [0x1f947, 0x1f9ff],
+  [0x1fa70, 0x1faf8],
+  [0x20000, 0x3fffd],
+];
+
 function isWide(code: number): boolean {
-  return (
-    (code >= 0x1100 && code <= 0x115f) || // Hangul Jamo
-    (code >= 0x2329 && code <= 0x232a) || // angle brackets
-    code === 0x231a || // watch
-    code === 0x231b || // hourglass
-    (code >= 0x23e9 && code <= 0x23ec) || // fast-forward controls
-    code === 0x23f0 || // alarm clock
-    code === 0x23f3 || // hourglass flowing sand
-    (code >= 0x25fd && code <= 0x25fe) || // small squares
-    (code >= 0x2614 && code <= 0x2615) || // umbrella, hot beverage
-    (code >= 0x2648 && code <= 0x2653) || // zodiac
-    code === 0x267f || // wheelchair
-    code === 0x2693 || // anchor
-    code === 0x26a1 || // high voltage
-    (code >= 0x26aa && code <= 0x26ab) || // medium circles
-    (code >= 0x26bd && code <= 0x26be) || // soccer ball, baseball
-    (code >= 0x26c4 && code <= 0x26c5) || // snowman, sun behind cloud
-    code === 0x26ce || // ophiuchus
-    code === 0x26d4 || // no entry
-    code === 0x26ea || // church
-    (code >= 0x26f2 && code <= 0x26f3) || // fountain, golf
-    code === 0x26f5 || // sailboat
-    code === 0x26fa || // tent
-    code === 0x26fd || // fuel pump
-    code === 0x2705 || // check mark button
-    (code >= 0x270a && code <= 0x270b) || // raised fist, raised hand
-    code === 0x2728 || // sparkles
-    code === 0x274c || // cross mark
-    code === 0x274e || // cross mark button
-    (code >= 0x2753 && code <= 0x2755) || // question and exclamation marks
-    code === 0x2757 || // exclamation mark
-    (code >= 0x2795 && code <= 0x2797) || // heavy plus, minus, division
-    code === 0x27b0 || // curly loop
-    code === 0x27bf || // double curly loop
-    (code >= 0x2b1b && code <= 0x2b1c) || // large squares
-    code === 0x2b50 || // star
-    code === 0x2b55 || // heavy circle
-    (code >= 0x2e80 && code <= 0xa4cf) || // CJK radicals … Yi
-    (code >= 0xac00 && code <= 0xd7a3) || // Hangul syllables
-    (code >= 0xf900 && code <= 0xfaff) || // CJK compatibility ideographs
-    (code >= 0xfe10 && code <= 0xfe19) || // vertical forms
-    (code >= 0xfe30 && code <= 0xfe6f) || // CJK compatibility forms
-    (code >= 0xff00 && code <= 0xff60) || // fullwidth forms
-    (code >= 0xffe0 && code <= 0xffe6) || // fullwidth signs
-    (code >= 0x1f000 && code <= 0x1f2ff) || // mahjong, dominoes, cards, enclosed (incl. regional indicators U+1F1E6–1F1FF)
-    (code >= 0x1f300 && code <= 0x1f64f) || // misc symbols & emoticons
-    (code >= 0x1f680 && code <= 0x1f6ff) || // transport & map symbols
-    (code >= 0x1f7e0 && code <= 0x1f7eb) || // coloured circles and squares
-    (code >= 0x1f900 && code <= 0x1f9ff) || // supplemental symbols & pictographs
-    (code >= 0x1fa70 && code <= 0x1faff) || // symbols & pictographs extended-A
-    (code >= 0x20000 && code <= 0x2fffd) || // CJK unified ideographs extension B–F
-    (code >= 0x30000 && code <= 0x3fffd) // CJK unified ideographs extension G+
-  );
+  let low = 0;
+  let high = wideRanges.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const [start, end] = wideRanges[middle];
+    if (code < start) high = middle - 1;
+    else if (code > end) low = middle + 1;
+    else return true;
+  }
+  return false;
 }
 
-function getCharWidth(code: number): number {
+function getCharWidth(char: string): number {
+  const code = char.codePointAt(0) as number;
   // C0 control characters (incl. NUL), DEL, and C1 control characters occupy no
   // columns. ANSI escape sequences are stripped before measuring; this only
   // covers stray raw control bytes (e.g. BEL) left in the input.
   if (isControlCode(code)) return 0;
-  if (isZeroWidth(code)) return 0;
+  // Below U+0300 the only zero-width code point is U+00AD and nothing is wide.
+  if (code < 0x300) return code === 0xad ? 0 : 1;
+  if (zeroWidthPattern.test(char)) return 0;
   if (isWide(code)) return 2;
   return 1;
 }

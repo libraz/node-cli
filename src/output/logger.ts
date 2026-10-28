@@ -1,6 +1,7 @@
 import type { Writable } from "node:stream";
 import { format } from "node:util";
-import { createColorizer, isColorEnabled, renderSafe, sanitizeTerminalText } from "./color.js";
+import { guardCall, ownValue } from "../guard.js";
+import { createColorizer, isColorEnabled, renderSafe } from "./color.js";
 import { writeThrough } from "./region.js";
 
 // ── Types ──
@@ -108,6 +109,139 @@ export function logger(options: LoggerOptions = {}): Logger {
   return createLogger(options);
 }
 
+/** Returns whether `level` is one of the {@link LogLevel} values. */
+function isLogLevel(level: unknown): level is LogLevel {
+  return typeof level === "string" && ownValue(levelOrder, level) !== undefined;
+}
+
+/** Throws a RangeError naming the accepted levels when `level` is not one of them. */
+function assertLogLevel(level: unknown): asserts level is LogLevel {
+  if (!isLogLevel(level)) {
+    throw new RangeError(`Logger level must be one of: ${Object.keys(levelOrder).join(", ")}`);
+  }
+}
+
+/**
+ * Write queue, backpressure and failure state of one output stream. Every
+ * logger writing to the stream, a parent and all of its children, shares it, so
+ * their lines keep call order and one failure reaches every `flush()`.
+ */
+interface StreamState {
+  queue: string[];
+  backpressured: boolean;
+  failure: Error | undefined;
+  waiters: Set<{ resolve: () => void; reject: (error: Error) => void }>;
+  onDrain: () => void;
+}
+
+const streamStates = new WeakMap<Writable, StreamState>();
+
+/** Returns the shared state for `stream`, attaching its persistent listeners on first use. */
+function stateFor(stream: Writable): StreamState {
+  const existing = streamStates.get(stream);
+  if (existing) return existing;
+
+  const state: StreamState = {
+    queue: [],
+    backpressured: false,
+    failure: undefined,
+    waiters: new Set(),
+    onDrain: () => drain(stream, state),
+  };
+  streamStates.set(stream, state);
+  // Permanent listeners: an error or close at any time, backpressured or not,
+  // must be observed here rather than surface as an unhandled error event.
+  stream.on("error", (error: Error) => failStream(stream, state, error));
+  stream.on("close", () =>
+    failStream(
+      stream,
+      state,
+      new Error("Logger output stream closed before buffered data was flushed"),
+    ),
+  );
+  return state;
+}
+
+function failStream(stream: Writable, state: StreamState, error: Error): void {
+  stream.off("drain", state.onDrain);
+  state.failure ??= error;
+  state.backpressured = false;
+  state.queue.length = 0;
+  for (const waiter of state.waiters) waiter.reject(state.failure);
+  state.waiters.clear();
+}
+
+function drain(stream: Writable, state: StreamState): void {
+  stream.off("drain", state.onDrain);
+  state.backpressured = false;
+  while (state.queue.length > 0) {
+    if (!writeThrough(stream, state.queue.shift() as string)) {
+      state.backpressured = true;
+      stream.once("drain", state.onDrain);
+      return;
+    }
+  }
+  for (const waiter of state.waiters) waiter.resolve();
+  state.waiters.clear();
+}
+
+function enqueue(stream: Writable, state: StreamState, line: string, bufferLimit: number): void {
+  if (state.failure) return;
+  if (state.backpressured) {
+    if (bufferLimit === 0) return;
+    if (state.queue.length >= bufferLimit) state.queue.shift();
+    state.queue.push(line);
+    return;
+  }
+  // A progress renderer may own this stream's current line; go through the
+  // arbiter so the log line lands on a clean row and the renderer redraws.
+  if (!writeThrough(stream, line)) {
+    state.backpressured = true;
+    stream.once("drain", state.onDrain);
+  }
+}
+
+/** Resolves once the stream has accepted every earlier write; rejects if one fails. */
+function confirmWrites(stream: Writable): Promise<void> {
+  if (typeof stream.writableLength !== "number" || stream.writableLength === 0) {
+    return Promise.resolve();
+  }
+  // An empty write completes only after every write queued before it.
+  return new Promise((resolve, reject) => {
+    stream.write("", (error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function flushStream(stream: Writable, state: StreamState): Promise<void> {
+  if (state.failure) throw state.failure;
+  if (state.backpressured || state.queue.length > 0) {
+    await new Promise<void>((resolve, reject) => state.waiters.add({ resolve, reject }));
+    return flushStream(stream, state);
+  }
+  try {
+    await confirmWrites(stream);
+  } catch (error) {
+    throw state.failure ?? error;
+  }
+  if (state.failure) throw state.failure;
+}
+
+/** Formats the message and arguments, replacing any value whose formatting throws. */
+function formatMessage(message: unknown, args: unknown[]): string {
+  return guardCall(
+    () => format(message, ...args),
+    () =>
+      [message, ...args]
+        .map((value) =>
+          guardCall(
+            () => format(value),
+            () => "[unprintable]",
+          ),
+        )
+        .join(" "),
+  );
+}
+
 /**
  * The actual factory. `inheritLevel` is how `child()` wires level inheritance;
  * it stays off the exported signature so it never becomes part of the public
@@ -119,6 +253,7 @@ function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel
   // propagates to children that have no explicit level of their own, while
   // `child.setLevel(...)` only overrides that child (never the parent).
   // `inheritLevel` is an internal hook wired up by `child()`.
+  if (options.level !== undefined) assertLogLevel(options.level);
   let ownLevel: LogLevel | undefined = options.level;
 
   const prefix = options.prefix;
@@ -130,79 +265,8 @@ function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel
   }
   const col = createColorizer(stream);
   const colorOn = () => isColorEnabled(stream);
-  const bufferedLines: string[] = [];
-  const flushWaiters = new Set<{
-    resolve: () => void;
-    reject: (error: Error) => void;
-  }>();
-  let backpressured = false;
-  let streamFailure: Error | undefined;
-  const children = new Set<Logger>();
-
-  const removeBackpressureListeners = () => {
-    stream.off("drain", flushBuffered);
-    stream.off("error", failBuffered);
-    stream.off("close", closeBuffered);
-  };
-
-  const rejectFlushWaiters = (error: Error) => {
-    for (const waiter of flushWaiters) waiter.reject(error);
-    flushWaiters.clear();
-  };
-
-  const failBuffered = (error: Error) => {
-    removeBackpressureListeners();
-    streamFailure = error;
-    backpressured = false;
-    bufferedLines.length = 0;
-    rejectFlushWaiters(error);
-  };
-
-  const closeBuffered = () => {
-    failBuffered(new Error("Logger output stream closed before buffered data was flushed"));
-  };
-
-  const waitForDrain = () => {
-    stream.once("drain", flushBuffered);
-    stream.once("error", failBuffered);
-    stream.once("close", closeBuffered);
-  };
-
-  const resolveFlushWaiters = () => {
-    if (backpressured || bufferedLines.length > 0) return;
-    for (const waiter of flushWaiters) waiter.resolve();
-    flushWaiters.clear();
-  };
-
-  function flushBuffered() {
-    removeBackpressureListeners();
-    backpressured = false;
-    while (bufferedLines.length > 0) {
-      const line = bufferedLines.shift() as string;
-      if (!writeThrough(stream, line)) {
-        backpressured = true;
-        waitForDrain();
-        return;
-      }
-    }
-    resolveFlushWaiters();
-  }
-
-  const writeLine = (line: string) => {
-    if (streamFailure) return;
-    if (backpressured) {
-      if (bufferLimit === 0) return;
-      if (bufferedLines.length >= bufferLimit) bufferedLines.shift();
-      bufferedLines.push(line);
-      return;
-    }
-    // A progress renderer may own this stream's current line; go through the
-    // arbiter so the log line lands on a clean row and the renderer redraws.
-    if (!writeThrough(stream, line)) {
-      backpressured = true;
-      waitForDrain();
-    }
-  };
+  const state = stateFor(stream);
+  const writeLine = (line: string) => enqueue(stream, state, line, bufferLimit);
 
   function effectiveLevel(): LogLevel {
     return ownLevel ?? inheritLevel?.() ?? "info";
@@ -220,11 +284,11 @@ function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel
     const effectiveLevel = level === "success" ? "info" : (level as LogLevel);
     if (!shouldLog(effectiveLevel)) return;
 
-    // Always go through `format`, even with no extra arguments. A logging call
-    // must never throw, and this module is reachable from plain JavaScript where
-    // `message` can be an Error or an object; `format` renders those instead of
-    // handing a non-string to the text pipeline. Strings pass through unchanged.
-    const formatted = args.length > 0 ? format(message, ...args) : format(message);
+    // Always go through `format`, even with no extra arguments. This module is
+    // reachable from plain JavaScript where `message` can be an Error or an
+    // object; `format` renders those instead of handing a non-string to the
+    // text pipeline. Strings pass through unchanged.
+    const formatted = formatMessage(message, args);
 
     const parts: string[] = [];
     const colored = colorOn();
@@ -248,8 +312,8 @@ function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel
       parts.push(colored ? col.dim(`[${safePrefix}]`) : `[${safePrefix}]`);
     }
 
-    // Message
-    parts.push(sanitizeTerminalText(formatted, { singleLine: false }));
+    // Message: styling it opens is closed here, before the newline.
+    parts.push(renderSafe(formatted, { singleLine: false }));
 
     writeLine(`${parts.join(" ")}\n`);
   }
@@ -271,28 +335,17 @@ function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel
       writeLog("error", message, args);
     },
     setLevel(level) {
+      assertLogLevel(level);
       ownLevel = level;
     },
     child(childPrefix: string) {
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
       // No explicit level → the child inherits this logger's effective level
       // dynamically (so later parent.setLevel calls still reach it).
-      const child = createLogger(
-        { prefix: fullPrefix, timestamp, stream, bufferLimit },
-        effectiveLevel,
-      );
-      children.add(child);
-      return child;
+      return createLogger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
     },
     flush() {
-      const ownFlush = streamFailure
-        ? Promise.reject(streamFailure)
-        : !backpressured && bufferedLines.length === 0
-          ? Promise.resolve()
-          : new Promise<void>((resolve, reject) => flushWaiters.add({ resolve, reject }));
-      return Promise.all([ownFlush, ...[...children].map((child) => child.flush())]).then(
-        () => undefined,
-      );
+      return flushStream(stream, state);
     },
   };
 

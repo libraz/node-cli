@@ -31,7 +31,7 @@ import { createCLI, table, progress, prompt, logger } from "@libraz/node-cli";
 
 一部のエクスポートは値ではなく TypeScript の型です。変数へ型注釈を付けるために存在し、実行時には消えます。`import { Shell } from "@libraz/node-cli"` は失敗し、`new Shell(...)` もできません。
 
-型のみのエクスポートは `ExecOptions`、`PluginContext`、`CLIErrorCode`、`AnsiSegment`、`Logger`、`LoggerOptions`、`LogLevel`、`Bar`、`BarOptions`、`BarState`、`MultiBar`、`Spinner`、`SpinnerOptions`、`Choice`、`ConfirmOptions`、`MultiselectOptions`、`PasswordOptions`、`PromptBaseOptions`、`SelectChoice`、`SelectOptions`、`TextOptions`、`TableChars`、`TableOptions`、`TableStyle`、`CompletionResult`、`ModeConfig`、`Shell`、`Action`、`CatchContext`、`CLIEventHandler`、`CLIEventMap`、`CLIOptions`、`CommandContext`、`Completer`、`CompletionContext`、`OptionSchema` です。
+型のみのエクスポートは `ExecOptions`、`PluginContext`、`CLIErrorCode`、`AnsiSegment`、`ColorFn`、`Logger`、`LoggerOptions`、`LogLevel`、`Bar`、`BarOptions`、`BarState`、`MultiBar`、`Spinner`、`SpinnerOptions`、`Choice`、`ConfirmOptions`、`MultiselectOptions`、`PasswordOptions`、`PromptBaseOptions`、`SelectChoice`、`SelectOptions`、`TextOptions`、`TableChars`、`TableOptions`、`TableStyle`、`CompletionResult`、`ModeConfig`、`Shell`、`Action`、`CatchContext`、`CLIEventHandler`、`CLIEventMap`、`CLIOptions`、`CommandContext`、`Completer`、`CompletionContext`、`OptionSchema` です。
 
 とくに `Shell`、`ModeConfig`、`CompletionResult` と、オプションや結果を表すインターフェースはすべて型のみです。`Shell` をアプリケーション側のコードが構築することはありません。動作中のインスタンスには、コマンドのアクション内で `ctx.shell` を通じて到達します。
 
@@ -393,11 +393,11 @@ interface CLIEventMap {
 | `afterExecute` | アクションが正常に完了した後。 |
 | `commandError` | 解決済みのコマンドが、引数の検証、オプションの解決、自身の `validate`、またはアクションで失敗したとき。 |
 | `error` | 入力の処理中に起きたあらゆる失敗。コマンド未検出や解析の失敗など、コマンドが解決される前に生じたものも含みます。 |
-| `exit` | `start()` のどの終了経路でも 1 回。 |
+| `exit` | `start()` が終わるとき、または強制終了かシェルの SIGTERM でプロセスが終わるときに、最大 1 回。 |
 
 解決済みコマンドの失敗では `commandError` と `error` の **両方が**発火します。`commandError` はコンテキストを伴い、`error` は総受けです。それぞれの失敗をちょうど 1 回だけ観測したいハンドラは、両方ではなくどちらか一方を購読してください。
 
-`exit` は、直接実行モードのコマンドが完了・例外・強制終了のいずれかで終わった後、引数のない非端末起動でヘルプの一覧が表示された後、プラグインの初期化が失敗したとき、そして対話シェルが終了したときに発火します。プログラムからの実行は、通常の経路ではこれを発火しません。
+`exit` は、直接実行モードのコマンドが完了・例外・強制終了のいずれかで終わった後、引数のない非端末起動でヘルプの一覧が表示された後、プラグインの初期化が失敗したとき、そして対話シェルが終了したとき、または SIGTERM を受けたときに発火します。プログラムからの実行は、通常の経路ではこれを発火しません。CLI が処理しないシグナル（直接実行モードの SIGTERM と SIGHUP、シェルの SIGHUP）でプロセスが終わる場合は、`exit` もキャンセルハンドラも実行されません。
 
 リスナが例外を投げてもコマンドは壊れません。その失敗は `error` イベントとして再度発火し、残りのリスナはそのまま走ります。`error` のリスナが投げた場合は代わりに stderr へ報告され、ループの再帰を防ぎます。
 
@@ -469,8 +469,8 @@ interface ModeConfig {
   action: (
     input: string,
     ctx: {
-      stdout: NodeJS.WritableStream;
-      stderr: NodeJS.WritableStream;
+      stdout: Writable;
+      stderr: Writable;
       signal: AbortSignal;
     },
   ) => void | Promise<void>;
@@ -504,6 +504,11 @@ Node の readline の補完関数インターフェースが期待するタプ�
 
 ```typescript
 const color: Record<string, ColorFn>
+
+interface ColorFn {
+  (text: string): string;
+  [style: string]: ColorFn;
+}
 ```
 
 プロパティがスタイル名になっているプロキシです。それぞれが、呼び出し可能でありチェーンもできる関数を返します。
@@ -594,7 +599,7 @@ function resetColorEnabled(): void
 function stringWidth(text: string): number
 ```
 
-テキストが占める端末の桁数です。まず ANSI シーケンスが取り除かれ、結合文字と幅ゼロの文字は 0 と数え、東アジアの全角文字と絵文字は 2 と数えます。ゼロ幅接合子でつながれたスカラーの並び、たとえば家族の絵文字は、2 桁幅の書記素 1 つにまとまります。
+テキストが占める端末の桁数です。まず ANSI シーケンスが取り除かれ、結合文字・書式文字・制御文字は 0 と数え、East Asian Width が Wide または Fullwidth の文字と絵文字表示の文字は 2 と数えます。ゼロ幅接合子でつながれたスカラーの並び、たとえば家族の絵文字は、2 桁幅の書記素 1 つにまとまります。
 
 ### `stripAnsi`
 
@@ -602,7 +607,7 @@ function stringWidth(text: string): number
 function stripAnsi(text: string): string
 ```
 
-CSI と OSC を問わず、あらゆる ANSI エスケープシーケンスを取り除きます。
+CSI、OSC、DCS・SOS・PM・APC の制御文字列、そのほかのエスケープを問わず、あらゆる ANSI エスケープシーケンスを取り除きます。
 
 ### `truncateAnsi`
 
@@ -610,7 +615,7 @@ CSI と OSC を問わず、あらゆる ANSI エスケープシーケンスを�
 function truncateAnsi(text: string, maxWidth: number, marker?: string): string
 ```
 
-書記素を分断せずに表示幅 `maxWidth` 桁へ切り詰め、`marker`（既定値は `"…"`）を末尾に付け、結果に開きっぱなしで残るはずだったスタイルやハイパーリンクを閉じます。`maxWidth` が 0 以下なら `""` を返します。
+書記素を分断せずに表示幅 `maxWidth` 桁へ切り詰め、`marker`（既定値は `"…"`）を末尾に付け、結果に開きっぱなしで残るはずだったスタイルやハイパーリンクを閉じます。スタイルは属性ごとに戻すため、外側のスタイルは残ります。`maxWidth` を切り捨てて 0 以下になるなら `""` を返し、`NaN` と `Infinity` は上限なしとして扱います。
 
 ### `splitAnsi`
 
@@ -933,7 +938,7 @@ prompt.select<T>(
 | --- | --- | --- | --- |
 | `default` | `T` | — | 空の送信に対して返される値。選択肢の `value`、または選択肢オブジェクト自身と同一性で照合されます。 |
 
-選択肢は表示された番号で答えるか、ラベルを正確に入力して答えます。数値の入力は常に番号による選択として扱われるため、数字に見えるラベルにも到達できます。空の `choices` 配列は例外を投げます。
+選択肢は表示された番号で答えるか、ラベルを入力して答えます。ラベルは大文字と小文字を区別せずに照合されます。一覧の範囲内の数値は常に番号による選択として扱われるため、数字に見えるラベルにも位置で到達できます。それ以外の入力はラベルと照合されます。空の `choices` 配列は例外を投げます。
 
 ### prompt.multiselect
 
@@ -1184,6 +1189,7 @@ NODE_CLI_DEBUG=1 myapp deploy prod
 | `ModeConfig` | 型 | [対話シェル](#modeconfig) |
 | `CompletionResult` | 型 | [対話シェル](#completionresult) |
 | `color` | 値 | [色](#color) |
+| `ColorFn` | 型 | [色](#color) |
 | `c` | 関数 | [色](#c) |
 | `createColorizer` | 関数 | [色](#createcolorizer) |
 | `isColorEnabled` | 関数 | [色](#iscolorenabled) |

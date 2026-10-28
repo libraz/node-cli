@@ -1,5 +1,6 @@
 import type { Writable } from "node:stream";
-import { createColorizer, renderSafe, streamIsTTY, stringWidth } from "./color.js";
+import { finiteInteger, guardCall, MAX_RENDER_WIDTH } from "../guard.js";
+import { createColorizer, isStyleName, renderSafe, streamIsTTY, stringWidth } from "./color.js";
 import { type RegionOwner, setRegionOwner } from "./region.js";
 
 // ── Progress Bar ──
@@ -133,6 +134,24 @@ const patterns = {
  */
 function safeLine(text: string): string {
   return renderSafe(text);
+}
+
+/** Applies the named style when it is a built-in one; any other name leaves the text as is. */
+function applyColor(
+  colorizer: Record<string, (text: string) => string>,
+  name: string | undefined,
+  text: string,
+): string {
+  if (name === undefined || !isStyleName(name)) return text;
+  return guardCall(
+    () => colorizer[name](text),
+    () => text,
+  );
+}
+
+/** Physical terminal rows a single logical line occupies once it wraps. */
+function wrappedRows(line: string, stream: Writable): number {
+  return Math.max(1, Math.ceil(stringWidth(line) / ((stream as NodeJS.WriteStream).columns || 80)));
 }
 
 function createFrameWriter(stream: Writable): {
@@ -385,14 +404,12 @@ function renderBarLine(
   const filled = safeLine(options.filled ?? "█");
   const empty = safeLine(options.empty ?? "░");
   const filledCount = Math.round((state.percent / 100) * width);
-  let bar = filled.repeat(filledCount) + empty.repeat(width - filledCount);
-  if (options.color) {
-    try {
-      bar = colorizer[options.color](bar);
-    } catch {
-      // An unrecognized color must not stop progress reporting.
-    }
-  }
+  // An unrecognized color must not stop progress reporting.
+  const bar = applyColor(
+    colorizer,
+    options.color,
+    filled.repeat(filledCount) + empty.repeat(width - filledCount),
+  );
 
   const parts: string[] = [];
   if (options.label) parts.push(safeLine(options.label));
@@ -418,10 +435,17 @@ type ResolvedBarOptions = Required<
  * two cannot disagree about what a given option means.
  */
 function normalizeBarOptions(options: BarOptions): ResolvedBarOptions {
-  const width = options.width ?? 30;
-  if (!Number.isFinite(width) || width <= 0) {
+  const requested = options.width ?? 30;
+  const whole =
+    typeof requested === "number" && requested > 0 ? finiteInteger(requested, 0) : undefined;
+  if (whole === undefined) {
     throw new RangeError("Bar width must be a positive finite number");
   }
+  if (whole > MAX_RENDER_WIDTH) {
+    throw new RangeError(`Bar width must not exceed ${MAX_RENDER_WIDTH}`);
+  }
+  // A fractional width draws its whole part, and never fewer than one cell.
+  const width = Math.max(1, whole);
   return {
     total: normalizeProgressTotal(options.total),
     label: options.label ?? "",
@@ -496,10 +520,7 @@ function createBar(options: BarOptions): Bar {
       const frame = `${clearStandaloneFrame(renderedRows)}${line}`;
       if (final) frameWriter.final(frame);
       else frameWriter.write(frame);
-      renderedRows = Math.max(
-        1,
-        Math.ceil(stringWidth(line) / ((stream as NodeJS.WriteStream).columns || 80)),
-      );
+      renderedRows = wrappedRows(line, stream);
     } catch (error) {
       cleanup();
       started = false;
@@ -583,7 +604,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let done = false;
-  let rendered = false;
+  let renderedRows = 0;
   let releaseTerminal: (() => void) | null = null;
   let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-spinner");
@@ -593,23 +614,22 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
 
   function render(): void {
     if (!tty) return;
-    let frame = safeFrames[frameIndex % safeFrames.length];
-    if (spinnerColor) {
-      try {
-        frame = (col as Record<string, (s: string) => string>)[spinnerColor](frame);
-      } catch {
-        // ignore
-      }
-    }
-    frameWriter.write(`\r\x1b[K${frame} ${safeLine(label)}`);
-    rendered = true;
+    const frame = applyColor(
+      col as Record<string, (s: string) => string>,
+      spinnerColor,
+      safeFrames[frameIndex % safeFrames.length],
+    );
+    const line = `${frame} ${safeLine(label)}`;
+    frameWriter.write(`${clearStandaloneFrame(renderedRows)}${line}`);
+    renderedRows = wrappedRows(line, stream);
     frameIndex++;
   }
 
   function clearLine(): void {
     // Erasing a line this spinner never drew would wipe whatever the caller had
     // already written there.
-    if (tty && rendered) stream.write("\r\x1b[K");
+    if (tty && renderedRows > 0) stream.write(clearStandaloneFrame(renderedRows));
+    renderedRows = 0;
   }
 
   function cleanup(): void {
@@ -635,7 +655,12 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     start() {
       if (timer || done) return;
       releaseTerminal = acquireVisualTerminal(stream, visualOwner, {
-        clear: () => (rendered ? "\r\x1b[K" : ""),
+        clear: () => {
+          if (renderedRows <= 0) return "";
+          const frame = clearStandaloneFrame(renderedRows);
+          renderedRows = 0;
+          return frame;
+        },
         redraw: () => render(),
       });
       activeIndicators.add(stop);
@@ -754,7 +779,8 @@ function createMultiBar(): MultiBar {
       // that adds a bar just after `finally { multi.finish() }` gets an inert
       // handle rather than an unhandled rejection that fails the command.
       if (closed) return inertBar();
-      if (!streamSet && options.stream) {
+      // The stream is fixed for good once the group has drawn a frame.
+      if (!streamSet && options.stream && !releaseTerminal && renderedRows === 0) {
         stream = options.stream;
         frameWriter = createFrameWriter(stream);
         streamSet = true;
@@ -807,12 +833,15 @@ function createMultiBar(): MultiBar {
         entry.current = entry.options.total;
         entry.finished = true;
       }
-      if (streamIsTTY(stream)) {
-        renderAll(true);
-        cleanup();
-        stream.write("\n");
+      try {
+        if (streamIsTTY(stream)) renderAll(true);
+      } finally {
+        closed = true;
+        if (streamIsTTY(stream)) {
+          cleanup();
+          stream.write("\n");
+        }
       }
-      closed = true;
     },
 
     stop,
@@ -820,6 +849,18 @@ function createMultiBar(): MultiBar {
   };
 
   function renderAll(final = false): void {
+    try {
+      drawFrame(final);
+    } catch (error) {
+      // Give the terminal back before the caller's error propagates, so a
+      // throwing formatter cannot strand the cursor or the region claim.
+      cleanup();
+      renderedRows = 0;
+      throw error;
+    }
+  }
+
+  function drawFrame(final: boolean): void {
     startTerminalSession();
     const previousRows = renderedRows;
     const col = createColorizer(stream);

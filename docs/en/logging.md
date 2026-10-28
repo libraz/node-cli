@@ -40,7 +40,7 @@ const log = logger({ stream: process.stdout });
 
 | Field | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `level` | `LogLevel` | `"info"` | Minimum level that is emitted. |
+| `level` | `LogLevel` | `"info"` | Minimum level that is emitted. Any other value throws `RangeError`, as does the same value passed to `setLevel`. |
 | `prefix` | `string` | — | Rendered as `[prefix]` before the message. |
 | `timestamp` | `boolean` | `false` | Adds the local time as `HH:MM:SS`. |
 | `stream` | `Writable` | `process.stderr` | Destination for every level. |
@@ -91,7 +91,7 @@ log.info("Payload: %j", { ok: true });
 
 The same routing means a non-string first argument is inspected rather than crashing the call. The declared parameter type is `string`, so TypeScript still asks for one, but the logger is reachable from plain JavaScript where nothing enforces that — an `Error` or an object arriving there is rendered by `util.format` (message and stack for an error, an inspected view for an object) instead of throwing inside the logging call.
 
-Message text is then sanitized: **newlines are kept**, so a multi-line stack trace renders across several lines; tabs and carriage returns become single spaces; all other control bytes are dropped. This prevents a message taken from untrusted input from moving the cursor or erasing the screen.
+Message text is then sanitized (and a value whose own formatting throws, such as a throwing `toString`, is printed as `[unprintable]` rather than failing the call): **newlines are kept**, so a multi-line stack trace renders across several lines; tabs and carriage returns become single spaces; all other control bytes are dropped. This prevents a message taken from untrusted input from moving the cursor or erasing the screen. Styling or a hyperlink the message leaves open is closed at the end of the message, before the newline.
 
 ## Line layout
 
@@ -127,7 +127,7 @@ const db = log.child("db"); // prefix "app:db"
 const pool = db.child("pool"); // prefix "app:db:pool"
 ```
 
-A child inherits `timestamp`, `stream`, and `bufferLimit` from its parent. The level is inherited **dynamically**: a later `parent.setLevel("debug")` reaches every child that never set a level of its own, while `child.setLevel(...)` overrides that one child and nothing else.
+A child inherits `timestamp`, `stream`, and `bufferLimit` from its parent, and shares the stream's write queue with it: lines from a parent and its children reach the stream in call order. The level is inherited **dynamically**: a later `parent.setLevel("debug")` reaches every child that never set a level of its own, while `child.setLevel(...)` overrides that one child and nothing else.
 
 ```ts
 import { logger } from "@libraz/node-cli";
@@ -150,9 +150,9 @@ This cooperation only applies to output written through the logger. A raw `strea
 
 A stream can accept only so much at once; when it is full, further writes have to wait. That waiting state is **backpressure**. While it lasts, the logger queues lines in memory up to `bufferLimit` and, once the queue is full, discards the **oldest** line to make room for the newest. With `bufferLimit: 0` a line arriving during backpressure is dropped immediately.
 
-If the stream emits an error, or closes before the queue drained, the buffered lines are discarded and `flush()` rejects.
+If the stream emits an error or closes at any time, the buffered lines are discarded and every pending and later `flush()` rejects; the logger handles the error event itself, so it does not crash the process.
 
-`flush()` resolves once the buffered lines have reached the stream. It also awaits every child logger, so one call covers the whole tree.
+`flush()` resolves once the buffered lines have reached the stream and the stream has accepted every earlier write. Parent and children share one queue per stream, so one call covers the whole tree.
 
 ```ts
 import { logger } from "@libraz/node-cli";

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetColorEnabled, setColorEnabled, stripAnsi } from "../src/output/color.js";
+import { logger } from "../src/output/logger.js";
 import { progress, restoreCursor } from "../src/output/progress.js";
 import { createMockStdout, createMockTTY } from "./helpers.js";
 
@@ -614,7 +615,7 @@ describe("untrusted text in rendered frames", () => {
     spinner.stop();
     // Without closing at the frame boundary the red would apply to whatever the
     // application writes next.
-    expect(stream.getOutput()).toContain("\x1b[31mred\x1b[0m");
+    expect(stream.getOutput()).toContain("\x1b[31mred\x1b[39m");
   });
 
   it("strips control sequences from caller-supplied frames and bar glyphs", () => {
@@ -717,7 +718,7 @@ describe("using declarations release every indicator", () => {
         return bar;
       },
       (stream) => {
-        const spinner = progress.spinner({ text: "work", stream });
+        const spinner = progress.spinner({ label: "work", stream });
         spinner.start();
         return spinner;
       },
@@ -741,7 +742,7 @@ describe("using declarations release every indicator", () => {
 describe("documented cursor helpers", () => {
   it("restoreCursor and releaseAll bring the cursor back", () => {
     const stream = createMockTTY();
-    const spinner = progress.spinner({ text: "work", stream });
+    const spinner = progress.spinner({ label: "work", stream });
     spinner.start();
     expect(stream.getOutput()).toContain("\x1b[?25l");
 
@@ -754,5 +755,265 @@ describe("documented cursor helpers", () => {
     bar.update(0);
     restoreCursor();
     expect(bare.getOutput()).toContain("\x1b[?25h");
+  });
+});
+
+const ESC = String.fromCharCode(27);
+
+/**
+ * Replays cursor movement, line erases and wrapping at `columns` and returns the
+ * rows that finally hold visible text.
+ */
+function screenRows(output: string, columns: number): string[] {
+  const rows: string[][] = [[]];
+  let row = 0;
+  let col = 0;
+  for (let i = 0; i < output.length; i++) {
+    const ch = output[i];
+    if (ch === "\x1b") {
+      const csi = new RegExp(`^${ESC}\\[([?0-9;]*)([A-Za-z])`).exec(output.slice(i));
+      if (csi) {
+        const n = Number(csi[1]) || 1;
+        if (csi[2] === "K") rows[row].length = Math.min(rows[row].length, col);
+        else if (csi[2] === "A") row = Math.max(0, row - n);
+        else if (csi[2] === "B") {
+          row += n;
+          while (rows.length <= row) rows.push([]);
+        }
+        i += csi[0].length - 1;
+      }
+      continue;
+    }
+    if (ch === "\r") col = 0;
+    else if (ch === "\n") {
+      row++;
+      col = 0;
+      while (rows.length <= row) rows.push([]);
+    } else {
+      if (col >= columns) {
+        row++;
+        col = 0;
+        while (rows.length <= row) rows.push([]);
+      }
+      while (rows[row].length < col) rows[row].push(" ");
+      rows[row][col++] = ch;
+    }
+  }
+  return rows.map((r) => r.join("").trimEnd()).filter((r) => r !== "");
+}
+
+describe("spinner line wrapping", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setColorEnabled(false);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    resetColorEnabled();
+  });
+
+  it("keeps one copy of a label wider than the terminal across frames, logs and stop", () => {
+    const stream = createMockTTY();
+    (stream as unknown as { columns: number }).columns = 20;
+    const spinner = progress.spinner({ label: "L".repeat(50), stream });
+    spinner.start();
+    vi.advanceTimersByTime(160);
+    expect(screenRows(stream.getOutput(), 20)).toHaveLength(3);
+
+    logger({ stream }).info("hello");
+    const rows = screenRows(stream.getOutput(), 20);
+    expect(rows.filter((r) => r.includes("hello"))).toHaveLength(1);
+    expect(rows.filter((r) => r.includes("L"))).toHaveLength(3);
+
+    spinner.stop();
+    expect(screenRows(stream.getOutput(), 20)).toEqual(["[INFO] hello"]);
+  });
+});
+
+describe("throwing multi-bar formatter", () => {
+  beforeEach(() => {
+    restoreCursor();
+    setColorEnabled(false);
+  });
+  afterEach(() => resetColorEnabled());
+
+  it("releases the terminal so later log lines and spinners work", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    const bar = multi.add({
+      total: 10,
+      stream,
+      format(state) {
+        if (state.current > 1) throw new Error("format failed");
+        return "ok";
+      },
+    });
+    bar.update(1);
+    expect(() => bar.update(2)).toThrow("format failed");
+    expect(stream.getOutput()).toContain("\x1b[?25h");
+
+    expect(() => logger({ stream }).info("after")).not.toThrow();
+    expect(stream.getOutput()).toContain("after");
+    const spinner = progress.spinner({ label: "next", stream });
+    expect(() => spinner.start()).not.toThrow();
+    spinner.stop();
+    multi.stop();
+  });
+
+  it("closes the group and shows the cursor when the final frame throws", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi();
+    multi.add({
+      total: 2,
+      stream,
+      format(state) {
+        if (state.current === state.total) throw new Error("final failed");
+        return "ok";
+      },
+    });
+    multi.add({ total: 2, stream }).update(1);
+    expect(() => multi.finish()).toThrow("final failed");
+    expect(stream.getOutput()).toContain("\x1b[?25h");
+
+    const before = stream.getOutput().length;
+    const late = multi.add({ total: 1, stream });
+    late.update(1);
+    expect(stream.getOutput().length).toBe(before);
+    const replacement = progress.bar({ total: 1, stream });
+    expect(() => replacement.update(1)).not.toThrow();
+    replacement.stop();
+  });
+});
+
+describe("color option names", () => {
+  beforeEach(() => setColorEnabled(true));
+  afterEach(() => resetColorEnabled());
+
+  it.each(["toString", "valueOf", "constructor", "then", "nonsense"])(
+    "renders the plain glyphs for the non-style name %s",
+    (name) => {
+      const plain = createMockTTY();
+      const plainBar = progress.bar({ total: 4, stream: plain, width: 4 });
+      plainBar.update(2);
+      plainBar.stop();
+      const named = createMockTTY();
+      const namedBar = progress.bar({ total: 4, stream: named, width: 4, color: name });
+      namedBar.update(2);
+      namedBar.stop();
+      expect(named.getOutput()).toBe(plain.getOutput());
+
+      const multiStream = createMockTTY();
+      const multi = progress.multi();
+      multi.add({ total: 4, stream: multiStream, width: 4, color: name }).update(2);
+      multi.stop();
+      expect(multiStream.getOutput()).not.toContain("[object");
+
+      const frames = ["a"];
+      const plainSpin = createMockTTY();
+      const first = progress.spinner({ frames, stream: plainSpin });
+      first.start();
+      first.stop();
+      const namedSpin = createMockTTY();
+      const second = progress.spinner({ frames, stream: namedSpin, color: name });
+      second.start();
+      second.stop();
+      expect(namedSpin.getOutput()).toBe(plainSpin.getOutput());
+    },
+  );
+});
+
+describe("bar width", () => {
+  beforeEach(() => setColorEnabled(false));
+  afterEach(() => resetColorEnabled());
+
+  const cells = (output: string) => /\[([^\]]*)\]/.exec(stripAnsi(output))?.[1].length;
+
+  it.each([
+    [0.4, 1],
+    [2.5, 2],
+    [7, 7],
+  ])("draws exactly max(1, floor(%s)) cells at full progress", (width, expected) => {
+    const stream = createMockTTY();
+    const bar = progress.bar({ total: 2, stream, width });
+    bar.update(2);
+    bar.stop();
+    expect(cells(stream.getOutput())).toBe(expected);
+
+    const multiStream = createMockTTY();
+    const multi = progress.multi();
+    multi.add({ total: 2, stream: multiStream, width }).update(2);
+    multi.stop();
+    expect(cells(multiStream.getOutput())).toBe(expected);
+  });
+
+  it("rejects a width too large to render at construction", () => {
+    expect(() => progress.bar({ total: 2, width: 1e10 })).toThrow(RangeError);
+    const multi = progress.multi();
+    expect(() => multi.add({ total: 2, width: 1e10 })).toThrow(RangeError);
+    multi.stop();
+  });
+});
+
+describe("default output stream", () => {
+  let stderrWrites: string[];
+  let stdoutWrites: string[];
+  let restore: (() => void)[];
+
+  beforeEach(() => {
+    restoreCursor();
+    setColorEnabled(false);
+    stderrWrites = [];
+    stdoutWrites = [];
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const hadTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+    (process.stderr as unknown as { isTTY: boolean }).isTTY = true;
+    restore = [
+      () => stderrSpy.mockRestore(),
+      () => stdoutSpy.mockRestore(),
+      () => {
+        if (hadTTY) Object.defineProperty(process.stderr, "isTTY", hadTTY);
+        else delete (process.stderr as unknown as { isTTY?: boolean }).isTTY;
+      },
+    ];
+  });
+  afterEach(() => {
+    restoreCursor();
+    for (const undo of restore) undo();
+    resetColorEnabled();
+  });
+
+  it("draws bars, spinners and multi bars on stderr only", () => {
+    const bar = progress.bar({ total: 2 });
+    bar.update(1);
+    bar.finish();
+    const spinner = progress.spinner({ label: "work" });
+    spinner.start();
+    spinner.succeed("done");
+    const multi = progress.multi();
+    multi.add({ total: 2, label: "m" }).update(1);
+    multi.finish();
+
+    const text = stderrWrites.join("");
+    expect(text).toContain("1/2");
+    expect(text).toContain("work");
+    expect(text).toContain("m");
+    expect(stdoutWrites).toEqual([]);
+  });
+
+  it("does not move a multi-bar group to another stream once it has drawn", () => {
+    const later = createMockTTY();
+    const multi = progress.multi();
+    multi.add({ total: 2, label: "first" }).update(1);
+    multi.add({ total: 2, label: "second", stream: later }).update(1);
+    multi.stop();
+    expect(later.getOutput()).toBe("");
+    expect(stderrWrites.join("")).toContain("second");
   });
 });

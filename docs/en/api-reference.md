@@ -31,7 +31,7 @@ The package is ESM only and requires Node 22 or newer.
 
 Some exports are TypeScript types, not values. They exist for annotating variables and are erased at runtime: `import { Shell } from "@libraz/node-cli"` fails, and `new Shell(...)` is not possible.
 
-The type-only exports are `ExecOptions`, `PluginContext`, `CLIErrorCode`, `AnsiSegment`, `Logger`, `LoggerOptions`, `LogLevel`, `Bar`, `BarOptions`, `BarState`, `MultiBar`, `Spinner`, `SpinnerOptions`, `Choice`, `ConfirmOptions`, `MultiselectOptions`, `PasswordOptions`, `PromptBaseOptions`, `SelectChoice`, `SelectOptions`, `TextOptions`, `TableChars`, `TableOptions`, `TableStyle`, `CompletionResult`, `ModeConfig`, `Shell`, `Action`, `CatchContext`, `CLIEventHandler`, `CLIEventMap`, `CLIOptions`, `CommandContext`, `Completer`, `CompletionContext` and `OptionSchema`.
+The type-only exports are `ExecOptions`, `PluginContext`, `CLIErrorCode`, `AnsiSegment`, `ColorFn`, `Logger`, `LoggerOptions`, `LogLevel`, `Bar`, `BarOptions`, `BarState`, `MultiBar`, `Spinner`, `SpinnerOptions`, `Choice`, `ConfirmOptions`, `MultiselectOptions`, `PasswordOptions`, `PromptBaseOptions`, `SelectChoice`, `SelectOptions`, `TextOptions`, `TableChars`, `TableOptions`, `TableStyle`, `CompletionResult`, `ModeConfig`, `Shell`, `Action`, `CatchContext`, `CLIEventHandler`, `CLIEventMap`, `CLIOptions`, `CommandContext`, `Completer`, `CompletionContext` and `OptionSchema`.
 
 In particular `Shell`, `ModeConfig`, `CompletionResult` and every options or result interface are type-only. A `Shell` is never constructed by application code; the running instance is reached through `ctx.shell` inside a command action.
 
@@ -393,11 +393,11 @@ interface CLIEventMap {
 | `afterExecute` | After the action resolves successfully. |
 | `commandError` | When a resolved command fails during argument validation, option resolution, its own `validate`, or its action. |
 | `error` | For any failure while handling input, including ones raised before a command resolves, such as command-not-found or a parse failure. |
-| `exit` | Once on every exit path of `start()`. |
+| `exit` | At most once, when `start()` ends or a force-quit or the shell's SIGTERM ends the process. |
 
 `commandError` and `error` **both** fire for a resolved command's failure: `commandError` carries the context, `error` is the catch-all. A handler that must see each failure exactly once should listen to one of them, not both.
 
-`exit` fires after a direct-mode command completes, throws or is force-quit; after a help index is printed for an argument-free non-terminal start; when plugin initialization fails; and when the interactive shell ends. Programmatic execution never fires it on the normal path.
+`exit` fires after a direct-mode command completes, throws or is force-quit; after a help index is printed for an argument-free non-terminal start; when plugin initialization fails; and when the interactive shell ends or receives SIGTERM. Programmatic execution never fires it on the normal path. A signal the CLI does not handle — SIGTERM or SIGHUP in direct mode, SIGHUP in the shell — ends the process without running `exit` or cancel handlers.
 
 A listener that throws cannot break the command: the failure is re-emitted as an `error` event, and the remaining listeners still run. A throwing `error` listener is reported on stderr instead, which stops the loop from recursing.
 
@@ -469,8 +469,8 @@ interface ModeConfig {
   action: (
     input: string,
     ctx: {
-      stdout: NodeJS.WritableStream;
-      stderr: NodeJS.WritableStream;
+      stdout: Writable;
+      stderr: Writable;
       signal: AbortSignal;
     },
   ) => void | Promise<void>;
@@ -504,6 +504,11 @@ The tuple Node's readline completer interface expects: the candidate list, and t
 
 ```typescript
 const color: Record<string, ColorFn>
+
+interface ColorFn {
+  (text: string): string;
+  [style: string]: ColorFn;
+}
 ```
 
 A proxy whose properties are style names. Each returns a callable that is also chainable.
@@ -594,7 +599,7 @@ function resetColorEnabled(): void
 function stringWidth(text: string): number
 ```
 
-The number of terminal columns the text occupies. ANSI sequences are stripped first, combining marks and zero-width characters count as zero, and East Asian wide characters and emoji count as two. A run of scalars joined by zero-width joiners — a family emoji, for instance — collapses to one two-column grapheme.
+The number of terminal columns the text occupies. ANSI sequences are stripped first, combining marks, format characters and controls count as zero, and characters with East Asian Width Wide or Fullwidth and emoji-presentation characters count as two. A run of scalars joined by zero-width joiners — a family emoji, for instance — collapses to one two-column grapheme.
 
 ### `stripAnsi`
 
@@ -602,7 +607,7 @@ The number of terminal columns the text occupies. ANSI sequences are stripped fi
 function stripAnsi(text: string): string
 ```
 
-Removes every ANSI escape sequence, CSI and OSC alike.
+Removes every ANSI escape sequence: CSI, OSC, DCS/SOS/PM/APC control strings and every other escape.
 
 ### `truncateAnsi`
 
@@ -610,7 +615,7 @@ Removes every ANSI escape sequence, CSI and OSC alike.
 function truncateAnsi(text: string, maxWidth: number, marker?: string): string
 ```
 
-Truncates to `maxWidth` display columns without splitting a grapheme, appends `marker` (default `"…"`), and closes any styling or hyperlink the result would otherwise leave open. Returns `""` when `maxWidth` is zero or less.
+Truncates to `maxWidth` display columns without splitting a grapheme, appends `marker` (default `"…"`), and closes any styling or hyperlink the result would otherwise leave open, resetting each style attribute on its own so an outer style survives. Returns `""` when `maxWidth` rounds down to zero or less; `NaN` and `Infinity` mean no limit.
 
 ### `splitAnsi`
 
@@ -933,7 +938,7 @@ prompt.select<T>(
 | --- | --- | --- | --- |
 | `default` | `T` | — | Value returned for an empty submission. Matched by identity against a choice's `value`, or against the choice object itself. |
 
-Choices are answered by their displayed number, or by typing a label exactly. A numeric entry always selects by number, so a numeric-looking label stays reachable. An empty `choices` array throws.
+Choices are answered by their displayed number, or by typing a label, matched case-insensitively. A number within the range of the list always selects by number, so a numeric-looking label stays reachable by its position; any other input is matched against the labels. An empty `choices` array throws.
 
 ### prompt.multiselect
 
@@ -1184,6 +1189,7 @@ NODE_CLI_DEBUG=1 myapp deploy prod
 | `ModeConfig` | type | [Interactive shell](#modeconfig) |
 | `CompletionResult` | type | [Interactive shell](#completionresult) |
 | `color` | value | [Colour](#color) |
+| `ColorFn` | type | [Colour](#color) |
 | `c` | function | [Colour](#c) |
 | `createColorizer` | function | [Colour](#createcolorizer) |
 | `isColorEnabled` | function | [Colour](#iscolorenabled) |

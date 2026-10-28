@@ -24,7 +24,7 @@ await wait(1000);
 spinner.succeed("Done!");
 ```
 
-Both indicators redraw a single line in place. Both write to **`process.stderr`** by default, which keeps `process.stdout` free for data another program might be reading.
+Both indicators redraw in place. A line wider than the terminal wraps, and every redraw, log line and stop erases all of the rows it occupied. Both write to **`process.stderr`** by default, which keeps `process.stdout` free for data another program might be reading.
 
 ## What the object contains
 
@@ -46,7 +46,7 @@ Creates a bar for work whose total is known.
 | --- | --- | --- | --- |
 | `total` | `number` | required | Total number of units. A non-finite or negative value becomes `0`, and a total of `0` renders as 100%. |
 | `label` | `string` | `""` | Text before the bar. Omitted from the line when empty. |
-| `width` | `number` | `30` | Bar width in characters. A non-finite value, or one `<= 0`, throws `RangeError`. |
+| `width` | `number` | `30` | Bar width in characters. A fractional value is floored, to at least one cell. A non-finite value, one `<= 0`, or one above `4096` throws `RangeError`. |
 | `filled` | `string` | `"█"` | Glyph for the completed portion. |
 | `empty` | `string` | `"░"` | Glyph for the remaining portion. |
 | `format` | `(state: BarState) => string` | — | Replaces the whole rendered line. |
@@ -153,7 +153,7 @@ group.finish();
 | `stop()` | Closes the block without completing. |
 | `[Symbol.dispose]()` | Identical to `stop()`. |
 
-The group renders to a single stream, fixed by the **first** `add()` that supplies one; `stream` on later bars is ignored, because one block of rows cannot be split across two destinations. Calling `add()` after `finish()` or `stop()` returns an inert handle whose methods all do nothing, rather than throwing — a worker that registers a bar just after the group closed does not fail the command.
+The group renders to a single stream, fixed by the **first** `add()` that supplies one, as long as nothing has been drawn yet; `stream` on later bars, and on any bar added after the first frame, is ignored, because one block of rows cannot be split across two destinations. Calling `add()` after `finish()` or `stop()` returns an inert handle whose methods all do nothing, rather than throwing — a worker that registers a bar just after the group closed does not fail the command.
 
 ## Automatic cleanup with `using`
 

@@ -134,8 +134,8 @@ These functions exist because a string that contains escape sequences cannot be 
 
 Returns how many terminal columns the text occupies. Escape sequences are stripped first, then the text is split into **graphemes** — the units a reader perceives as single characters, which may be built from several code points, such as an emoji with a skin-tone modifier.
 
-- Combining marks and zero-width joiners count 0.
-- East Asian wide characters and emoji count 2.
+- Combining marks (Unicode categories Mn and Me), format characters (Cf, which includes zero-width joiners and bidirectional marks) and control characters count 0.
+- Characters whose East Asian Width is Wide or Fullwidth, and emoji-presentation characters, count 2.
 - A grapheme carrying U+FE0F (emoji presentation) or U+20E3 (keycap) counts 2.
 
 Grapheme segmentation uses `Intl.Segmenter`, so a joined emoji sequence such as a family emoji is one 2-column cell rather than the sum of its parts. This is the measurement [tables](table.md) use, and it is why columns line up when cells contain Japanese text.
@@ -150,11 +150,11 @@ stringWidth("\x1b[31mred\x1b[39m"); // 3
 
 ### `stripAnsi(text): string`
 
-Removes every ANSI escape sequence, both CSI sequences (colors, cursor movement, screen erasing) and OSC sequences (window titles, hyperlinks). Use it before writing terminal output to a log file.
+Removes every ANSI escape sequence: CSI sequences (colors, cursor movement, screen erasing), OSC sequences (window titles, hyperlinks), DCS, SOS, PM and APC control strings, and every other escape. A sequence the text cuts off is removed through the end of the text, as a terminal would consume it. Use it before writing terminal output to a log file.
 
 ### `truncateAnsi(text, maxWidth, marker = "…"): string`
 
-Shortens text to at most `maxWidth` display columns, appending `marker`. It never splits a grapheme in half, it fits the marker to the available width as well, it keeps the escape sequences that were inside the retained part, and it appends whatever escapes are needed to close any style the cut left open. A `maxWidth` of `0` or less returns `""`.
+Shortens text to at most `maxWidth` display columns, appending `marker`. It never splits a grapheme in half, it fits the marker to the available width as well, it keeps the escape sequences that were inside the retained part, and it appends whatever escapes are needed to close any style or hyperlink the cut left open. Each style is closed with the reset for that attribute alone, so text that follows keeps any style an outer `color.*` call applied. A `maxWidth` that rounds down to `0` or less returns `""`; `NaN` and `Infinity` mean no limit.
 
 ```ts
 import { truncateAnsi } from "@libraz/node-cli";
@@ -174,8 +174,8 @@ Splits text into grapheme clusters.
 
 Makes an untrusted string safe to print. Options are `{ singleLine = true, allowHyperlinks = true }`.
 
-- Color and style sequences are kept.
-- OSC 8 hyperlinks are kept unless `allowHyperlinks: false`.
+- Color and style sequences (SGR: `ESC [`, parameters made of digits, `;` and `:`, then `m`) are kept.
+- Terminated OSC 8 hyperlinks, with or without params such as `id=`, are kept unless `allowHyperlinks: false`, which drops the opener and the closer alike.
 - **Every other escape sequence is dropped**: cursor movement, screen erasing, window-title changes, scroll-region changes.
 - In single-line mode newlines become spaces; with `singleLine: false` newlines survive.
 - Tabs, vertical tabs, form feeds, and carriage returns each become one space.

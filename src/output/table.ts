@@ -1,6 +1,8 @@
+import { finiteInteger, guardCall, MAX_RENDER_WIDTH, ownValue } from "../guard.js";
 import {
   color as c,
   closeAnsiState,
+  isStyleName,
   renderSafe,
   sanitizeTerminalText,
   stringWidth,
@@ -235,16 +237,6 @@ function resolveLayout(options: TableOptions): TableLayout {
 }
 
 /**
- * Reads a per-column setting supplied by the caller. Plain object literals
- * inherit from `Object.prototype`, so an unguarded lookup on a column named
- * `constructor` or `toString` returns an inherited value and renders it.
- */
-function columnSetting<T>(record: Record<string, T> | undefined, key: string): T | undefined {
-  if (!record || !Object.hasOwn(record, key)) return undefined;
-  return record[key];
-}
-
-/**
  * Renders tabular data as a formatted string.
  *
  * Accepts either an array of arrays or an array of objects. Supports configurable
@@ -378,7 +370,12 @@ export function table(
  */
 function cellToString(value: unknown): string {
   if (value === null || value === undefined) return "";
-  return sanitizeTerminalText(String(value));
+  return sanitizeTerminalText(
+    guardCall(
+      () => String(value),
+      () => Object.prototype.toString.call(value),
+    ),
+  );
 }
 
 /**
@@ -422,7 +419,9 @@ function normalizeData(
     const keys = Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? String(index));
     const columns = headerProvided
       ? Array.from({ length: colCount }, (_, index) =>
-          cellToString(columnSetting(options.headerLabels, keys[index]) ?? rawColumns[index] ?? ""),
+          cellToString(
+            ownValue<string>(options.headerLabels, keys[index]) ?? rawColumns[index] ?? "",
+          ),
         )
       : [];
     const rows = normalizedRows.map((row) =>
@@ -448,9 +447,11 @@ function normalizeData(
       }
     }
   }
-  const labels = keys.map((col) => cellToString(columnSetting(options.headerLabels, col) ?? col));
+  const labels = keys.map((col) =>
+    cellToString(ownValue<string>(options.headerLabels, col) ?? col),
+  );
   const rows = Array.from(objData, (obj) =>
-    obj == null ? [] : (keys as string[]).map((col) => cellToString(obj[col])),
+    (keys as string[]).map((col) => cellToString(ownValue(obj, col))),
   );
 
   return { rows, columns: labels, keys };
@@ -502,10 +503,9 @@ function calculateWidths(
   if (maxWidth && keys.length > 0) {
     for (let i = 0; i < keys.length; i++) {
       const col = keys[i];
-      const limit = columnSetting(maxWidth, col);
-      if (limit !== undefined && limit > 0) {
-        widths[i] = Math.min(widths[i], limit);
-      }
+      const limit = ownValue<number>(maxWidth, col);
+      const bound = spanOption(limit);
+      if (bound !== undefined) widths[i] = Math.min(widths[i], bound);
     }
   }
 
@@ -513,10 +513,11 @@ function calculateWidths(
   const colWidths = options.colWidths;
   if (colWidths) {
     for (let i = 0; i < colWidths.length && i < widths.length; i++) {
-      if (colWidths[i] !== undefined && colWidths[i] > 0) {
+      const total = spanOption(colWidths[i]);
+      if (total !== undefined) {
         // colWidths specifies total column width including padding
         // Internal content width = colWidths - padding
-        const contentWidth = colWidths[i] - layout.padLeft - layout.padRight;
+        const contentWidth = total - layout.padLeft - layout.padRight;
         widths[i] = Math.max(contentWidth, 1);
       }
     }
@@ -528,8 +529,18 @@ function calculateWidths(
 /** Coerces user-provided spacing to a safe number of spaces. */
 function normalizePadding(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.floor(value));
+  return Math.min(finiteInteger(value, 0) ?? 0, MAX_RENDER_WIDTH);
+}
+
+/**
+ * Reads a width option: a positive number becomes an integer of at least 1,
+ * capped at {@link MAX_RENDER_WIDTH}. Anything else (zero, negative, NaN, Infinity,
+ * non-numbers) means "automatic" and yields undefined.
+ */
+function spanOption(value: unknown): number | undefined {
+  if (typeof value !== "number" || !(value > 0)) return undefined;
+  const integer = finiteInteger(value, 0);
+  return integer === undefined ? undefined : Math.min(Math.max(integer, 1), MAX_RENDER_WIDTH);
 }
 
 /**
@@ -577,6 +588,7 @@ function applyColorChain(text: string, chain: string): string {
     const parts = chain.split(".");
     let result: unknown = c;
     for (const part of parts) {
+      if (!isStyleName(part)) return text;
       result = (result as Record<string, unknown>)[part];
       if (typeof result !== "function" && typeof result !== "object") return text;
     }
@@ -624,7 +636,8 @@ function buildAlignFn(
     // colAligns (array) takes precedence
     if (colAligns?.[i]) return colAligns[i];
     // Then align (Record by column name)
-    if (align && columns[i]) return columnSetting(align, columns[i]) ?? "left";
+    if (align && columns[i])
+      return ownValue<"left" | "right" | "center">(align, columns[i]) ?? "left";
     return "left";
   };
 }

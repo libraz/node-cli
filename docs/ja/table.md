@@ -98,7 +98,7 @@ console.log(
 | `header` | `boolean` | `true` | `false` にするとヘッダー行を出しません。 |
 | `headerLabels` | `Record<string, string>` | — | 列の **キー** で指定する、表示テキストの差し替え。 |
 | `border` | `"none" \| "simple" \| "rounded" \| "single" \| "double" \| "custom"` | `"none"`。`chars` を渡した場合は `"custom"` | 罫線のプリセット。 |
-| `chars` | `TableChars` | — | 独自の罫線文字。`single` プリセットの上に重ねて統合します。 |
+| `chars` | `TableChars` | — | 独自の罫線文字。`border` が選んだプリセット(`border` を省略した場合や `"custom"` の場合は `single`)の上に重ねて統合します。 |
 | `align` | `Record<string, "left" \| "right" \| "center">` | `"left"` | 列の **キー** で指定する揃え。 |
 | `colAligns` | `("left" \| "right" \| "center")[]` | — | 列インデックスで指定する揃え。**`align` より優先します。** |
 | `colWidths` | `number[]` | — | インデックスで指定する、余白を含んだ列の **合計** 幅。0 以下の値は「この列の幅は自動で決める」という意味です。 |
@@ -116,7 +116,7 @@ console.log(
 | `padding-right` | `number` | 上と同じ | 各セルの内側、右に入れる空白。 |
 | `head` | `string` | — | ヘッダーセルに適用する、ドットで連結したスタイル名。例えば `"cyan"` や `"cyan.bold"`。 |
 | `border` | `string` | — | 同じものを罫線の文字に適用します。 |
-| `compact` | `boolean` | `true` | `false` にすると、データ行と行の間すべてに区切り線を入れます。 |
+| `compact` | `boolean` | `true` | `false` にすると、`"simple"` と罫線付きの枠では、データ行と行の間すべてに区切り線を入れます。`border: "none"` には区切り用の文字がないため、効果はありません。 |
 
 `head` や `border` に未知の名前を渡しても例外にはならず、スタイルの付かない素のテキストになります。使えるスタイル名は[カラー](color.md)に一覧があります。
 
