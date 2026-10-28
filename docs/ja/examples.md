@@ -270,7 +270,7 @@ $ deployer deploy prod --yes
 Error: Option --tag is required
 ```
 
-プログレスバーの出力先は `ctx.stderr` です。stdout が別のプログラムへパイプされる可能性がある以上、進捗はこちらに出すべきものです。[`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts) を要約したものです。[プログレス](progress.md) と [プロンプト](prompts.md) も参照してください。
+プログレスバーの出力先は `ctx.stderr` です。stdout が別のプログラムへパイプされる可能性がある以上、進捗はこちらに出すべきものです。[`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts) を土台にしています。[プログレス](progress.md) と [プロンプト](prompts.md) も参照してください。
 
 ## 揃えと色を指定したステータステーブル
 
@@ -688,7 +688,7 @@ finished in 1215ms
 
 経過時間の数値は実行ごとに変わります。行の幅は揃えられません。各行はラベル、バー、パーセント、カウントをスペース 2 つでつないだものです。列として揃えたい場合はラベル側を自分で埋めてください。
 
-`multi.finish()` は `finally` に置いてあり、グループが閉じた後に追加されたバーは何もしないため、遅れて終わったタスクがコマンドを失敗させることはありません。[`08-task-runner.ts`](../../examples/08-task-runner.ts) を要約したものです。[プログレス](progress.md) も参照してください。
+`multi.finish()` は `finally` に置いてあり、グループが閉じた後に追加されたバーは何もしないため、遅れて終わったタスクがコマンドを失敗させることはありません。[`08-task-runner.ts`](../../examples/08-task-runner.ts) を土台にしています。[プログレス](progress.md) も参照してください。
 
 ## 深いサブコマンドツリーとモードサブプロンプト
 
@@ -816,7 +816,7 @@ sql> exit
 db> exit
 ```
 
-`history: "none"` は入力されたクエリをメモリ上のモード履歴から外します。なお、モードへの入力はいずれにせよディスク上の履歴ファイルには書かれません。[`09-database-admin.ts`](../../examples/09-database-admin.ts) を要約したものです。
+`history: "none"` は入力されたクエリをメモリ上のモード履歴から外します。なお、モードへの入力はいずれにせよディスク上の履歴ファイルには書かれません。[`09-database-admin.ts`](../../examples/09-database-admin.ts) を土台にしています。
 
 ## 独自の補完、独自のオプションパーサ、キャンセルハンドラ
 
@@ -996,7 +996,7 @@ try {
 
 - `exec` の下では `ctx.shell` が `null` になるため、モードを開くコマンドはガードが必要です。テスト対象になるのはモードではなくガードのほうです。
 - `exec` は通常の経路で `exit` イベントを発火しません。発火するのは `start()` だけです。`exit` を検証するテストには `start(argv)` が必要です。
-- 色付けの有無は対象ストリームから判定され、`PassThrough` は端末ではないため出力はプレーンになります。エスケープシーケンスそのものを検証したい場合は `setColorEnabled(true)` を呼び、終わったら `resetColorEnabled()` を呼んでください。
+- `createColorizer`、ロガー、`progress` の色付けは、それぞれが結び付けられたストリームから判定されます。`PassThrough` は端末ではないため、その出力はプレーンになります。`color` と `c` は代わりに `process.stdout` に従います。エスケープシーケンスそのものを検証したい場合は `setColorEnabled(true)` を呼び、終わったら `resetColorEnabled()` を呼んでください。
 
 テストごとに新しい `CLI` を作れば、登録内容がケース間で漏れることはありません。`start()` は同じインスタンスで 2 回呼ぶと例外を投げます。
 

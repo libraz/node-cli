@@ -21,7 +21,7 @@ Define a command once and it works two ways: as `myapp deploy prod` typed at a s
 
 ## Install
 
-Node.js 22 or later, ESM only.
+Node.js 22 or later. The package is ESM only, with no separate CommonJS build; Node.js 22.12 and later can `require()` it, and earlier 22.x releases need `await import()`.
 
 ```bash
 npm install @libraz/node-cli

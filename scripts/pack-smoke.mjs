@@ -18,7 +18,7 @@ const manifestIndex = process.argv.indexOf("--manifest");
 const manifestPath = manifestIndex >= 0 ? process.argv[manifestIndex + 1] : undefined;
 const root = process.cwd();
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const yarn = process.platform === "win32" ? "yarn.cmd" : "yarn";
+const tsc = resolve(root, "node_modules/typescript/bin/tsc");
 const fixture = await mkdtemp(resolve(tmpdir(), "node-cli-pack-"));
 let tarball;
 
@@ -112,13 +112,16 @@ cli.command("greet <name>")
 await cli.start();
 `,
   );
+  // Run from the fixture so `--types node` resolves the staged @types/node, and keep
+  // library checking on so the shipped declarations are type-checked too.
   run(
-    yarn,
+    process.execPath,
     [
-      "tsc",
+      tsc,
       "--ignoreConfig",
       "--strict",
-      "--skipLibCheck",
+      "--types",
+      "node",
       "--target",
       "ES2023",
       "--module",
@@ -129,7 +132,7 @@ await cli.start();
       resolve(fixture, "dist"),
       resolve(fixture, "src/cli.ts"),
     ],
-    { cwd: root },
+    { cwd: fixture },
   );
   const executable = resolve(fixture, "dist/cli.js");
   if (process.platform !== "win32") await chmod(executable, 0o755);

@@ -92,7 +92,7 @@ The first form is called *direct mode*; the second is the *interactive shell*. `
 ## What it does not do
 
 - **No runtime dependencies, and no plugin ecosystem to install.** Everything above is in the one package; anything not listed has to be written by hand.
-- **ESM only.** The package publishes ECMAScript modules. It is loaded with `import`, and `require("@libraz/node-cli")` will not work. See [ESM](glossary.md#esm-ecmascript-modules).
+- **ESM only.** The package publishes ECMAScript modules. It is loaded with `import`. There is no separate CommonJS build: Node.js 22.12 and later can `require("@libraz/node-cli")`, and earlier 22.x releases need `await import("@libraz/node-cli")`. See [ESM](glossary.md#esm-ecmascript-modules).
 - **Node 22 or newer.** Older Node versions are not supported.
 - **No configuration-file loading.** The library does not look for a `.myapprc`, a `myapp.config.js`, or environment-variable overrides. Reading configuration is the application's job.
 - **No completion scripts for external shells.** Tab completion works inside the interactive shell. The library does not generate bash, zsh, or fish completion scripts, so pressing Tab at a system shell prompt completes filenames, not the tool's commands.

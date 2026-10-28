@@ -36,7 +36,7 @@ The execution mode used when arguments are present: one command is parsed, run o
 
 ### ESM (ECMAScript modules)
 
-JavaScript's standard module format, using `import` and `export`. Node also supports the older CommonJS format, which uses `require()`; a project declares which one it uses with `"type": "module"` in `package.json`. This library is published as ECMAScript modules only, so a consuming project needs `"type": "module"` and cannot load it with `require()`. See [Getting started](getting-started.md).
+JavaScript's standard module format, using `import` and `export`. Node also supports the older CommonJS format, which uses `require()`; a project declares which one it uses with `"type": "module"` in `package.json`. This library is published as ECMAScript modules only, so a consuming project needs `"type": "module"` and has no separate CommonJS build. Node.js 22.12 and later can still `require()` it; earlier 22.x releases need `await import()`. See [Getting started](getting-started.md).
 
 ### Exit code
 

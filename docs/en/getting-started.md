@@ -19,7 +19,7 @@ ECMAScript modules (ESM) are JavaScript's standard module format: files that use
 
 With `"type": "module"`, every `.js` file in the project is treated as an ECMAScript module. Without it, Node treats them as CommonJS and `import` statements fail to parse.
 
-This library publishes only ECMAScript modules, so `"type": "module"` is required and `require("@libraz/node-cli")` will not load it. A CommonJS project can still reach it with a dynamic `await import("@libraz/node-cli")`, which returns a promise for the module.
+This library publishes only ECMAScript modules, so `"type": "module"` is required and there is no separate CommonJS build. Node.js 22.12 and later can `require("@libraz/node-cli")` the ES module; on earlier 22.x releases a CommonJS project reaches it with a dynamic `await import("@libraz/node-cli")`, which returns a promise for the module.
 
 ## Installation
 

@@ -36,7 +36,7 @@
 
 ### ESM（ECMAScript モジュール）
 
-`import` と `export` を使う、JavaScript 標準のモジュール形式です。Node は `require()` を使う古い CommonJS 形式もサポートしており、プロジェクトはどちらを使うかを `package.json` の `"type": "module"` で宣言します。このライブラリは ECMAScript モジュールとしてのみ公開しているため、利用側のプロジェクトには `"type": "module"` が必要で、`require()` では読み込めません。[入門](getting-started.md)を参照してください。
+`import` と `export` を使う、JavaScript 標準のモジュール形式です。Node は `require()` を使う古い CommonJS 形式もサポートしており、プロジェクトはどちらを使うかを `package.json` の `"type": "module"` で宣言します。このライブラリは ECMAScript モジュールとしてのみ公開しているため、利用側のプロジェクトには `"type": "module"` が必要で、CommonJS 用の別ビルドはありません。Node.js 22.12 以降なら `require()` でも読み込めますが、それ以前の 22.x では `await import()` が必要です。[入門](getting-started.md)を参照してください。
 
 ### 終了コード（exit code）
 

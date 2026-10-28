@@ -19,7 +19,7 @@ ECMAScript モジュール（ESM）は JavaScript 標準のモジュール形式
 
 `"type": "module"` を指定すると、プロジェクト内のすべての `.js` ファイルが ECMAScript モジュールとして扱われます。指定しなければ Node は CommonJS とみなし、`import` 文は構文解析に失敗します。
 
-このライブラリは ECMAScript モジュールしか公開していないため、`"type": "module"` が必須で、`require("@libraz/node-cli")` では読み込めません。CommonJS プロジェクトからでも、動的インポートの `await import("@libraz/node-cli")` なら到達できます。これはモジュールの Promise を返します。
+このライブラリは ECMAScript モジュールしか公開していないため、`"type": "module"` が必須で、CommonJS 用の別ビルドはありません。Node.js 22.12 以降なら ES モジュールを `require("@libraz/node-cli")` で読み込めます。それ以前の 22.x では、CommonJS プロジェクトから動的インポートの `await import("@libraz/node-cli")` で到達できます。これはモジュールの Promise を返します。
 
 ## インストール
 

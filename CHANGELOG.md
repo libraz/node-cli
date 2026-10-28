@@ -28,8 +28,8 @@ lost-input paths are closed.
   multi-bar total, a `colWidths` entry below the padding width, and a column
   keyed `constructor` or `toString` behave as documented.
 - Caller-supplied text is sanitized where it reaches the terminal, covering
-  bar characters, spinner frames, table borders and truncation markers, help
-  text, and prompt messages.
+  bar characters, spinner frames, table borders and truncation markers, and
+  prompt messages.
 - `logger()` accepts only its documented options, and a rejected numeric option
   value reports whether it failed the declared range or the safe integer bound.
 - The toolchain moves to the native TypeScript build; Biome, Vitest, and the

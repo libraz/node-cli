@@ -84,7 +84,7 @@ Ten runnable examples live in [`examples/`](examples/).
 
 ## What it does not do
 
-- **ESM only.** There is no CommonJS build; `require("@libraz/node-cli")` will not work.
+- **ESM only.** There is no separate CommonJS build. Node.js 22.12 and later can `require()` the ES module; earlier 22.x releases need `await import("@libraz/node-cli")`.
 - **No shell completion scripts.** Tab completion works inside the tool's own interactive shell. Completion for bash, zsh or fish is not generated.
 - **No configuration-file loading.** Reading a config file, merging it with options, and resolving precedence is left to the application.
 - **No positional-argument coercion.** Positional arguments arrive as strings; types, defaults and choices exist on options only.

@@ -270,7 +270,7 @@ $ deployer deploy prod --yes
 Error: Option --tag is required
 ```
 
-The bar writes to `ctx.stderr`, which is where progress belongs when stdout may be piped into another program. Condensed from [`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts). See [Progress](progress.md) and [Prompts](prompts.md).
+The bar writes to `ctx.stderr`, which is where progress belongs when stdout may be piped into another program. Builds on [`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts). See [Progress](progress.md) and [Prompts](prompts.md).
 
 ## A status table with aligned and coloured columns
 
@@ -688,7 +688,7 @@ finished in 1215ms
 
 The elapsed figure varies from run to run. Rows are not padded to a common width: each line is the label, the bar, the percentage and the count, joined by two spaces. Pad the labels yourself if a column should line up.
 
-`multi.finish()` sits in a `finally`, and a bar added after the group closes is inert, so a task that finishes late cannot fail the command. Condensed from [`08-task-runner.ts`](../../examples/08-task-runner.ts). See [Progress](progress.md).
+`multi.finish()` sits in a `finally`, and a bar added after the group closes is inert, so a task that finishes late cannot fail the command. Builds on [`08-task-runner.ts`](../../examples/08-task-runner.ts). See [Progress](progress.md).
 
 ## A deep subcommand tree with a mode sub-prompt
 
@@ -816,7 +816,7 @@ sql> exit
 db> exit
 ```
 
-`history: "none"` keeps typed queries out of the in-memory mode history; mode input is never written to the on-disk history file in any case. Condensed from [`09-database-admin.ts`](../../examples/09-database-admin.ts).
+`history: "none"` keeps typed queries out of the in-memory mode history; mode input is never written to the on-disk history file in any case. Builds on [`09-database-admin.ts`](../../examples/09-database-admin.ts).
 
 ## Custom completion, a custom option parser and a cancellation handler
 
@@ -996,7 +996,7 @@ Three details matter when writing tests this way:
 
 - `ctx.shell` is `null` under `exec`, so a command that opens a mode must guard for it. Test the guard, not the mode.
 - `exec` does not emit the `exit` event on the normal path; only `start()` does. An assertion on `exit` needs `start(argv)`.
-- Colour is decided from the target stream, and a `PassThrough` is not a terminal, so output is plain. Call `setColorEnabled(true)` when the escape codes themselves are what is being asserted, and `resetColorEnabled()` afterwards.
+- Colour from `createColorizer`, the logger and `progress` is decided from the stream they are bound to, and a `PassThrough` is not a terminal, so that output is plain. `color` and `c` follow `process.stdout` instead. Call `setColorEnabled(true)` when the escape codes themselves are what is being asserted, and `resetColorEnabled()` afterwards.
 
 A fresh `CLI` per test keeps registrations from leaking between cases; `start()` throws if called twice on one instance.
 

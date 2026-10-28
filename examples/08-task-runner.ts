@@ -2,8 +2,7 @@
  * Example: Task Runner
  *
  * A practical example combining multiple features: subcommands,
- * progress bars, spinners, tables, color, logger, and dynamic
- * command registration/removal.
+ * progress bars, spinners, tables, color, and logger.
  *
  * Usage:
  *   npx tsx examples/08-task-runner.ts run build
@@ -96,7 +95,7 @@ async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
   const spinner = progress.spinner({
     label: `Running ${col.bold(task.name)}...`,
     color: "cyan",
-    stream: ctx.stdout,
+    stream: ctx.stderr,
   });
 
   task.status = "running";
@@ -132,7 +131,7 @@ async function runAll(ctx: TaskContext, verbose: boolean) {
     total: tasks.length,
     label: "Overall",
     color: "green",
-    stream: ctx.stdout,
+    stream: ctx.stderr,
   });
 
   for (let i = 0; i < tasks.length; i++) {

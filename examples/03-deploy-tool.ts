@@ -59,9 +59,6 @@ cli
         `Invalid environment "${ctx.args.env}". Must be one of: ${validEnvs.join(", ")}`,
       );
     }
-    if (ctx.args.env === "prod" && !ctx.options.tag) {
-      throw new Error("Production deployments require a --tag");
-    }
   })
   .action((ctx) => {
     const col = createColorizer(ctx.stdout);
