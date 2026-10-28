@@ -50,13 +50,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # v7.0.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: ${{ matrix.node }}
 
       - run: corepack enable
-      - run: corepack prepare yarn@4.18.0 --activate
+      - run: corepack prepare yarn@4.18.1 --activate
 
       # v6.1.0
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -81,8 +81,8 @@ jobs:
       - if: matrix.node == 24
         run: yarn test:git-install
 
-      # v7.0.0
+      # v7.1.1
       - if: matrix.node == 24
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
