@@ -5,6 +5,109 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-10-28
+
+A corrective release. Where shipped behavior contradicted its documented
+contract, or two surfaces disagreed, the implementation was moved to match;
+where the documentation described behavior that was never designed, the
+documentation was corrected instead. The one addition to the public surface is
+the `ColorFn` type, which exported signatures already named.
+
+### Changed
+
+- Every escape-sequence scanner reads one ECMA-48 grammar. OSC strings with any
+  payload, DCS/APC/SOS/PM strings, CSI sequences with intermediate bytes, and
+  OSC 8 hyperlinks with parameters such as `id=` are removed or preserved as
+  documented instead of leaking control bytes or visible residue.
+- Open styling is closed with a reset for each attribute left open rather than
+  a full reset, so text inside an outer `color.*` style keeps that style after a
+  truncated or sanitized fragment.
+- Display width follows Unicode 17.0 East Asian Width data, and format
+  characters count zero columns.
+- `ColorFn` is exported, so declaration builds that name `color` or
+  `createColorizer` no longer fail with TS4023.
+- Mode action streams are typed `Writable` and can be passed to the logger,
+  progress indicators and prompts without type errors.
+- The published typings no longer expose `Shell.start()` or a callable
+  `CommandBuilder` constructor; builders come from `cli.command()`.
+- An unknown log level passed to `logger()` or `setLevel()` throws `RangeError`
+  instead of silently suppressing every line, errors included.
+- A bar `width` above 4096 is rejected when the bar is created, like other
+  unusable widths; a fractional width is floored to at least one cell. Table
+  widths and padding are capped at the same bound.
+- Re-registering a command so that its positional arguments make its
+  subcommands unreachable emits a `NODE_CLI_UNREACHABLE_SUBCOMMAND` warning.
+- The documentation states which paths fire the `exit` event: SIGTERM and
+  SIGHUP in direct mode, and SIGHUP in the shell, end the process without
+  running `exit` listeners or cancel handlers.
+- The toolchain moves to Biome 2.6, Vitest 5 with Vite 8 as its explicit peer,
+  `@types/node` 26.6, Yarn 4.18.1 and the pinned Node.js 24.22.1, with the CI
+  actions updated alongside.
+
+### Fixed
+
+- `--help` and `-h` show help even when the rest of the line has parse errors.
+- One negation resolver serves the parser, help and completion: a long alias
+  spelled `--no-…` parses, `--no-<name>` is not advertised when another option
+  owns that spelling, and `--no-x=value` reports the right error.
+- A single-dash `=` form resolves one-letter names only, so `-dry=1` is no
+  longer taken as a named option.
+- A redirection error reaches `cli.catch()`, a literal `>` in direct argv is an
+  ordinary argument, and a bare `<` or `>` after an option is reported instead
+  of being taken as its value.
+- Tab completion shares the tokenizer's quote and escape handling: a trailing
+  space inside an unclosed quote or after a backslash stays part of the word,
+  completion after an unknown first word no longer corrupts the line, and the
+  replaced text is what was typed. Cycling restarts after any edit.
+- A completion provider that returns a non-array or non-string value no longer
+  freezes the prompt, and candidates containing control characters are not
+  echoed raw.
+- Help, help completion and the command-not-found message list the same
+  reachable, non-hidden subcommands. The shell footer omits `exit` and `quit`
+  once an application command has taken the name.
+- The `exit` event fires once, under one bounded deadline, on every path that
+  fires it, including a command finishing during a force quit and nested or
+  concurrent `cli.exec()` scopes.
+- SIGTERM in the shell cancels a running mode action, runs `exit` listeners
+  within the deadline, and still saves history.
+- A graceful pipeline stop, such as piping into `head`, no longer runs the
+  upstream stage's cancel handler.
+- Error messages and stacks are sanitized before reaching stderr, and error
+  output from commands and mode actions is drawn around a live progress frame.
+- A throwing `historyFilter` prints a warning instead of ending the shell, and
+  `historySize: 0` leaves an existing history file untouched.
+- The shell exits instead of hanging when stdin errors or is destroyed, and
+  Ctrl-C during exit no longer draws a stray prompt.
+- Sequential prompts reading piped input receive their answers instead of the
+  second prompt cancelling. An input stream error or a destroyed stream cancels
+  the prompt instead of crashing or hanging.
+- Prompt defaults, placeholders, choice labels and hints are sanitized, and the
+  lines a prompt prints itself are drawn around a live progress frame.
+- The logger shares one queue and failure state per stream across a logger and
+  its children, so lines stay in order, `bufferLimit` holds for the whole tree,
+  and a stream error rejects `flush()` instead of crashing the process.
+  Discarded children are no longer retained.
+- A log argument that throws while being formatted prints `[unprintable]`
+  instead of throwing out of the log call. Log messages are sanitized and leave
+  no styling open.
+- A throwing multi-bar `format()` restores the cursor and releases the stream,
+  so later logger calls and indicators keep working.
+- A spinner with a label longer than the terminal is wide no longer stacks a
+  copy of itself on every frame, and a multi-bar keeps the stream it first drew
+  on.
+- Progress and table color or style names such as `constructor` or `toString`
+  leave the text unstyled instead of rendering or throwing.
+- Table cells for a missing key are empty instead of showing inherited members,
+  a null row keeps the frame aligned, a value `String()` cannot convert renders
+  as a placeholder, and uncommon SGR attributes in a cell no longer leak past
+  it.
+- The `c` template no longer corrupts interpolated values containing `$&`,
+  `` $` ``, `$'` or `$$`.
+- `truncateAnsi` with a `NaN` width returns the text unchanged instead of
+  appending the marker.
+- The task-runner example draws its progress on the same stream as its log
+  lines.
+
 ## [1.4.1] - 2026-09-03
 
 A corrective release. No public API was added, removed, or renamed. Where two
@@ -447,6 +550,7 @@ These correct previously buggy behavior and may be observable:
 Initial public feature set: interactive shell, subcommands, tab completion,
 color, tables, progress, prompts, logger, events, plugins, and pipes.
 
+[1.4.2]: https://github.com/libraz/node-cli/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/libraz/node-cli/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/libraz/node-cli/compare/v1.3.3...v1.4.0
 [1.3.3]: https://github.com/libraz/node-cli/compare/v1.3.2...v1.3.3

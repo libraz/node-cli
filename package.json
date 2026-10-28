@@ -1,6 +1,6 @@
 {
   "name": "@libraz/node-cli",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Zero-dependency, batteries-included CLI framework for Node.js / TypeScript.",
   "type": "module",
   "main": "dist/index.js",
