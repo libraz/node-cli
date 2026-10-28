@@ -17,7 +17,9 @@ import { HelpGenerator } from "../src/help/generator.js";
 import { createCLI } from "../src/index.js";
 import { ShellCompleter } from "../src/shell/completion.js";
 import { History } from "../src/shell/history.js";
-import { createMockStdout } from "./helpers.js";
+import { createMockStdout, restoreProcessStateAfterEach } from "./helpers.js";
+
+restoreProcessStateAfterEach(["NODE_CLI_DEBUG"]);
 
 function setup() {
   const registry = new CommandRegistry();
@@ -30,7 +32,7 @@ function setup() {
 describe("parse-phase errors emit the error event", () => {
   it("emits error for an unknown option", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy <env>").action(() => {});
+    CommandBuilder.create(registry, "deploy <env>").action(() => {});
     const onError = vi.fn();
     const onCommandError = vi.fn();
     router.on("error", onError);
@@ -45,7 +47,7 @@ describe("parse-phase errors emit the error event", () => {
 
   it("emits error for a value-less option that expects a value", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .option("--tag <tag>", { type: "string" })
       .action(() => {});
     const onError = vi.fn();
@@ -62,7 +64,7 @@ describe("parse-phase errors emit the error event", () => {
     "emits error exactly once for syntax input %j",
     async (input) => {
       const { registry, router } = setup();
-      new CommandBuilder(registry, "deploy").action(() => {});
+      CommandBuilder.create(registry, "deploy").action(() => {});
       const onError = vi.fn();
       router.on("error", onError);
 
@@ -89,7 +91,7 @@ describe("fallback catch handler errors", () => {
 describe("required boolean option", () => {
   it("throws MissingOptionError when a required boolean flag is omitted", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "confirm")
+    CommandBuilder.create(registry, "confirm")
       .option("--accept", { type: "boolean", required: true })
       .action(() => {});
 
@@ -99,7 +101,7 @@ describe("required boolean option", () => {
   it("passes when the required boolean flag is present", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "confirm")
+    CommandBuilder.create(registry, "confirm")
       .option("--accept", { type: "boolean", required: true })
       .action(action);
 
@@ -111,7 +113,7 @@ describe("required boolean option", () => {
 describe("missing variadic arguments", () => {
   it("formats the missing argument name the same way as usage", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy <...envs>").action(() => {});
+    CommandBuilder.create(registry, "deploy <...envs>").action(() => {});
 
     await expect(router.execute("deploy")).rejects.toThrow("Missing required argument: <...envs>");
   });
@@ -124,17 +126,10 @@ describe("direct mode prompt cancellation display", () => {
       throw new PromptCancelError();
     });
     const stderr = createMockStdout();
-    const originalWrite = process.stderr.write;
-    const originalExitCode = process.exitCode;
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
-    try {
-      await cli.start(["ask"]);
-      expect(process.exitCode).toBe(130);
-    } finally {
-      process.stderr.write = originalWrite;
-      process.exitCode = originalExitCode;
-    }
+    await cli.start(["ask"]);
+    expect(process.exitCode).toBe(130);
 
     // A user cancellation is presented as a clean "Cancelled" line without the
     // "Error:" prefix, matching how the interactive shell reports the same event.
@@ -147,17 +142,10 @@ describe("direct mode prompt cancellation display", () => {
       throw new CLIError("custom failure", "VALIDATION_ERROR", 42);
     });
     const stderr = createMockStdout();
-    const originalWrite = process.stderr.write;
-    const originalExitCode = process.exitCode;
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
-    try {
-      await cli.start(["fail"]);
-      expect(process.exitCode).toBe(42);
-    } finally {
-      process.stderr.write = originalWrite;
-      process.exitCode = originalExitCode;
-    }
+    await cli.start(["fail"]);
+    expect(process.exitCode).toBe(42);
     expect(stderr.getOutput()).toBe("Error: custom failure\n");
   });
 });
@@ -166,14 +154,9 @@ describe("empty direct argv", () => {
   it.each([[[""]], [["--"]]])("shows help for explicit argv %j", async (argv) => {
     const cli = createCLI();
     const stdout = createMockStdout();
-    const originalWrite = process.stdout.write;
     process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
 
-    try {
-      await cli.start(argv);
-    } finally {
-      process.stdout.write = originalWrite;
-    }
+    await cli.start(argv);
     expect(stdout.getOutput()).toContain("Available commands:");
   });
 
@@ -261,7 +244,7 @@ describe("direct mode stdin", () => {
 describe("short -h help flag", () => {
   it("parses -h as help on a command with options", () => {
     const { registry } = setup();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .option("--tag <tag>", { type: "string" })
       .action(() => {});
 
@@ -271,7 +254,9 @@ describe("short -h help flag", () => {
 
   it("shows help text for `deploy -h`", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy <env>").description("Deploy app").action(() => {});
+    CommandBuilder.create(registry, "deploy <env>")
+      .description("Deploy app")
+      .action(() => {});
 
     const stdout = createMockStdout();
     await router.execute("deploy -h", { stdout });
@@ -282,8 +267,8 @@ describe("short -h help flag", () => {
 describe("tab completion respects pipes", () => {
   it("completes the command in the last pipe segment", () => {
     const { registry } = setup();
-    new CommandBuilder(registry, "grep <pattern>").action(() => {});
-    new CommandBuilder(registry, "list").action(() => {});
+    CommandBuilder.create(registry, "grep <pattern>").action(() => {});
+    CommandBuilder.create(registry, "list").action(() => {});
     const completer = new ShellCompleter(registry);
 
     const [candidates] = completer.complete("list | gr") as [string[], string];
@@ -298,10 +283,10 @@ describe("cancellation across concurrent commands", () => {
     let release1: () => void = () => {};
     let release2: () => void = () => {};
 
-    new CommandBuilder(registry, "slow1")
+    CommandBuilder.create(registry, "slow1")
       .cancel(() => cancelled.push("slow1"))
       .action(() => new Promise<void>((r) => (release1 = r)));
-    new CommandBuilder(registry, "slow2")
+    CommandBuilder.create(registry, "slow2")
       .cancel(() => cancelled.push("slow2"))
       .action(() => new Promise<void>((r) => (release2 = r)));
 
@@ -323,7 +308,7 @@ describe("cancellation across concurrent commands", () => {
     let abortedDuringRun = false;
     let release: () => void = () => {};
 
-    new CommandBuilder(registry, "task").action((ctx) => {
+    CommandBuilder.create(registry, "task").action((ctx) => {
       observedSignal = ctx.signal;
       // The signal is live but not yet aborted while the action runs.
       ctx.signal.addEventListener("abort", () => {
@@ -348,10 +333,10 @@ describe("cancellation across concurrent commands", () => {
 
   it("tears the whole pipe chain down when a stage fails", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "produce").action((ctx) => {
+    CommandBuilder.create(registry, "produce").action((ctx) => {
       ctx.stdout.write("data\n");
     });
-    new CommandBuilder(registry, "boom").action(() => {
+    CommandBuilder.create(registry, "boom").action(() => {
       throw new Error("stage failed");
     });
 
@@ -364,7 +349,7 @@ describe("option value coercion", () => {
   it("coerces --cache=0 to false rather than a JS-truthy true", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "build").option("--cache", { type: "boolean" }).action(action);
+    CommandBuilder.create(registry, "build").option("--cache", { type: "boolean" }).action(action);
 
     await router.execute("build --cache=0");
     expect(action.mock.calls[0][0].options.cache).toBe(false);
@@ -373,7 +358,7 @@ describe("option value coercion", () => {
   it("accepts --cache=off and coerces to false", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "build").option("--cache", { type: "boolean" }).action(action);
+    CommandBuilder.create(registry, "build").option("--cache", { type: "boolean" }).action(action);
 
     await router.execute("build --cache=off");
     expect(action.mock.calls[0][0].options.cache).toBe(false);
@@ -382,7 +367,7 @@ describe("option value coercion", () => {
   it("normalizes schema-declared option aliases to their long key before actions run", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "serve").option("--port <port>", { alias: "p" }).action(action);
+    CommandBuilder.create(registry, "serve").option("--port <port>", { alias: "p" }).action(action);
 
     await router.execute("serve -p 8080");
 
@@ -392,14 +377,18 @@ describe("option value coercion", () => {
 
   it("rejects an unrecognized boolean value instead of silently using true", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "build").option("--cache", { type: "boolean" }).action(() => {});
+    CommandBuilder.create(registry, "build")
+      .option("--cache", { type: "boolean" })
+      .action(() => {});
 
     await expect(router.execute("build --cache=hello")).rejects.toThrow(InvalidOptionError);
   });
 
   it("treats an explicitly string-typed flag without a placeholder as value-taking", () => {
     const { registry, helpGenerator } = setup();
-    new CommandBuilder(registry, "run").option("--name", { type: "string" }).action(() => {});
+    CommandBuilder.create(registry, "run")
+      .option("--name", { type: "string" })
+      .action(() => {});
 
     // Parser consumes the next token as the value.
     const result = parse("run --name alice", registry);
@@ -415,7 +404,7 @@ describe("choices validation on array options", () => {
   it("validates each element of a repeated option", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "deploy")
+    CommandBuilder.create(registry, "deploy")
       .option("--env <env>", { type: "string[]", choices: ["prod", "staging", "dev"] })
       .action(action);
 
@@ -425,7 +414,7 @@ describe("choices validation on array options", () => {
 
   it("rejects an invalid element", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy")
+    CommandBuilder.create(registry, "deploy")
       .option("--env <env>", { type: "string[]", choices: ["prod", "staging"] })
       .action(() => {});
 
@@ -440,8 +429,8 @@ describe("positional value matching a subcommand name", () => {
     const { registry, router } = setup();
     const taskAction = vi.fn();
     const listAction = vi.fn();
-    new CommandBuilder(registry, "task <name>").action(taskAction);
-    new CommandBuilder(registry, "task list").action(listAction);
+    CommandBuilder.create(registry, "task <name>").action(taskAction);
+    CommandBuilder.create(registry, "task list").action(listAction);
 
     await router.execute("task list");
     expect(taskAction).toHaveBeenCalledOnce();
@@ -454,9 +443,9 @@ describe("alias never shadows a real command", () => {
   it("rejects a real command that would shadow an existing alias", () => {
     const { registry } = setup();
     const startAction = vi.fn();
-    new CommandBuilder(registry, "start").alias("stop").action(startAction);
+    CommandBuilder.create(registry, "start").alias("stop").action(startAction);
 
-    expect(() => new CommandBuilder(registry, "stop")).toThrow(/conflicts with alias/);
+    expect(() => CommandBuilder.create(registry, "stop")).toThrow(/conflicts with alias/);
   });
 });
 
@@ -473,7 +462,7 @@ describe("command definition validation", () => {
 describe("short option inline value completion", () => {
   it("completes a value after -o=", () => {
     const { registry } = setup();
-    new CommandBuilder(registry, "serve")
+    CommandBuilder.create(registry, "serve")
       .option("-m, --mode <mode>", { type: "string", autocomplete: ["dev", "prod"] })
       .action(() => {});
     const completer = new ShellCompleter(registry);
@@ -487,7 +476,7 @@ describe("canonical command path in custom completer", () => {
   it("passes the real name even when an alias was typed", () => {
     const { registry } = setup();
     const completer = vi.fn(() => ["x"]);
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .alias("d")
       .complete(completer)
       .action(() => {});
@@ -503,7 +492,7 @@ describe("canonical command path in actions", () => {
   it("passes canonical names when the command is invoked through aliases", async () => {
     const { registry, router } = setup();
     const paths: string[][] = [];
-    new CommandBuilder(registry, "deploy run")
+    CommandBuilder.create(registry, "deploy run")
       .alias("r")
       .action((ctx) => paths.push(ctx.commandPath));
 
@@ -515,7 +504,7 @@ describe("canonical command path in actions", () => {
 describe("usage string consistency", () => {
   it("includes [options] in the missing-argument usage", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .option("--tag <tag>", { type: "string" })
       .action(() => {});
 
@@ -524,7 +513,7 @@ describe("usage string consistency", () => {
 
   it("lists arguments in declaration order in help", () => {
     const { registry, helpGenerator } = setup();
-    new CommandBuilder(registry, "copy <from> [to]").action(() => {});
+    CommandBuilder.create(registry, "copy <from> [to]").action(() => {});
 
     const help = helpGenerator.generateCommand(["copy"]);
     expect(help.indexOf("from")).toBeLessThan(help.indexOf("to"));
@@ -547,12 +536,12 @@ describe("async plugin rejection", () => {
 describe("non-interactive start with no arguments", () => {
   it("prints the help index when stdin is not a TTY and no args are given", async () => {
     const cli = createCLI({ name: "demo" });
-    new CommandBuilder((cli as unknown as { registry: CommandRegistry }).registry, "ping").action(
-      () => {},
-    );
+    CommandBuilder.create(
+      (cli as unknown as { registry: CommandRegistry }).registry,
+      "ping",
+    ).action(() => {});
 
     const originalIsTTY = process.stdin.isTTY;
-    const originalWrite = process.stdout.write.bind(process.stdout);
     let captured = "";
     Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
     process.stdout.write = ((chunk: string | Uint8Array) => {
@@ -563,7 +552,6 @@ describe("non-interactive start with no arguments", () => {
     try {
       await cli.start([]);
     } finally {
-      process.stdout.write = originalWrite;
       Object.defineProperty(process.stdin, "isTTY", {
         value: originalIsTTY,
         configurable: true,
@@ -577,7 +565,6 @@ describe("non-interactive start with no arguments", () => {
     const cli = createCLI({ name: "demo" });
     const originalStdinIsTTY = process.stdin.isTTY;
     const originalStdoutIsTTY = process.stdout.isTTY;
-    const originalWrite = process.stdout.write.bind(process.stdout);
     let captured = "";
     Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
     Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
@@ -589,7 +576,6 @@ describe("non-interactive start with no arguments", () => {
     try {
       await cli.start([]);
     } finally {
-      process.stdout.write = originalWrite;
       Object.defineProperty(process.stdin, "isTTY", {
         value: originalStdinIsTTY,
         configurable: true,
@@ -614,7 +600,6 @@ describe("history save error formatting", () => {
     const history = new History({ filePath: join(regularFileParent, "history") });
     history.add("ls");
 
-    const originalWrite = process.stderr.write.bind(process.stderr);
     let captured = "";
     process.stderr.write = ((chunk: string | Uint8Array) => {
       captured += chunk.toString();
@@ -624,7 +609,6 @@ describe("history save error formatting", () => {
     try {
       await history.save();
     } finally {
-      process.stderr.write = originalWrite;
       await rm(fixtureDir, { recursive: true, force: true });
     }
 
@@ -648,7 +632,7 @@ describe("activePipeSegment", () => {
 describe("option flag completion after positional arguments", () => {
   it("offers option flags once a positional argument has been entered", () => {
     const { registry } = setup();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .option("--force", { type: "boolean" })
       .option("--tag <tag>", { type: "string" })
       .action(() => {});
@@ -663,8 +647,8 @@ describe("option flag completion after positional arguments", () => {
 describe("group boundary completion", () => {
   it("offers both subcommands and the group's own options", () => {
     const { registry } = setup();
-    new CommandBuilder(registry, "db").option("--verbose", { type: "boolean" });
-    new CommandBuilder(registry, "db migrate").action(() => {});
+    CommandBuilder.create(registry, "db").option("--verbose", { type: "boolean" });
+    CommandBuilder.create(registry, "db migrate").action(() => {});
     const completer = new ShellCompleter(registry);
 
     const [candidates] = completer.complete("db ") as [string[], string];
@@ -676,7 +660,7 @@ describe("group boundary completion", () => {
 describe("usage string is shared between help and errors", () => {
   it("missing-argument usage matches the help Usage line", async () => {
     const { registry, router, helpGenerator } = setup();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .option("--tag <tag>", { type: "string" })
       .action(() => {});
 
@@ -705,22 +689,52 @@ describe("fatal error diagnostics", () => {
     const error = new Error("broken command");
     error.stack = "Error: broken command\n  at test";
     const writes: string[] = [];
-    const write = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
       writes.push(String(chunk));
       return true;
     });
-    const previousDebug = process.env.NODE_CLI_DEBUG;
-    const previousExitCode = process.exitCode;
 
+    process.env.NODE_CLI_DEBUG = "1";
+    (cli as unknown as { reportFatal(error: unknown): void }).reportFatal(error);
+    expect(writes.join("")).toContain("  at test");
+  });
+});
+
+describe("help completion through a shadowed parent", () => {
+  it("offers nothing below a command whose arguments consume its subcommands", () => {
+    const cli = createCLI();
+    const list = cli.command("task list").action(() => {});
+    list.command("x").action(() => {});
+    cli.command("task <name>").action(() => {});
+    const { registry } = cli as unknown as { registry: CommandRegistry };
+    const completer = new ShellCompleter(registry);
+
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     try {
-      process.env.NODE_CLI_DEBUG = "1";
-      (cli as unknown as { reportFatal(error: unknown): void }).reportFatal(error);
-      expect(writes.join("")).toContain("  at test");
+      expect(completer.complete("help task list ")).toEqual([[], ""]);
+      expect(completer.complete("help task list x")).toEqual([[], "x"]);
     } finally {
-      if (previousDebug === undefined) delete process.env.NODE_CLI_DEBUG;
-      else process.env.NODE_CLI_DEBUG = previousDebug;
-      process.exitCode = previousExitCode;
-      write.mockRestore();
+      warn.mockRestore();
     }
+  });
+});
+
+describe("direct mode error presentation", () => {
+  it("strips control sequences from argv-derived messages and closes styling", async () => {
+    const cli = createCLI();
+    cli.command("deploy").action(() => {});
+    const stderr = createMockStdout();
+    process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
+    await cli.start(["deploy", "--\x1b[2Jbogus"]);
+    const cliNotFound = createCLI();
+    const notFound = createMockStdout();
+    process.stderr.write = notFound.write.bind(notFound) as typeof process.stderr.write;
+    await cliNotFound.start(["\x1b[31mred"]);
+
+    expect(stderr.getOutput()).toContain("bogus");
+    expect(stderr.getOutput()).not.toContain("\x1b[2J");
+    expect(notFound.getOutput()).toContain("red");
+    // A colour the message opened is closed before the line ends.
+    expect(notFound.getOutput().endsWith('"\x1b[39m\n')).toBe(true);
   });
 });

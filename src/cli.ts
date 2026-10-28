@@ -2,13 +2,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { CommandBuilder } from "./command/builder.js";
-import { CommandRegistry, hasUnreachableSubcommands } from "./command/registry.js";
+import { CommandRegistry, visibleSubcommands } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
 import { CommandNotFoundError, presentError } from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
 import { streamIsTTY } from "./output/color.js";
 import { isShellCommand, SHELL_COMMANDS } from "./shell/builtins.js";
-import { Shell } from "./shell/repl.js";
+import { InteractiveShell } from "./shell/repl.js";
 import type { CatchContext, CLIEventMap, CLIOptions } from "./types.js";
 
 /**
@@ -94,7 +94,7 @@ export class CLI {
    * @returns A CommandBuilder instance for further configuration.
    */
   command(definition: string): CommandBuilder {
-    return new CommandBuilder(this.registry, definition);
+    return CommandBuilder.create(this.registry, definition);
   }
 
   /**
@@ -264,14 +264,9 @@ export class CLI {
   async exec(input: string, options: ExecOptions = {}): Promise<void> {
     await this.drainPendingPlugins();
     const { stdin = null, stdout = process.stdout, stderr = process.stderr, signal } = options;
-    await this.router.runWithSigintCancel(
-      async () => {
-        await this.router.execute(input, { stdin, stdout, stderr, signal });
-      },
-      // A force quit terminates the whole process, so `exit` listeners must get
-      // the same chance to run here as they do on the direct-argv path.
-      { onForceQuit: () => this.router.emit("exit") },
-    );
+    await this.router.runWithSigintCancel(async () => {
+      await this.router.execute(input, { stdin, stdout, stderr, signal });
+    });
   }
 
   /**
@@ -291,7 +286,7 @@ export class CLI {
       await this.drainPendingPlugins();
     } catch (err) {
       this.reportFatal(err);
-      await this.router.emit("exit");
+      await this.router.emitExit();
       return;
     }
 
@@ -304,7 +299,7 @@ export class CLI {
     const named = args.filter((arg) => arg !== "");
     if (args.length > 0 && (named.length === 0 || (named.length === 1 && named[0] === "--"))) {
       process.stdout.write(`${this.helpGenerator.generateIndex()}\n`);
-      await this.router.emit("exit");
+      await this.router.emitExit();
       return;
     }
 
@@ -322,7 +317,6 @@ export class CLI {
             });
           },
           {
-            onForceQuit: () => this.router.emit("exit"),
             onInterrupt: () => {
               interrupted = this.router.triggerCancel();
               return interrupted;
@@ -333,7 +327,7 @@ export class CLI {
       } catch (err) {
         this.reportFatal(err, interrupted);
       } finally {
-        await this.router.emit("exit");
+        await this.router.emitExit();
       }
     } else if (streamIsTTY(process.stdin) && streamIsTTY(process.stdout)) {
       // Interactive shell mode
@@ -346,7 +340,7 @@ export class CLI {
         banner = "";
       }
 
-      const shell = new Shell({
+      const shell = new InteractiveShell({
         router: this.router,
         registry: this.registry,
         prompt: this.promptStr,
@@ -363,7 +357,7 @@ export class CLI {
       // No arguments and either standard stream is not a terminal (e.g. piped
       // input or redirected output): avoid an interactive REPL and print help.
       process.stdout.write(`${this.helpGenerator.generateIndex()}\n`);
-      await this.router.emit("exit");
+      await this.router.emitExit();
     }
   }
 
@@ -384,25 +378,20 @@ export class CLI {
     const helpGenerator = this.helpGenerator;
     const registry = this.registry;
 
-    new CommandBuilder(this.registry, "help [...command]")
+    CommandBuilder.create(this.registry, "help [...command]")
       .description("Show help information")
       .complete(({ args, current }) => {
         const path = (args.command as string[] | undefined) ?? [];
         const parentPath = current ? path.slice(0, -1) : path;
-        const parent = parentPath.length === 0 ? undefined : registry.resolve(parentPath);
-        // A parent whose subcommands are shadowed by its own positional
-        // arguments has nothing to offer here: typing one would never dispatch.
-        const commands = parent
-          ? hasUnreachableSubcommands(parent)
-            ? []
-            : [...new Set(parent.subcommands.values())]
-          : registry.allTopLevel();
-        const names = commands
-          .filter((command) => !command.hidden)
-          .flatMap((command) => [command.name, ...(command.aliases ?? [])]);
+        // Resolve the parent the way dispatch and the help action do, so nothing
+        // is offered beneath a command whose arguments shadow its subcommands.
+        const match = parentPath.length === 0 ? undefined : registry.matchCommandPath(parentPath);
+        if (parentPath.length > 0 && match?.consumed !== parentPath.length) return [];
+        const commands = match ? visibleSubcommands(match.command) : registry.visibleTopLevel();
+        const names = commands.flatMap((command) => [command.name, ...(command.aliases ?? [])]);
         // At the top level, offer the shell's own commands too: the help footer
         // advertises them, so completion must be able to reach them.
-        if (!parent) {
+        if (!match) {
           names.push(...SHELL_COMMANDS.filter((name) => !registry.resolve([name])));
         }
         return names.filter((name) => name.startsWith(current));

@@ -7,7 +7,7 @@ import { createMockStdout } from "./helpers.js";
 describe("catch/fallback command", () => {
   function createRouter() {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>").action((ctx) => {
+    CommandBuilder.create(registry, "deploy <env>").action((ctx) => {
       ctx.stdout.write("deployed\n");
     });
     return new CommandRouter(registry);
@@ -49,7 +49,7 @@ describe("catch/fallback command", () => {
 
   it("invokes catch handlers for unknown nested commands", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "user create").action(() => {});
+    CommandBuilder.create(registry, "user create").action(() => {});
     const router = new CommandRouter(registry);
     const stream = createMockStdout();
     const handler = vi.fn((input, ctx) => ctx.stdout.write(`caught: ${input}\n`));

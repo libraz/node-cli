@@ -12,7 +12,7 @@ Five events are defined by `CLIEventMap`.
 | `afterExecute` | `(ctx) => void \| Promise<void>` | Only after the action resolves successfully |
 | `commandError` | `(error, ctx) => void \| Promise<void>` | A resolved command failed |
 | `error` | `(error) => void \| Promise<void>` | Any failure at all, including failures before a command was resolved |
-| `exit` | `() => void \| Promise<void>` | Every exit path of `cli.start()` |
+| `exit` | `() => void \| Promise<void>` | Once, when `cli.start()` ends or a force-quit or SIGTERM ends the process |
 
 `ctx` is the `CommandContext` — the same object the action receives, with `args`, `options`, `commandPath`, the streams, and `signal`. See [Commands](commands.md).
 
@@ -112,15 +112,17 @@ Neither event fires when a pipe stage is cancelled as an expected cancellation: 
 
 ### The `exit` event
 
-`exit` fires once on every exit path of `cli.start()`:
+`exit` fires at most once per CLI, on each of these paths:
 
 - a direct-mode command completing, throwing, or being force-quit,
 - the help index being printed for an empty argument list or a non-terminal start,
 - a plugin failing to initialize,
-- the interactive shell ending,
+- the interactive shell ending, or receiving SIGTERM,
 - a force-quit (Ctrl+C twice).
 
 It does **not** fire on the normal `cli.exec()` path. Only a force-quit during `cli.exec()` triggers it, because that ends the process.
+
+A signal the CLI does not handle ends the process with Node's default action, so neither `exit` handlers nor cancel handlers run. That covers SIGTERM and SIGHUP in direct mode, and SIGHUP in the interactive shell.
 
 ```typescript
 import { writeFile } from "node:fs/promises";
@@ -130,7 +132,7 @@ cli.on("exit", async () => {
 });
 ```
 
-During a force-quit, `exit` handlers are given 2000 ms in total; a handler that has not finished by then does not delay termination.
+During a force-quit or the shell's SIGTERM teardown, `exit` handlers are given 2000 ms in total; a handler that has not finished by then does not delay termination.
 
 ## The `catch` fallback
 

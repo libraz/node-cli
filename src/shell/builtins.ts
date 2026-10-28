@@ -1,3 +1,5 @@
+import type { CommandRegistry } from "../command/registry.js";
+
 /**
  * Names the interactive shell handles itself instead of dispatching them to the
  * command registry. They are not registered commands, so every surface that
@@ -7,8 +9,14 @@
  */
 export const SHELL_COMMANDS = ["exit", "quit"] as const;
 
-/** The footer line the generated help uses to advertise them. */
-export const SHELL_COMMANDS_LABEL = `Shell commands: ${SHELL_COMMANDS.join(", ")}`;
+/**
+ * The footer line the generated help uses to advertise them, listing only the
+ * names no application command has taken. `undefined` when none remain.
+ */
+export function shellCommandsLabel(registry: Pick<CommandRegistry, "resolve">): string | undefined {
+  const names = SHELL_COMMANDS.filter((name) => !registry.resolve([name]));
+  return names.length > 0 ? `Shell commands: ${names.join(", ")}` : undefined;
+}
 
 /**
  * True when the shell handles this name itself. An application command of the

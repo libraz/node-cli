@@ -12,7 +12,7 @@
 | `afterExecute` | `(ctx) => void \| Promise<void>` | アクションが成功して解決したときだけ |
 | `commandError` | `(error, ctx) => void \| Promise<void>` | 解決済みのコマンドが失敗したとき |
 | `error` | `(error) => void \| Promise<void>` | あらゆる失敗。コマンドが解決される前の失敗も含みます |
-| `exit` | `() => void \| Promise<void>` | `cli.start()` のあらゆる終了経路 |
+| `exit` | `() => void \| Promise<void>` | `cli.start()` が終わったとき、または強制終了や SIGTERM でプロセスが終わるときに一度だけ |
 
 `ctx` は `CommandContext` で、アクションが受け取るものと同じオブジェクトです。`args`、`options`、`commandPath`、各ストリーム、`signal` を持ちます。[コマンド](commands.md)を参照してください。
 
@@ -112,15 +112,17 @@ cli.on("error", (error) => {
 
 ### `exit` イベント
 
-`exit` は `cli.start()` のあらゆる終了経路で一度だけ発生します。
+`exit` は CLI ごとに多くても一度だけ、次の経路で発生します。
 
 - 直接実行モードのコマンドが完了・例外・強制終了のいずれかで終わったとき
 - 引数リストが空、あるいは端末以外での起動によりヘルプ一覧が表示されたとき
 - プラグインの初期化が失敗したとき
-- 対話シェルが終了したとき
+- 対話シェルが終了したとき、または SIGTERM を受け取ったとき
 - 強制終了（Ctrl+C を 2 回）したとき
 
 通常の `cli.exec()` の経路では**発生しない**ことに注意してください。`cli.exec()` の実行中に強制終了した場合だけは、プロセスが終わるため発生します。
+
+CLI が処理しないシグナルを受けると、プロセスは Node の既定の動作で終わるため、`exit` ハンドラもキャンセルハンドラも実行されません。直接実行モードの SIGTERM と SIGHUP、対話シェルの SIGHUP がこれにあたります。
 
 ```typescript
 import { writeFile } from "node:fs/promises";
@@ -130,7 +132,7 @@ cli.on("exit", async () => {
 });
 ```
 
-強制終了のときは、`exit` ハンドラ全体で 2000 ms が与えられます。それまでに終わらなかったハンドラが終了処理を遅らせることはありません。
+強制終了のときとシェルが SIGTERM で終了処理をするときは、`exit` ハンドラ全体で 2000 ms が与えられます。それまでに終わらなかったハンドラが終了処理を遅らせることはありません。
 
 ## `catch` フォールバック
 

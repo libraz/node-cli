@@ -1,10 +1,10 @@
 import { CommandRegistry } from "../../dist/command/registry.js";
 import { CommandRouter } from "../../dist/command/router.js";
-import { Shell } from "../../dist/shell/repl.js";
+import { InteractiveShell } from "../../dist/shell/repl.js";
 
 const historyFile = process.argv[2];
 const registry = new CommandRegistry();
-const shell = new Shell({
+const shell = new InteractiveShell({
   router: new CommandRouter(registry),
   registry,
   prompt: "> ",

@@ -8,6 +8,7 @@ import {
   MissingArgumentError,
   ParseError,
   toError,
+  writeDiagnostic,
 } from "../errors.js";
 import { formatUsage, type HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
@@ -16,7 +17,7 @@ import { writeThrough } from "../output/region.js";
 import type { Shell } from "../shell/repl.js";
 import type { CatchContext, CLIEventMap, CommandContext, CommandDefinition } from "../types.js";
 import { parse, splitPipes, tokenize } from "./parser.js";
-import type { CommandRegistry } from "./registry.js";
+import { type CommandRegistry, visibleSubcommands } from "./registry.js";
 
 /**
  * Sentinel abort reason used when a downstream pipeline stage finishes early and
@@ -49,6 +50,13 @@ type CancellationEntry = {
 };
 
 type CancellationScope = Set<CancellationEntry>;
+
+/**
+ * Upper bound on the cleanup a terminating exit awaits. Letting every `exit`
+ * listener run is the point of awaiting it, but a listener that never settles
+ * must not turn "terminate" into "hang".
+ */
+const TERMINATE_CLEANUP_MS = 2_000;
 
 /**
  * Routes parsed CLI input to the appropriate command action.
@@ -87,6 +95,11 @@ export class CommandRouter {
    */
   private sigintScopes = 0;
   private sigintRequestedAt = 0;
+
+  /** The single `exit` emission of this router, shared by every path that ends the session. */
+  private exitEmission?: Promise<void>;
+  /** Set once {@link terminate} has started; the process exits exactly once. */
+  private terminating = false;
 
   /**
    * Creates a new CommandRouter.
@@ -140,14 +153,48 @@ export class CommandRouter {
         // A listener should never break command flow. Surface error-event
         // failures to stderr; route others to the error event when possible.
         if (event === "error") {
-          (this.stderrContext.getStore() ?? process.stderr).write(
-            `Error in error handler: ${err instanceof Error ? err.message : String(err)}\n`,
+          writeDiagnostic(
+            this.stderrContext.getStore() ?? process.stderr,
+            `Error in error handler: ${err instanceof Error ? err.message : String(err)}`,
           );
         } else {
           await this.emit("error", toError(err));
         }
       }
     }
+  }
+
+  /**
+   * Emits `exit` once for this router. Every path that ends a session calls
+   * this; a later call (a force quit racing a settling action, a SIGTERM during
+   * shell teardown) shares the first emission instead of running listeners again.
+   */
+  emitExit(): Promise<void> {
+    this.exitEmission ??= this.emit("exit");
+    return this.exitEmission;
+  }
+
+  /**
+   * Ends the process with `code` after `cleanup` and the `exit` emission, bounded
+   * by {@link TERMINATE_CLEANUP_MS}. Only the first call has any effect, so
+   * concurrent force quits and signals exit once with the first code. A cleanup
+   * throw or hang never prevents the exit.
+   */
+  terminate(code: number, cleanup?: () => Promise<void> | void): void {
+    if (this.terminating) return;
+    this.terminating = true;
+    restoreCursor();
+    const teardown = Promise.resolve()
+      .then(cleanup)
+      .catch(() => {})
+      .then(() => this.emitExit())
+      .catch(() => {});
+    // Not unref'd: a hung listener with nothing else pending must still end in
+    // `code`, not in a natural exit with whatever code was set.
+    const deadline = new Promise<void>((resolve) => {
+      setTimeout(resolve, TERMINATE_CLEANUP_MS);
+    });
+    void Promise.race([teardown, deadline]).then(() => process.exit(code));
   }
 
   /** Fallback action for unrecognized commands. */
@@ -243,7 +290,9 @@ export class CommandRouter {
 
   /**
    * Aborts every entry before invoking user cancellation callbacks. This ordering
-   * guarantees that one faulty callback cannot keep sibling commands alive.
+   * guarantees that one faulty callback cannot keep sibling commands alive. A
+   * graceful pipeline stop only aborts: it is not an interrupt, so the cancel
+   * handlers, which clean up after one, do not run.
    */
   private cancelEntries(entries: Iterable<CancellationEntry>, reason?: unknown): boolean {
     const snapshot = [...entries].filter((entry) => !entry.controller.signal.aborted);
@@ -252,6 +301,7 @@ export class CommandRouter {
     for (const entry of snapshot) {
       entry.controller.abort(reason);
     }
+    if (isPipelineStop(reason)) return true;
 
     for (const entry of snapshot) {
       try {
@@ -287,15 +337,13 @@ export class CommandRouter {
    * resolves normally. A command that ignores cancellation cannot otherwise be
    * interrupted, so a second Ctrl-C — or a Ctrl-C that finds nothing left to
    * cancel — restores the terminal cursor and force-terminates the process with
-   * the conventional 130 (128 + SIGINT) status. `onForceQuit` runs to completion
-   * before termination so callers (e.g. the shell) can persist state and let
-   * every `exit` listener finish; it is bounded so a hung listener cannot defeat
-   * the force quit.
+   * the conventional 130 (128 + SIGINT) status through {@link terminate}, which
+   * lets every `exit` listener finish within its bound and exits once however
+   * many scopes are open.
    */
   async runWithSigintCancel(
     action: () => Promise<void>,
     options: {
-      onForceQuit?: () => Promise<void> | void;
       onInterrupt?: () => boolean;
       stderr?: Writable;
     } = {},
@@ -314,30 +362,11 @@ export class CommandRouter {
     // it means the first interrupt clearly did not stop the command.
     const FORCE_QUIT_GRACE_MS = 250;
     let interruptRequested = false;
-    let forced = false;
     this.sigintScopes++;
 
-    // Upper bound on force-quit cleanup. Awaiting `onForceQuit` is what lets
-    // every `exit` listener run before the process dies, but a listener that
-    // never settles must not turn "force quit" into "hang".
-    const FORCE_QUIT_CLEANUP_MS = 2_000;
-
     const forceQuit = () => {
-      if (forced) return;
-      forced = true;
       process.removeListener("SIGINT", onSigint);
-      restoreCursor();
-      void (async () => {
-        try {
-          const deadline = new Promise<void>((resolve) => {
-            setTimeout(resolve, FORCE_QUIT_CLEANUP_MS).unref();
-          });
-          await Promise.race([Promise.resolve(options.onForceQuit?.()), deadline]);
-        } catch {
-          // Never let cleanup failure block termination.
-        }
-        process.exit(130);
-      })();
+      this.terminate(130);
     };
 
     const onSigint = () => {
@@ -543,7 +572,9 @@ export class CommandRouter {
       }
       const path = [...this.registry.getCommandPath(command), result.extraArgs[0]].join(" ");
       const err = new CommandNotFoundError(path, {
-        available: [...command.subcommands.keys()].sort(),
+        available: visibleSubcommands(command)
+          .map((sub) => sub.name)
+          .sort(),
       });
       await this.emit("error", err);
       throw err;

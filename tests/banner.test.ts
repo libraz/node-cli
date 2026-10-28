@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { CLI } from "../src/cli.js";
-import { createMockStdout, createMockTTY } from "./helpers.js";
+import { createMockStdout, createMockTTY, restoreProcessStateAfterEach } from "./helpers.js";
 
 async function captureInteractiveOutput(cli: CLI): Promise<string> {
   const originalStdin = process.stdin;
@@ -30,6 +30,8 @@ async function captureInteractiveOutput(cli: CLI): Promise<string> {
 }
 
 describe("Banner and Description", () => {
+  restoreProcessStateAfterEach();
+
   describe("description()", () => {
     it("is chainable and returns the CLI instance", () => {
       const cli = new CLI({ name: "myapp" });
@@ -87,13 +89,8 @@ describe("Banner and Description", () => {
         banner: "Welcome to myapp!",
       });
       const stdout = createMockStdout();
-      const originalWrite = process.stdout.write;
       process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
-      try {
-        await cli.start(["--help"]);
-      } finally {
-        process.stdout.write = originalWrite;
-      }
+      await cli.start(["--help"]);
 
       // The description reaches the rendered help; a constructor that silently
       // dropped either option would still return an object.

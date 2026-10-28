@@ -4,8 +4,9 @@ import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
 import { CommandNotFoundError, ExtraArgumentError, MissingArgumentError } from "../src/errors.js";
 import { HelpGenerator } from "../src/help/generator.js";
+import { progress, restoreCursor } from "../src/output/progress.js";
 import type { Shell } from "../src/shell/repl.js";
-import { createMockStdout } from "./helpers.js";
+import { createMockStdout, createMockTTY } from "./helpers.js";
 
 function setup() {
   const registry = new CommandRegistry();
@@ -19,7 +20,7 @@ describe("CommandRouter", () => {
   it("executes a command action", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "deploy <env>").action(action);
+    CommandBuilder.create(registry, "deploy <env>").action(action);
 
     const stdout = createMockStdout();
     await router.execute("deploy prod", { stdout });
@@ -31,7 +32,7 @@ describe("CommandRouter", () => {
   it("executes async actions", async () => {
     const { registry, router } = setup();
     const result: string[] = [];
-    new CommandBuilder(registry, "deploy <env>").action(async (ctx) => {
+    CommandBuilder.create(registry, "deploy <env>").action(async (ctx) => {
       result.push(ctx.args.env as string);
     });
 
@@ -47,7 +48,7 @@ describe("CommandRouter", () => {
 
   it("throws MissingArgumentError for missing required arg", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy <env>").action(() => {});
+    CommandBuilder.create(registry, "deploy <env>").action(() => {});
 
     await expect(router.execute("deploy")).rejects.toThrow(MissingArgumentError);
   });
@@ -55,7 +56,7 @@ describe("CommandRouter", () => {
   it("throws ExtraArgumentError for unexpected positional args", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "deploy <env>").action(action);
+    CommandBuilder.create(registry, "deploy <env>").action(action);
 
     await expect(router.execute("deploy prod extra")).rejects.toThrow(ExtraArgumentError);
     expect(action).not.toHaveBeenCalled();
@@ -65,7 +66,7 @@ describe("CommandRouter", () => {
     const { registry, router } = setup();
     const onError = vi.fn();
     router.on("error", onError);
-    new CommandBuilder(registry, "abort").action(() => {
+    CommandBuilder.create(registry, "abort").action(() => {
       throw Object.assign(new Error("internal abort"), { name: "AbortError" });
     });
 
@@ -79,7 +80,7 @@ describe("CommandRouter", () => {
     const onCommandError = vi.fn();
     router.on("error", onError);
     router.on("commandError", onCommandError);
-    new CommandBuilder(registry, "broken").action(() => {
+    CommandBuilder.create(registry, "broken").action(() => {
       throw "failure";
     });
 
@@ -90,7 +91,7 @@ describe("CommandRouter", () => {
 
   it("shows help for group commands without action", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "user create <name>").action(() => {});
+    CommandBuilder.create(registry, "user create <name>").action(() => {});
 
     const stdout = createMockStdout();
     await router.execute("user", { stdout });
@@ -100,7 +101,9 @@ describe("CommandRouter", () => {
 
   it("shows help when --help is passed", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "deploy <env>").description("Deploy app").action(() => {});
+    CommandBuilder.create(registry, "deploy <env>")
+      .description("Deploy app")
+      .action(() => {});
 
     const stdout = createMockStdout();
     await router.execute("deploy --help", { stdout });
@@ -111,7 +114,7 @@ describe("CommandRouter", () => {
   it("passes a command-defined boolean --help option to the action", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "custom").option("--help", { type: "boolean" }).action(action);
+    CommandBuilder.create(registry, "custom").option("--help", { type: "boolean" }).action(action);
     await router.execute("custom --help");
     expect(action).toHaveBeenCalledOnce();
     expect(action.mock.calls[0][0].options.help).toBe(true);
@@ -119,7 +122,7 @@ describe("CommandRouter", () => {
 
   it("reports an unknown child instead of showing successful group help", async () => {
     const { registry, router } = setup();
-    new CommandBuilder(registry, "user create").action(() => {});
+    CommandBuilder.create(registry, "user create").action(() => {});
     await expect(router.execute("user typo")).rejects.toMatchObject({
       code: "COMMAND_NOT_FOUND",
       input: "user typo",
@@ -130,7 +133,7 @@ describe("CommandRouter", () => {
   it("resolves options with defaults", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .option("--tag <tag>", { type: "string", default: "latest" })
       .action(action);
 
@@ -146,7 +149,7 @@ describe("CommandRouter", () => {
   it("passes shell instance to context", async () => {
     const { registry, router } = setup();
     const action = vi.fn();
-    new CommandBuilder(registry, "test").action(action);
+    CommandBuilder.create(registry, "test").action(action);
 
     const mockShell = {} as unknown as Shell;
     await router.execute("test", { shell: mockShell });
@@ -159,7 +162,7 @@ describe("CommandRouter", () => {
     const cancelled: string[] = [];
 
     for (const name of ["first", "second"]) {
-      new CommandBuilder(registry, name)
+      CommandBuilder.create(registry, name)
         .cancel(() => {
           cancelled.push(name);
           if (name === "first") throw new Error("broken cleanup");
@@ -190,7 +193,7 @@ describe("CommandRouter", () => {
   it("makes validation and lifecycle hooks cancellable", async () => {
     const { registry, router } = setup();
     let validationAborted = false;
-    new CommandBuilder(registry, "validate-cancel")
+    CommandBuilder.create(registry, "validate-cancel")
       .validate(
         (ctx) =>
           new Promise<void>((resolve) => {
@@ -217,12 +220,14 @@ describe("CommandRouter", () => {
     const { registry, router } = setup();
     const cancel = vi.fn();
     let finish: (() => void) | undefined;
-    new CommandBuilder(registry, "slow").cancel(cancel).action(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
+    CommandBuilder.create(registry, "slow")
+      .cancel(cancel)
+      .action(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      );
 
     const run = router.execute("slow");
     await Promise.resolve();
@@ -231,5 +236,89 @@ describe("CommandRouter", () => {
     finish?.();
     await run;
     expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
+describe("router diagnostics", () => {
+  it("lists only visible subcommands when a child is not found", async () => {
+    const { registry, router } = setup();
+    CommandBuilder.create(registry, "grp pub").action(() => {});
+    CommandBuilder.create(registry, "grp secret")
+      .hidden()
+      .action(() => {});
+
+    const error = await router.execute("grp bogus").catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(CommandNotFoundError);
+    expect((error as CommandNotFoundError).available).toEqual(["pub"]);
+    expect((error as CommandNotFoundError).message).not.toContain("secret");
+  });
+
+  it("writes an error-listener failure around a live frame, without control sequences", async () => {
+    const { registry, router } = setup();
+    const stderr = createMockTTY();
+    CommandBuilder.create(registry, "work").action(() => {
+      progress.spinner({ label: "working", stream: stderr }).start();
+      throw new Error("work failed");
+    });
+    router.on("error", () => {
+      throw new Error("listener \x1b]2;spoofed\x07broke");
+    });
+    try {
+      const before = stderr.getOutput().length;
+      await expect(router.execute("work", { stderr })).rejects.toThrow("work failed");
+      const written = stderr.getOutput().slice(before);
+      const report = written.indexOf("Error in error handler: listener broke\n");
+      expect(report).toBeGreaterThan(-1);
+      // The frame row is erased before the report is written.
+      expect(written.slice(written.lastIndexOf("working", report), report)).toContain("\x1b[K");
+      expect(written).not.toContain("\x1b]2;");
+    } finally {
+      restoreCursor();
+    }
+  });
+
+  it("writes the interrupt hint on its own row and redraws the frame below it", async () => {
+    const { registry, router } = setup();
+    const stderr = createMockTTY();
+    let started: () => void = () => {};
+    const ready = new Promise<void>((resolveReady) => {
+      started = resolveReady;
+    });
+    CommandBuilder.create(registry, "work").action(
+      (ctx) =>
+        new Promise<void>((resolveAction) => {
+          const spinner = progress.spinner({ label: "working", stream: ctx.stderr });
+          spinner.start();
+          // Cleanup takes a moment, so the hint is written while the frame is live.
+          ctx.signal.addEventListener("abort", () => {
+            setTimeout(() => {
+              spinner.stop();
+              resolveAction();
+            }, 10);
+          });
+          started();
+        }),
+    );
+    try {
+      const running = router.runWithSigintCancel(() => router.execute("work", { stderr }), {
+        stderr,
+      });
+      await ready;
+      const before = stderr.getOutput().length;
+      const write = vi.spyOn(stderr, "write");
+      process.emit("SIGINT");
+      const hintWrite = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .find((chunk) => chunk.includes("Press Ctrl-C again"));
+      write.mockRestore();
+      await running;
+      expect(hintWrite?.startsWith("\r\x1b[K")).toBe(true);
+      const written = stderr.getOutput().slice(before);
+      const hintEnd = written.indexOf("force quit.\n") + "force quit.\n".length;
+      expect(hintEnd).toBeGreaterThan("force quit.\n".length);
+      expect(written.slice(hintEnd)).toContain("working");
+    } finally {
+      restoreCursor();
+    }
   });
 });

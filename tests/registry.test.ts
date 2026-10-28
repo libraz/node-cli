@@ -101,18 +101,18 @@ describe("CommandRegistry", () => {
 
   it("replaces stale argument definitions with an empty redefinition", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <target>");
-    new CommandBuilder(registry, "deploy");
+    CommandBuilder.create(registry, "deploy <target>");
+    CommandBuilder.create(registry, "deploy");
 
     expect(registry.resolve(["deploy"])?.argDefs).toEqual([]);
   });
 
   it("allows a command redefinition to replace one of its options", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy").option("--region <region>", {
+    CommandBuilder.create(registry, "deploy").option("--region <region>", {
       choices: ["us"],
     });
-    new CommandBuilder(registry, "deploy").option("--region <region>", {
+    CommandBuilder.create(registry, "deploy").option("--region <region>", {
       choices: ["jp"],
     });
 
@@ -170,10 +170,10 @@ describe("CommandRegistry", () => {
 
   it("returns the registered existing definition when a command path is redeclared", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "group sub").action(() => {});
+    CommandBuilder.create(registry, "group sub").action(() => {});
     const action = () => {};
 
-    new CommandBuilder(registry, "group").description("Group command").action(action);
+    CommandBuilder.create(registry, "group").description("Group command").action(action);
 
     const group = registry.resolve(["group"]);
     expect(group?.description).toBe("Group command");
@@ -183,16 +183,28 @@ describe("CommandRegistry", () => {
 
   it("warns about unreachable subcommands regardless of definition order", () => {
     const actionFirst = new CommandRegistry();
-    new CommandBuilder(actionFirst, "task <input>").action(() => {});
+    CommandBuilder.create(actionFirst, "task <input>").action(() => {});
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    new CommandBuilder(actionFirst, "task child");
+    CommandBuilder.create(actionFirst, "task child");
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('Subcommand "child"'), {
       code: "NODE_CLI_UNREACHABLE_SUBCOMMAND",
     });
 
     const childFirst = new CommandRegistry();
-    new CommandBuilder(childFirst, "task child");
-    new CommandBuilder(childFirst, "task <input>").action(() => {});
+    CommandBuilder.create(childFirst, "task child");
+    CommandBuilder.create(childFirst, "task <input>").action(() => {});
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('Command "task"'), {
+      code: "NODE_CLI_UNREACHABLE_SUBCOMMAND",
+    });
+    warning.mockRestore();
+  });
+
+  it("warns when re-registering a command with arguments leaves its subcommands unreachable", () => {
+    const registry = new CommandRegistry();
+    CommandBuilder.create(registry, "task").action(() => {});
+    CommandBuilder.create(registry, "task child");
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    CommandBuilder.create(registry, "task <input>");
     expect(warning).toHaveBeenCalledWith(expect.stringContaining('Command "task"'), {
       code: "NODE_CLI_UNREACHABLE_SUBCOMMAND",
     });
@@ -201,31 +213,31 @@ describe("CommandRegistry", () => {
 
   it("does not delete an independent command whose name matches another command alias", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "foo").alias("bar");
+    CommandBuilder.create(registry, "foo").alias("bar");
     registry.unregister(["foo"]);
-    new CommandBuilder(registry, "bar").action(() => {});
+    CommandBuilder.create(registry, "bar").action(() => {});
 
     expect(registry.resolve(["bar"])?.name).toBe("bar");
   });
 
   it("rejects registering a command that conflicts with an existing alias", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "foo").alias("bar");
+    CommandBuilder.create(registry, "foo").alias("bar");
 
-    expect(() => new CommandBuilder(registry, "bar")).toThrow(/conflicts with alias/);
+    expect(() => CommandBuilder.create(registry, "bar")).toThrow(/conflicts with alias/);
   });
 
   it("rejects an implicit parent group that conflicts with an alias", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "account").alias("user");
-    expect(() => new CommandBuilder(registry, "user create")).toThrow(/conflicts with alias/);
+    CommandBuilder.create(registry, "account").alias("user");
+    expect(() => CommandBuilder.create(registry, "user create")).toThrow(/conflicts with alias/);
   });
 
   it("removes aliases for every descendant in an unregistered subtree", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "group child leaf").alias("l");
+    CommandBuilder.create(registry, "group child leaf").alias("l");
     expect(registry.unregister(["group"])).toBe(true);
-    expect(() => new CommandBuilder(registry, "group child l")).not.toThrow();
+    expect(() => CommandBuilder.create(registry, "group child l")).not.toThrow();
     expect(registry.resolve(["group", "child", "l"])?.name).toBe("l");
   });
 });

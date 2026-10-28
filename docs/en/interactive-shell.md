@@ -171,7 +171,7 @@ The shell tries these in order and uses the first that produces candidates:
 
 Hidden options are never offered. Neither are hidden subcommands, nor subcommands that could never be reached because the parent command's own positional arguments would consume them first.
 
-Nothing is offered after the end-of-options marker `--`, because everything past it is a literal positional value.
+No option flags or option values are offered after the end-of-options marker `--`, because everything past it is a literal positional value. The command's own completer still runs there.
 
 Completion operates on the active pipe segment, so in `ls | gre<Tab>` the shell completes a command name for the second stage, not an argument of `ls`.
 
@@ -274,7 +274,7 @@ For a command typed at the shell prompt **without** a pipe, `ctx.stdin` is `null
 
 ### Stopping early
 
-When a downstream stage finishes while upstream stages are still producing, the upstream stages are cancelled with an internal stop marker. This is a **graceful** stop: it does not fail the chain, and it emits neither the `commandError` event nor the `error` event (see [Events and plugins](events-and-plugins.md)). It mirrors what a system shell does for `producer | head`.
+When a downstream stage finishes while upstream stages are still producing, the upstream stages are cancelled with an internal stop marker: their `ctx.signal` aborts, but their cancel handlers do not run. This is a **graceful** stop: it does not fail the chain, and it emits neither the `commandError` event nor the `error` event (see [Events and plugins](events-and-plugins.md)). It mirrors what a system shell does for `producer | head`.
 
 ### When a stage fails
 
@@ -398,7 +398,7 @@ cli
   });
 ```
 
-The shell also handles SIGTERM, the signal a process manager sends to ask a program to stop: cancellation is requested, a 200 ms grace period follows, history is saved, the `exit` event fires, and the process ends with status 143.
+The shell also handles SIGTERM, the signal a process manager sends to ask a program to stop: cancellation is requested (a running command's or mode action's `ctx.signal` aborts), a 200 ms grace period follows, history is saved, the `exit` event fires (bounded at 2000 ms, as on a force-quit), and the process ends with status 143. SIGHUP is not handled and ends the process with Node's default action.
 
 Exit codes are listed in full in [Errors](errors.md).
 

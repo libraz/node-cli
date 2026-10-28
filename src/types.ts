@@ -107,7 +107,7 @@ export interface CommandDefinition {
   aliases?: string[];
   /** Pre-action validator. Throw to reject execution. */
   validate?: (ctx: CommandContext) => void | Promise<void>;
-  /** Handler invoked when SIGINT is received during this command. */
+  /** Handler invoked when this command is interrupted: Ctrl-C, an aborted exec signal, or SIGTERM in the shell. */
   cancelHandler?: (ctx: CommandContext) => void;
 }
 
@@ -133,10 +133,13 @@ export interface CLIEventMap {
    */
   error: (error: Error) => void | Promise<void>;
   /**
-   * Fired once on every exit path of `CLI.start()`: after a direct-mode command
-   * completes, throws, or is force-quit; after a help index is printed for an
-   * empty argv or a non-TTY start; when plugin initialization fails; and when
-   * the interactive shell ends. The `exec()` method never fires it.
+   * Fired at most once per CLI: after a direct-mode command completes, throws,
+   * or is force-quit; after a help index is printed for an empty argv or a
+   * non-TTY start; when plugin initialization fails; when the interactive shell
+   * ends or receives SIGTERM; and when a force-quit ends a `CLI.exec()` call.
+   * The normal `exec()` path never fires it. A process ended by a signal the
+   * CLI does not handle (SIGTERM or SIGHUP in direct mode, SIGHUP in the shell)
+   * runs neither this event nor cancel handlers.
    */
   exit: () => void | Promise<void>;
 }

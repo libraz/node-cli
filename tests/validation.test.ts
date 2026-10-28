@@ -7,7 +7,7 @@ import { createMockStdout } from "./helpers.js";
 describe("command validation", () => {
   it("passes validation and executes action", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .validate((ctx) => {
         if (ctx.args.env !== "prod" && ctx.args.env !== "staging") {
           throw new Error("Invalid environment");
@@ -26,7 +26,7 @@ describe("command validation", () => {
 
   it("rejects on validation failure", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .validate((ctx) => {
         if (ctx.args.env === "dev") {
           throw new Error("dev environment not allowed");
@@ -47,7 +47,7 @@ describe("command validation", () => {
 
   it("async validation works", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .validate(async (ctx) => {
         await new Promise((r) => setTimeout(r, 5));
         if (ctx.args.env === "broken") {
@@ -73,7 +73,7 @@ describe("command validation", () => {
     const registry = new CommandRegistry();
     const order: string[] = [];
 
-    new CommandBuilder(registry, "test")
+    CommandBuilder.create(registry, "test")
       .validate(() => {
         order.push("validate");
       })

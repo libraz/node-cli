@@ -269,6 +269,16 @@ export class CommandRegistry {
   }
 
   /**
+   * Return the top-level commands that help and completion list: every
+   * registered command that is not hidden.
+   *
+   * @returns The visible root-level commands in registration order.
+   */
+  visibleTopLevel(): CommandDefinition[] {
+    return listVisible(this.root.values());
+  }
+
+  /**
    * Build the full name path for a command by walking up the parent chain.
    *
    * @param def - The command definition to trace.
@@ -309,6 +319,7 @@ function createGroupCommand(name: string): CommandDefinition {
  * @param source - The new definition providing updated values.
  */
 function mergeDefinition(target: CommandDefinition, source: CommandDefinition): void {
+  const wasUnreachable = hasUnreachableSubcommands(target);
   if (source.action) target.action = source.action;
   if (source.description) target.description = source.description;
   if (source.completer) target.completer = source.completer;
@@ -330,6 +341,12 @@ function mergeDefinition(target: CommandDefinition, source: CommandDefinition): 
       target.subcommands.set(k, v);
     }
   }
+  if (!wasUnreachable && hasUnreachableSubcommands(target)) {
+    process.emitWarning(
+      `Command "${target.name}" has positional arguments, so its subcommands cannot be dispatched once an action is set`,
+      { code: "NODE_CLI_UNREACHABLE_SUBCOMMAND" },
+    );
+  }
 }
 
 /**
@@ -345,4 +362,22 @@ function mergeDefinition(target: CommandDefinition, source: CommandDefinition): 
  */
 export function hasUnreachableSubcommands(cmd: CommandDefinition): boolean {
   return cmd.action !== undefined && cmd.argDefs.length > 0 && cmd.subcommands.size > 0;
+}
+
+/** The one place hidden commands are filtered out of a listing (also deduplicates aliases). */
+function listVisible(commands: Iterable<CommandDefinition>): CommandDefinition[] {
+  return [...new Set(commands)].filter((command) => !command.hidden);
+}
+
+/**
+ * Returns the subcommands of a command that a user can both see and invoke:
+ * not hidden, and none at all when the command's positional arguments make them
+ * unreachable (see {@link hasUnreachableSubcommands}). Every listing of
+ * subcommands (help, completion, not-found suggestions) reads from here.
+ *
+ * @param command - The parent command.
+ * @returns The visible subcommands in registration order, without alias duplicates.
+ */
+export function visibleSubcommands(command: CommandDefinition): CommandDefinition[] {
+  return hasUnreachableSubcommands(command) ? [] : listVisible(command.subcommands.values());
 }

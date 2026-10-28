@@ -2,13 +2,19 @@ import {
   activePipeSegment,
   formatOptionFlag,
   helpFlagBindings,
+  negatedFlag,
   parse,
   resolveOptionName,
+  scanWords,
   stripOptionPrefix,
-  tokenize,
 } from "../command/parser.js";
-import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
-import { ParseError } from "../errors.js";
+import {
+  type CommandRegistry,
+  hasUnreachableSubcommands,
+  visibleSubcommands,
+} from "../command/registry.js";
+import { guardCall } from "../guard.js";
+import { renderSafe } from "../output/color.js";
 import type { CommandDefinition, OptionDef } from "../types.js";
 import { SHELL_COMMANDS } from "./builtins.js";
 
@@ -104,21 +110,21 @@ export class ShellCompleter {
     // mirroring how execution splits pipes — so `ls | gr<TAB>` completes `grep`,
     // not a candidate derived from the first stage.
     const segment = activePipeSegment(line);
-    const tokenization = this.tokenizeIncomplete(segment);
-    if (!tokenization) return [[], segment];
-    const { tokens, incompleteQuote } = tokenization;
-    const endsWithSpace = /\s$/.test(segment);
+    const { words, openQuote, atBoundary: endsWithSpace } = scanWords(segment);
+    const tokens = words.map((word) => word.value);
+    // What readline will replace: the word under the cursor in its raw spelling.
+    const rawCurrent = endsWithSpace ? "" : (words[words.length - 1]?.raw ?? "");
 
-    // An opening quote by itself tokenizes to an empty token after synthetic
-    // closure. It is not the same as an empty command line, so do not enumerate
-    // every top-level command in the middle of editing it.
-    if (incompleteQuote && tokens.length === 1 && tokens[0] === "") return [[], ""];
+    // An opening quote by itself scans to an empty word. It is not the same as
+    // an empty command line, so do not enumerate every top-level command in the
+    // middle of editing it.
+    if (openQuote && tokens.length === 1 && tokens[0] === "") return [[], rawCurrent];
 
     // Empty or just starting — show top-level commands (including aliases)
     if (tokens.length === 0 || (tokens.length === 1 && !endsWithSpace)) {
       const current = tokens[0] ?? "";
       const candidates = this.getTopLevelNames().filter((name) => name.startsWith(current));
-      return [candidates, current];
+      return [candidates, rawCurrent];
     }
 
     // Try to match command path
@@ -134,17 +140,14 @@ export class ShellCompleter {
         const candidates = this.subcommandNames(parentMatch.command).filter((name) =>
           name.startsWith(partial),
         );
-        if (candidates.length > 0) return [candidates, partial];
+        if (candidates.length > 0) return [candidates, rawCurrent];
       }
     }
 
     const match = this.registry.matchCommandPath(tokens);
-    if (!match) {
-      // No match — try completing first token as command
-      const current = tokens[0];
-      const candidates = this.getTopLevelNames().filter((name) => name.startsWith(current));
-      return [candidates, current];
-    }
+    // Past an unknown first word there is nothing to complete: command names are
+    // only offered while the cursor is still in that first word (handled above).
+    if (!match) return [[], rawCurrent];
 
     const { command, consumed } = match;
     const remaining = tokens.slice(consumed);
@@ -159,8 +162,6 @@ export class ShellCompleter {
     const currentRemaining = pastDoubleDash ? positionalScopeRemaining : remaining;
     const currentLastToken = currentRemaining[currentRemaining.length - 1] ?? "";
     const typingOption = !pastDoubleDash && !endsWithSpace && lastToken.startsWith("-");
-    // What readline will replace: the word under the cursor in its raw spelling.
-    const rawCurrent = endsWithSpace ? "" : rawTokenSuffix(segment);
 
     // If we're at a command boundary and expecting subcommand (but not when the
     // user is clearly typing an option flag, which should list options instead).
@@ -178,7 +179,7 @@ export class ShellCompleter {
         // Partial subcommand
         const current = remaining[0];
         const candidates = this.subcommandNames(command).filter((name) => name.startsWith(current));
-        if (candidates.length > 0) return [candidates, current];
+        if (candidates.length > 0) return [candidates, rawCurrent];
       }
     }
 
@@ -227,7 +228,7 @@ export class ShellCompleter {
     ) {
       const candidates = this.optionFlags(command, current);
       if (candidates.length > 0) {
-        return [candidates, current];
+        return [candidates, rawCurrent];
       }
     }
 
@@ -249,22 +250,22 @@ export class ShellCompleter {
       }
       const filterByPrefix = (candidates: string[]) =>
         formatCompletionCandidates(candidates, current);
-      let result: ReturnType<NonNullable<CommandDefinition["completer"]>>;
       const controller = new AbortController();
-      try {
-        result = command.completer({
-          line: segment,
-          fullLine: line,
-          current,
-          commandPath,
-          args: parsedArgs,
-          options: parsedOptions,
-          iteration: this.tabCount,
-          signal: controller.signal,
-        });
-      } catch {
-        return [[], rawCurrent];
-      }
+      const result = guardCall<ReturnType<NonNullable<CommandDefinition["completer"]>> | undefined>(
+        () =>
+          command.completer?.({
+            line: segment,
+            fullLine: line,
+            current,
+            commandPath,
+            args: parsedArgs,
+            options: parsedOptions,
+            iteration: this.tabCount,
+            signal: controller.signal,
+          }),
+        () => undefined,
+      );
+      if (result === undefined) return [[], rawCurrent];
       if (result instanceof Promise) {
         return this.completeWithTimeout(result, rawCurrent, controller, filterByPrefix);
       }
@@ -301,14 +302,17 @@ export class ShellCompleter {
     provider: () => CompletionResult | Promise<CompletionResult>,
     fallback: CompletionResult,
   ): CompletionResult | Promise<CompletionResult> {
-    let result: CompletionResult | Promise<CompletionResult>;
-    try {
-      result = provider();
-    } catch {
-      return fallback;
-    }
-    if (!(result instanceof Promise)) return result;
-    return withCompletionTimeout(result, fallback, this.completionTimeoutMs);
+    const result = guardCall<CompletionResult | Promise<CompletionResult> | undefined>(
+      provider,
+      () => undefined,
+    );
+    if (result === undefined) return fallback;
+    const wellFormed = (value: unknown): CompletionResult => {
+      if (!Array.isArray(value) || typeof value[1] !== "string") return fallback;
+      return [safeCandidates(value[0]), value[1]];
+    };
+    if (!(result instanceof Promise)) return wellFormed(result);
+    return withCompletionTimeout(result.then(wellFormed), fallback, this.completionTimeoutMs);
   }
 
   /**
@@ -318,8 +322,7 @@ export class ShellCompleter {
     const names: string[] = ["--help", "-h"];
     if (this.hasVersion) names.push("--version", "-V");
     const seen = new Set<string>();
-    for (const cmd of this.registry.allTopLevel()) {
-      if (cmd.hidden) continue;
+    for (const cmd of this.registry.visibleTopLevel()) {
       if (!seen.has(cmd.name)) {
         seen.add(cmd.name);
         names.push(cmd.name);
@@ -342,8 +345,7 @@ export class ShellCompleter {
   private subcommandNames(command: CommandDefinition): string[] {
     const names: string[] = [];
     const seen = new Set<string>();
-    for (const sub of new Set(command.subcommands.values())) {
-      if (sub.hidden) continue;
+    for (const sub of visibleSubcommands(command)) {
       for (const name of [sub.name, ...(sub.aliases ?? [])]) {
         if (!seen.has(name)) {
           seen.add(name);
@@ -371,10 +373,8 @@ export class ShellCompleter {
       if (opt.schema.hidden) continue;
       const flag = `--${opt.long}`;
       if (flag.startsWith(prefix)) candidates.push(flag);
-      if (opt.schema.type === "boolean") {
-        const negated = `--no-${opt.long}`;
-        if (negated.startsWith(prefix)) candidates.push(negated);
-      }
+      const negated = negatedFlag(opt, command.options);
+      if (negated?.startsWith(prefix)) candidates.push(negated);
       for (const alias of opt.aliases) {
         // Spell the alias the way the parser accepts it; a multi-character alias
         // rendered with one dash is a suggestion the parser would reject.
@@ -421,12 +421,11 @@ export class ShellCompleter {
         return [candidates, rawCurrent];
       }
       // Function-based autocomplete
-      let result: ReturnType<Exclude<typeof autocomplete, string[]>>;
-      try {
-        result = autocomplete(current);
-      } catch {
-        return [[], rawCurrent];
-      }
+      const result = guardCall<ReturnType<Exclude<typeof autocomplete, string[]>> | undefined>(
+        () => autocomplete(current),
+        () => undefined,
+      );
+      if (result === undefined) return [[], rawCurrent];
       if (result instanceof Promise) {
         return withCompletionTimeout(
           result.then(
@@ -448,23 +447,24 @@ export class ShellCompleter {
 
     return [[], rawCurrent];
   }
+}
 
-  /** Tokenizes a line under active editing by synthetically closing its quote. */
-  private tokenizeIncomplete(
-    line: string,
-  ): { tokens: string[]; incompleteQuote: boolean } | undefined {
-    try {
-      return { tokens: tokenize(line), incompleteQuote: false };
-    } catch (error) {
-      if (!(error instanceof ParseError) || !error.quote) return undefined;
-      const closer = error.quote === "single" ? "'" : '"';
-      try {
-        return { tokens: tokenize(`${line}${closer}`), incompleteQuote: true };
-      } catch {
-        return undefined;
-      }
-    }
+/**
+ * Makes a provider's return value safe to hand to readline: anything but an
+ * array yields no candidates, non-string entries are dropped, and each string
+ * goes through {@link renderSafe}. A candidate that still carries an escape
+ * sequence afterwards (styling survives `renderSafe`) is dropped, because
+ * readline would both list and insert it verbatim.
+ */
+function safeCandidates(candidates: unknown): string[] {
+  if (!Array.isArray(candidates)) return [];
+  const safe: string[] = [];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const clean = renderSafe(candidate, { singleLine: true });
+    if (!clean.includes("\x1b")) safe.push(clean);
   }
+  return safe;
 }
 
 /**
@@ -472,39 +472,11 @@ export class ShellCompleter {
  * shell-sensitive characters so readline can insert a single valid argv token.
  * The escape set covers everything the framework's own tokenizer and pipe
  * splitter treat as syntax, so a candidate survives a round trip through them.
+ * Never throws, whatever the provider returned.
  */
-function formatCompletionCandidates(candidates: string[], current: string): string[] {
-  return (
-    current ? candidates.filter((candidate) => candidate.startsWith(current)) : candidates
-  ).map((candidate) => candidate.replace(/([\\\s'"`|])/g, "\\$1"));
-}
-
-/**
- * The word under the cursor exactly as it appears in the line, quoting and
- * escaping included. Readline replaces the trailing `completeOn.length`
- * characters with the chosen candidate, so a completion that inserts an escaped
- * candidate must report the raw text it replaces rather than the tokenizer's
- * unescaped value — otherwise the arithmetic slices the wrong number of
- * characters and corrupts the line.
- */
-function rawTokenSuffix(segment: string): string {
-  let start = 0;
-  let quote: string | undefined;
-  for (let i = 0; i < segment.length; i++) {
-    const char = segment[i];
-    if (!quote && char === "\\") {
-      i++;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) quote = undefined;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) start = i + 1;
-  }
-  return segment.slice(start);
+function formatCompletionCandidates(candidates: unknown, current: string): string[] {
+  const safe = safeCandidates(candidates);
+  return (current ? safe.filter((candidate) => candidate.startsWith(current)) : safe).map(
+    (candidate) => candidate.replace(/([\\\s'"`|])/g, "\\$1"),
+  );
 }

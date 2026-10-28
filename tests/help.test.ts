@@ -15,14 +15,45 @@ describe("HelpGenerator", () => {
     help = new HelpGenerator(registry);
   });
 
+  describe("shell commands footer", () => {
+    it("lists only the shell commands no application command has taken", () => {
+      CommandBuilder.create(registry, "exit").description("Leave the app");
+      expect(help.generateIndex()).toContain("Shell commands: quit");
+      expect(help.generateIndex()).not.toContain("exit,");
+    });
+
+    it("omits the footer when every shell command is taken, including with no visible commands", () => {
+      CommandBuilder.create(registry, "exit").hidden();
+      CommandBuilder.create(registry, "quit").hidden();
+      expect(help.generateIndex()).toBe("No commands available.");
+      CommandBuilder.create(registry, "deploy");
+      expect(help.generateIndex()).not.toContain("Shell commands");
+    });
+  });
+
+  describe("negation note", () => {
+    it("notes --no-<name> only where parsing it negates the option", () => {
+      CommandBuilder.create(registry, "paint")
+        .option("--color", { type: "boolean", default: true })
+        .option("--no-color", { type: "boolean" })
+        .option("--cache", { type: "boolean" })
+        .action(() => {});
+
+      const output = help.generateCommand(["paint"]);
+      expect(output).toContain("(negate with --no-cache)");
+      expect(output).not.toMatch(/--color[^\n]*\(negate with --no-color\)/);
+      expect(output.match(/negate with --no-color/g) ?? []).toHaveLength(0);
+    });
+  });
+
   describe("generateIndex", () => {
     it("returns message when no commands", () => {
       expect(help.generateIndex()).toContain("No commands");
     });
 
     it("lists all top-level commands", () => {
-      new CommandBuilder(registry, "deploy <env>").description("Deploy app");
-      new CommandBuilder(registry, "config").description("Configuration");
+      CommandBuilder.create(registry, "deploy <env>").description("Deploy app");
+      CommandBuilder.create(registry, "config").description("Configuration");
 
       const output = help.generateIndex();
       expect(output).toContain("deploy <env>");
@@ -38,7 +69,7 @@ describe("HelpGenerator", () => {
         version: "1.2.3",
         description: "A cool CLI tool",
       });
-      new CommandBuilder(registry, "deploy").description("Deploy app");
+      CommandBuilder.create(registry, "deploy").description("Deploy app");
 
       const output = helpWithMeta.generateIndex();
       expect(output).toContain("myapp v1.2.3");
@@ -49,7 +80,7 @@ describe("HelpGenerator", () => {
 
     it("shows name without version", () => {
       const helpWithMeta = new HelpGenerator(registry, { name: "myapp" });
-      new CommandBuilder(registry, "deploy").description("Deploy app");
+      CommandBuilder.create(registry, "deploy").description("Deploy app");
 
       const output = helpWithMeta.generateIndex();
       expect(output).toContain("myapp");
@@ -58,14 +89,14 @@ describe("HelpGenerator", () => {
 
     it("shows description without name", () => {
       const helpWithMeta = new HelpGenerator(registry, { description: "A tool" });
-      new CommandBuilder(registry, "deploy").description("Deploy app");
+      CommandBuilder.create(registry, "deploy").description("Deploy app");
 
       const output = helpWithMeta.generateIndex();
       expect(output).toContain("A tool");
     });
 
     it("does not show header when no metadata", () => {
-      new CommandBuilder(registry, "deploy").description("Deploy app");
+      CommandBuilder.create(registry, "deploy").description("Deploy app");
 
       const output = help.generateIndex();
       expect(output).toMatch(/^Available commands:/);
@@ -88,7 +119,7 @@ describe("HelpGenerator", () => {
     });
 
     it("shows usage line", () => {
-      new CommandBuilder(registry, "deploy <env>")
+      CommandBuilder.create(registry, "deploy <env>")
         .description("Deploy app")
         .option("--force", { type: "boolean" });
 
@@ -98,7 +129,7 @@ describe("HelpGenerator", () => {
     });
 
     it("shows arguments section", () => {
-      new CommandBuilder(registry, "deploy <env> [tag]");
+      CommandBuilder.create(registry, "deploy <env> [tag]");
       const output = help.generateCommand(["deploy"]);
       expect(output).toContain("Arguments:");
       expect(output).toContain("env");
@@ -106,7 +137,7 @@ describe("HelpGenerator", () => {
     });
 
     it("shows options section", () => {
-      new CommandBuilder(registry, "deploy <env>")
+      CommandBuilder.create(registry, "deploy <env>")
         .option("-t, --tag <tag>", { description: "Deploy tag", default: "latest" })
         .option("--force", { type: "boolean", description: "Skip confirm" });
 
@@ -119,7 +150,7 @@ describe("HelpGenerator", () => {
     });
 
     it("renders BigInt and circular defaults without throwing", () => {
-      new CommandBuilder(registry, "inspect").option("--value <value>", { type: "string" });
+      CommandBuilder.create(registry, "inspect").option("--value <value>", { type: "string" });
       const option = registry.resolve(["inspect"])?.options.get("value");
       const circular: Record<string, unknown> = {};
       circular.self = circular;
@@ -133,14 +164,14 @@ describe("HelpGenerator", () => {
     });
 
     it("hides hidden options", () => {
-      new CommandBuilder(registry, "deploy <env>").option("--secret", { hidden: true });
+      CommandBuilder.create(registry, "deploy <env>").option("--secret", { hidden: true });
 
       const output = help.generateCommand(["deploy"]);
       expect(output).not.toContain("--secret");
     });
 
     it("omits the options section when only hidden options bind both help flags", () => {
-      new CommandBuilder(registry, "deploy")
+      CommandBuilder.create(registry, "deploy")
         .option("-h", { type: "boolean", hidden: true })
         .option("--help", { type: "boolean", hidden: true });
 
@@ -148,9 +179,9 @@ describe("HelpGenerator", () => {
     });
 
     it("shows subcommands", () => {
-      new CommandBuilder(registry, "user").description("User management");
-      new CommandBuilder(registry, "user create <name>").description("Create user");
-      new CommandBuilder(registry, "user delete <name>").description("Delete user");
+      CommandBuilder.create(registry, "user").description("User management");
+      CommandBuilder.create(registry, "user create <name>").description("Create user");
+      CommandBuilder.create(registry, "user delete <name>").description("Delete user");
 
       const output = help.generateCommand(["user"]);
       expect(output).toContain("Commands:");
@@ -159,14 +190,14 @@ describe("HelpGenerator", () => {
     });
 
     it("shows required option", () => {
-      new CommandBuilder(registry, "deploy <env>").option("--token <token>", { required: true });
+      CommandBuilder.create(registry, "deploy <env>").option("--token <token>", { required: true });
 
       const output = help.generateCommand(["deploy"]);
       expect(output).toContain("(required)");
     });
 
     it("shows choices", () => {
-      new CommandBuilder(registry, "deploy <env>").option("--env <env>", {
+      CommandBuilder.create(registry, "deploy <env>").option("--env <env>", {
         choices: ["prod", "dev"],
       });
 
@@ -179,7 +210,9 @@ describe("HelpGenerator", () => {
 describe("built-in help option rendering", () => {
   it("does not duplicate help when a command declares its own help option", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "run").option("--help", { type: "boolean" }).action(() => {});
+    CommandBuilder.create(registry, "run")
+      .option("--help", { type: "boolean" })
+      .action(() => {});
     const help = new HelpGenerator(registry).generateCommand(["run"]);
 
     expect(help.match(/--help/g)?.length).toBe(1);
@@ -187,7 +220,7 @@ describe("built-in help option rendering", () => {
 
   it("includes [options] in usage even when only built-in help is available", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "run").action(() => {});
+    CommandBuilder.create(registry, "run").action(() => {});
     const help = new HelpGenerator(registry).generateCommand(["run"]);
 
     expect(help).toContain("Usage: run [options]");
@@ -198,10 +231,14 @@ describe("built-in help option rendering", () => {
 describe("hidden commands", () => {
   it("excludes hidden commands from index, subcommand help, and completion", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "visible").action(() => {});
-    new CommandBuilder(registry, "secret").hidden().action(() => {});
-    new CommandBuilder(registry, "admin visible").action(() => {});
-    new CommandBuilder(registry, "admin secret").hidden().action(() => {});
+    CommandBuilder.create(registry, "visible").action(() => {});
+    CommandBuilder.create(registry, "secret")
+      .hidden()
+      .action(() => {});
+    CommandBuilder.create(registry, "admin visible").action(() => {});
+    CommandBuilder.create(registry, "admin secret")
+      .hidden()
+      .action(() => {});
     const help = new HelpGenerator(registry);
 
     expect(help.generateIndex()).toContain("visible");
@@ -219,7 +256,7 @@ describe("hidden commands", () => {
 describe("terminal-width help wrapping", () => {
   it("wraps descriptions and preserves the description-column indent", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy")
+    CommandBuilder.create(registry, "deploy")
       .description("Deploys a service with a deliberately long description for narrow terminals")
       .action(() => {});
     const originalColumns = process.stdout.columns;
@@ -247,7 +284,7 @@ describe("shell commands", () => {
 
     const completer = new ShellCompleter(registry);
     expect((completer.complete("ex") as [string[], string])[0]).toContain("exit");
-    new CommandBuilder(registry, "exit").action(() => {});
+    CommandBuilder.create(registry, "exit").action(() => {});
     expect((new ShellCompleter(registry).complete("ex") as [string[], string])[0]).toEqual([
       "exit",
     ]);
@@ -257,7 +294,7 @@ describe("shell commands", () => {
 describe("help only shows what dispatch can reach", () => {
   function shadowedRegistry() {
     const registry = new CommandRegistry();
-    const task = new CommandBuilder(registry, "task <name>");
+    const task = CommandBuilder.create(registry, "task <name>");
     task
       .command("list")
       .description("List tasks")
@@ -274,7 +311,7 @@ describe("help only shows what dispatch can reach", () => {
 
   it("omits the Commands heading when every subcommand is hidden", () => {
     const registry = new CommandRegistry();
-    const group = new CommandBuilder(registry, "admin");
+    const group = CommandBuilder.create(registry, "admin");
     group
       .command("secret")
       .hidden()
@@ -286,7 +323,7 @@ describe("help only shows what dispatch can reach", () => {
 
   it("wraps option descriptions the same way it wraps command descriptions", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy")
+    CommandBuilder.create(registry, "deploy")
       .option("--strategy <name>", {
         description:
           "Choose the rollout strategy used when replacing running instances of the service",

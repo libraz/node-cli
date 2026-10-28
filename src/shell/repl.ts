@@ -1,19 +1,18 @@
-import { createInterface, type Interface } from "node:readline/promises";
+import type { Writable } from "node:stream";
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
 import { presentError } from "../errors.js";
 import { streamIsTTY } from "../output/color.js";
+import { inputExhausted, type LineReader, openLineReader } from "../output/line-reader.js";
 import { releaseAll } from "../output/progress.js";
 import { isShellCommand } from "./builtins.js";
 import type { CompletionResult } from "./completion.js";
 import { ShellCompleter } from "./completion.js";
 import { History } from "./history.js";
 
-/**
- * Interactive REPL (Read-Eval-Print Loop) shell.
- * Provides a command prompt with history persistence and tab-completion,
- * routing user input to the appropriate command handlers.
- */
+/** Milliseconds a SIGTERM leaves cancelled work to clean up before the shell exits. */
+const SIGTERM_GRACE_MS = 200;
+
 /**
  * Definition of a mode sub-REPL with its own prompt and action handler.
  */
@@ -22,15 +21,15 @@ export interface ModeConfig {
   prompt: string;
   /**
    * Handler for each line of input within the mode. The context carries a
-   * `signal` that is aborted when the user presses Ctrl-C during the action, so a
-   * long-running mode action (e.g. a slow query) can cancel cooperatively. A
-   * second Ctrl-C force-quits the process.
+   * `signal` that is aborted when the user presses Ctrl-C or the shell receives
+   * SIGTERM during the action, so a long-running mode action (e.g. a slow query)
+   * can cancel cooperatively. A second Ctrl-C force-quits the process.
    */
   action: (
     input: string,
     ctx: {
-      stdout: NodeJS.WritableStream;
-      stderr: NodeJS.WritableStream;
+      stdout: Writable;
+      stderr: Writable;
       signal: AbortSignal;
     },
   ) => void | Promise<void>;
@@ -42,7 +41,26 @@ export interface ModeConfig {
   history?: "session" | "none";
 }
 
-export class Shell {
+/**
+ * The running interactive shell as a command action sees it through `ctx.shell`.
+ */
+export interface Shell {
+  /** Changes the prompt; inside a mode the change applies after leaving it. */
+  setPrompt(text: string): void;
+  /** Enters a mode sub-REPL that routes every line to the mode's action. */
+  enterMode(config: ModeConfig): void;
+  /** Leaves the current mode and returns to the command prompt. */
+  exitMode(): void;
+  /** Ends the shell session after the current input. */
+  stop(): void;
+}
+
+/**
+ * Interactive REPL (Read-Eval-Print Loop) shell.
+ * Provides a command prompt with history persistence and tab-completion,
+ * routing user input to the appropriate command handlers.
+ */
+export class InteractiveShell implements Shell {
   private readonly router: CommandRouter;
   private readonly registry: CommandRegistry;
   private promptStr: string;
@@ -50,14 +68,12 @@ export class Shell {
   private readonly history: History;
   private readonly historySize: number;
   private readonly completer: ShellCompleter;
-  private rl?: Interface;
-  /** Lines received while a command is being scheduled or executed. */
-  private readonly pendingLines: string[] = [];
-  /** Unsubmitted text that is prepended to the next completed readline input. */
-  private pendingPartialLine?: string;
-  private pendingLineResolver?: (line: string | null) => void;
+  private reader?: LineReader;
+  /** Removes the listeners {@link openReader} attached beside the reader. */
+  private detachReader?: () => void;
+  /** Cancels the running mode action, so SIGTERM reaches it as Ctrl-C does. */
+  private modeController?: AbortController;
   private running = false;
-  private reopeningReadline = false;
   private mode: ModeConfig | null = null;
   private modeHistory: string[] = [];
   private readonly beforeExecute?: () => Promise<void>;
@@ -100,61 +116,36 @@ export class Shell {
   }
 
   /**
-   * Creates (or recreates) the readline interface with current history.
+   * Opens the line reader for the next prompt with the current history. Lines
+   * and unsubmitted text the previous reader left on stdin carry over to it.
    */
-  private openReadline(history: string[]): void {
+  private openReader(history: string[]): void {
     this.completer.reset();
     const mode = this.mode;
+    const modeCompleter = mode?.completer;
     const activeHistory = mode
       ? mode.history === "none"
         ? []
         : [...this.modeHistory].reverse()
       : [...history].reverse();
-    this.rl = createInterface({
+    const reader = openLineReader({
       input: process.stdin,
       output: process.stdout,
-      prompt: this.mode ? this.mode.prompt : this.promptStr,
+      prompt: mode ? mode.prompt : this.promptStr,
       // readline expects most-recent-first; our history is stored oldest-first.
       history: activeHistory,
       completer: mode
-        ? mode.completer
+        ? modeCompleter
           ? (line: string) =>
-              Promise.resolve(
-                this.completer.runProvider(
-                  () => mode.completer?.(line) ?? ([[], line] as CompletionResult),
-                  [[], line],
-                ),
-              )
+              Promise.resolve(this.completer.runProvider(() => modeCompleter(line), [[], line]))
           : undefined
         : (line: string) => this.completer.complete(line),
       terminal: streamIsTTY(process.stdin) && streamIsTTY(process.stdout),
     });
-    this.rl.on("close", () => {
-      const resolve = this.pendingLineResolver;
-      this.pendingLineResolver = undefined;
-      resolve?.(null);
-      if (!this.reopeningReadline && !this.mode) {
-        this.running = false;
-      }
-    });
-    // Keep this listener installed for the lifetime of the readline instance.
-    // A terminal paste can produce several `line` events in one input turn;
-    // using a one-shot listener would accept the first and silently discard the
-    // rest before the shell loop gets a chance to subscribe again.
-    this.rl.on("line", (line: string) => {
-      const resolve = this.pendingLineResolver;
-      if (resolve) {
-        this.pendingLineResolver = undefined;
-        resolve(line);
-      } else {
-        this.pendingLines.push(line);
-      }
-    });
+    const { rl } = reader;
 
     // Ctrl+C at the prompt cancels the current line instead of exiting the shell.
-    this.rl.on("SIGINT", () => {
-      const rl = this.rl;
-      if (!rl) return;
+    rl.on("SIGINT", () => {
       // Clear the WHOLE line — both sides of the cursor — so no buffered text
       // survives to be executed by a following Enter. Ctrl+U erases left of the
       // cursor and Ctrl+K erases right of it; together they abandon the entire
@@ -165,34 +156,23 @@ export class Shell {
       process.stdout.write("\n");
       rl.prompt();
     });
+
+    // Any key other than Tab edits the line, so progressive completion restarts.
+    const onKeypress = (_char: unknown, key?: { name?: string }) => {
+      if (key?.name !== "tab") this.completer.reset();
+    };
+    process.stdin.on("keypress", onKeypress);
+
+    this.reader = reader;
+    this.detachReader = () => process.stdin.off("keypress", onKeypress);
   }
 
-  /**
-   * Reads the next line of user input via the readline interface.
-   * Returns `null` on EOF / close.
-   */
-  private readNextLine(): Promise<string | null> {
-    const line = this.pendingLines.shift();
-    if (line !== undefined) return Promise.resolve(line);
-    if (!this.rl) return Promise.resolve(null);
-    return new Promise<string | null>((resolve) => {
-      this.pendingLineResolver = resolve;
-    });
-  }
-
-  /**
-   * Releases readline before executing a command without losing a partially
-   * typed final line that readline has already buffered.
-   */
-  private closeReadlineForExecution(): void {
-    const rl = this.rl;
-    if (!rl) return;
-    const partialLine = rl.line;
-    this.reopeningReadline = true;
-    rl.close();
-    this.reopeningReadline = false;
-    this.rl = undefined;
-    if (partialLine.length > 0) this.pendingPartialLine = partialLine;
+  /** Closes the line reader, releasing stdin; unread input stays queued for the next one. */
+  private closeReader(): void {
+    this.detachReader?.();
+    this.detachReader = undefined;
+    this.reader?.close();
+    this.reader = undefined;
   }
 
   /**
@@ -206,16 +186,21 @@ export class Shell {
 
     this.running = true;
 
+    // The process listeners stay installed through teardown, so Ctrl-C and
+    // SIGTERM remain handled while history is saved and `exit` listeners run.
     const releaseProcessListeners = this.registerProcessListeners();
     try {
-      await this.runLoop(historyEntries);
+      try {
+        await this.runLoop(historyEntries);
+      } finally {
+        // Release the terminal before the first teardown await, so no prompt is
+        // redrawn and no key is read while listeners run.
+        this.closeReader();
+        await this.history.save();
+        await this.router.emitExit();
+      }
     } finally {
       releaseProcessListeners();
-      await this.history.save();
-      await this.router.emit("exit");
-      if (this.rl) {
-        this.rl.close();
-      }
     }
   }
 
@@ -245,13 +230,10 @@ export class Shell {
       // SIGTERM exit. A short grace period lets handlers release locks and
       // temporary resources without allowing a hung command to block shutdown.
       this.router.triggerCancel();
+      this.modeController?.abort();
       graceTimer = setTimeout(() => {
-        void (async () => {
-          await this.history.save();
-          await this.router.emit("exit");
-          process.exit(143); // 128 + SIGTERM
-        })();
-      }, 200);
+        this.router.terminate(143, () => this.history.save()); // 128 + SIGTERM
+      }, SIGTERM_GRACE_MS);
     };
 
     // A REPL is a long-lived session: asynchronous work started by a command
@@ -275,9 +257,8 @@ export class Shell {
     process.on("uncaughtException", onUncaughtException);
 
     return () => {
-      // Dropping the pending grace timer keeps a SIGTERM received during the
-      // final teardown from emitting `exit` a second time and overwriting the
-      // exit code the normal path just settled on.
+      // Teardown has finished; a pending grace timer must not override the exit
+      // code the normal path settled on.
       if (graceTimer) clearTimeout(graceTimer);
       process.removeListener("SIGINT", onSigintGap);
       process.removeListener("SIGTERM", onSigterm);
@@ -292,30 +273,31 @@ export class Shell {
       process.stdout.write(`${this.banner}\n`);
     }
 
-    this.openReadline(historyEntries);
+    this.openReader(historyEntries);
 
-    while (this.running) {
-      this.rl?.prompt();
-      // Text the previous interface had buffered but never submitted is typed
-      // back in after the prompt is drawn, so the line on screen is always a
-      // prefix of what pressing Enter will run. Prepending it invisibly at
-      // submit time made the two diverge. `prompt()` resets the cursor, so this
-      // has to follow it.
-      if (this.pendingPartialLine !== undefined) {
-        const carried = this.pendingPartialLine;
-        this.pendingPartialLine = undefined;
-        this.rl?.write(carried);
+    while (this.running && this.reader) {
+      // Draws the prompt and types back text the previous reader had buffered
+      // but never submitted, so the line on screen is always a prefix of what
+      // pressing Enter will run.
+      this.reader.prompt();
+
+      let line: string | null;
+      try {
+        line = await this.reader.read();
+      } catch (err) {
+        // The input failed; it cannot deliver another line.
+        this.reportError(err);
+        break;
       }
-
-      const line = await this.readNextLine();
       if (line === null) {
         // EOF (Ctrl-D). Inside a mode sub-REPL, leave the mode and return to the
         // parent prompt rather than terminating the whole shell — unless the
-        // input stream itself has ended, in which case a reopened readline would
-        // never receive another close event and the shell would hang forever.
-        if (this.mode && !process.stdin.readableEnded) {
+        // input stream itself is exhausted, in which case a reopened reader
+        // would never receive another line and the shell would hang forever.
+        if (this.running && this.mode && !inputExhausted(process.stdin)) {
           this.exitMode();
-          this.openReadline(this.history.entries());
+          this.closeReader();
+          this.openReader(this.history.entries());
           continue;
         }
         break;
@@ -333,24 +315,20 @@ export class Shell {
         // unreachable there and honouring it would strand the user in the mode.
         if (this.mode) {
           this.exitMode();
-          this.reopeningReadline = true;
-          this.rl?.close();
-          this.reopeningReadline = false;
-          this.rl = undefined;
-          if (process.stdin.readableEnded) break;
-          this.openReadline(this.history.entries());
+          this.closeReader();
+          if (inputExhausted(process.stdin)) break;
+          this.openReader(this.history.entries());
           continue;
         }
         // At the top level an application command of the same name wins.
         if (!this.registry.resolve([trimmed])) break;
       }
 
-      // Close readline to fully release stdin before command execution AND before
-      // any async persistence below. This prevents input contention: while an
-      // `await` runs, an open readline would consume the next buffered line and
-      // drop it. It also frees stdin for commands that use prompt.* or create
-      // their own readline interface.
-      this.closeReadlineForExecution();
+      // Close the reader to fully release stdin before command execution AND
+      // before any async persistence below. Lines that arrive meanwhile stay
+      // queued for the next reader, and commands that use prompt.* or create
+      // their own reader get the input to themselves.
+      this.closeReader();
       process.stdin.pause();
 
       // Only persist top-level commands; mode sub-REPL input (which may be
@@ -358,8 +336,7 @@ export class Shell {
       if (!this.mode) {
         this.history.add(trimmed);
         // Persist before command execution so a later force-quit cannot discard
-        // commands already accepted in this session. Readline is closed above,
-        // so this async write cannot consume or lose buffered terminal input.
+        // commands already accepted in this session.
         await this.history.save();
       } else if (this.mode.history !== "none") {
         if (this.modeHistory[this.modeHistory.length - 1] !== trimmed) {
@@ -370,83 +347,88 @@ export class Shell {
         }
       }
 
-      try {
-        if (this.mode) {
-          // Mode actions bypass the router's command execution, so cancellation is
-          // driven by a dedicated controller: the first Ctrl-C aborts this signal
-          // (cooperative), a second force-quits the process.
-          const controller = new AbortController();
-          let interrupted = false;
-          try {
-            await this.router.runWithSigintCancel(
-              async () => {
-                await this.mode?.action(trimmed, {
-                  stdout: process.stdout,
-                  stderr: process.stderr,
-                  signal: controller.signal,
-                });
-              },
-              {
+      if (this.mode) {
+        await this.runModeAction(this.mode, trimmed);
+      } else {
+        let interrupted = false;
+        try {
+          // Drain any pending async plugins (registered but not yet initialized)
+          // before running, so a late plugin failure surfaces instead of showing
+          // up only as a missing command.
+          if (this.beforeExecute) await this.beforeExecute();
+          await this.router.runWithSigintCancel(
+            async () => {
+              await this.router.execute(trimmed, {
+                shell: this,
+                stdout: process.stdout,
                 stderr: process.stderr,
-                onForceQuit: () => this.router.emit("exit"),
-                onInterrupt: () => {
-                  if (controller.signal.aborted) return false;
-                  controller.abort();
-                  interrupted = true;
-                  return true;
-                },
+              });
+            },
+            {
+              onInterrupt: () => {
+                interrupted = this.router.triggerCancel();
+                return interrupted;
               },
-            );
-          } catch (err) {
-            this.reportError(err, interrupted);
-          }
-        } else {
-          let interrupted = false;
-          try {
-            // Drain any pending async plugins (registered but not yet initialized)
-            // before running, so a late plugin failure surfaces instead of showing
-            // up only as a missing command.
-            if (this.beforeExecute) await this.beforeExecute();
-            await this.router.runWithSigintCancel(
-              async () => {
-                await this.router.execute(trimmed, {
-                  shell: this,
-                  stdout: process.stdout,
-                  stderr: process.stderr,
-                });
-              },
-              {
-                onForceQuit: () => this.router.emit("exit"),
-                onInterrupt: () => {
-                  interrupted = this.router.triggerCancel();
-                  return interrupted;
-                },
-              },
-            );
-          } catch (err) {
-            this.reportError(err, interrupted);
-          }
+            },
+          );
+        } catch (err) {
+          this.reportError(err, interrupted);
         }
-      } finally {
-        // Mode actions do not run through CommandRouter.execute(), so they need
-        // the same unconditional progress cleanup as ordinary commands.
-        releaseAll();
       }
 
-      // Recreate readline with updated history for the next prompt cycle.
+      // Reopen the reader with updated history for the next prompt cycle.
       if (this.running) {
         // A piped/non-interactive input may have reached EOF while the command
-        // (or the history write above) was running. Reopening readline after
-        // that point would never receive another close event.
-        if (process.stdin.readableEnded) break;
-        this.openReadline(this.mode ? [] : this.history.entries());
-        // Pair with the `process.stdin.pause()` above: the reopened readline is
+        // (or the history write above) was running, with every line consumed.
+        if (inputExhausted(process.stdin)) break;
+        this.openReader(this.mode ? [] : this.history.entries());
+        // Pair with the `process.stdin.pause()` above: the reopened reader is
         // now attached, so resume the input to guarantee buffered lines (and a
         // pending EOF) flow to it. Attaching a `data` listener does not reliably
         // un-pause an explicitly paused stream across Node versions, so resume
         // explicitly rather than relying on that side effect.
         process.stdin.resume();
       }
+    }
+  }
+
+  /**
+   * Runs one line of mode input. Mode actions bypass the router's command
+   * execution, so cancellation is driven by a dedicated controller: Ctrl-C or
+   * SIGTERM aborts its signal (cooperative), a second Ctrl-C force-quits.
+   */
+  private async runModeAction(mode: ModeConfig, input: string): Promise<void> {
+    const controller = new AbortController();
+    this.modeController = controller;
+    try {
+      await this.router.runWithSigintCancel(
+        async () => {
+          try {
+            await mode.action(input, {
+              stdout: process.stdout,
+              stderr: process.stderr,
+              signal: controller.signal,
+            });
+          } finally {
+            // The same progress cleanup router.execute gives a command, before
+            // any error is reported below.
+            releaseAll();
+          }
+        },
+        {
+          stderr: process.stderr,
+          onInterrupt: () => {
+            if (controller.signal.aborted) return false;
+            controller.abort();
+            return true;
+          },
+        },
+      );
+    } catch (err) {
+      // Only an interrupt or SIGTERM aborts this controller.
+      this.reportError(err, controller.signal.aborted);
+    } finally {
+      this.modeController = undefined;
     }
   }
 
@@ -466,7 +448,7 @@ export class Shell {
    */
   stop(): void {
     this.running = false;
-    this.rl?.close();
+    this.closeReader();
   }
 
   /**
@@ -478,8 +460,8 @@ export class Shell {
    */
   setPrompt(text: string): void {
     this.promptStr = text;
-    if (this.rl && !this.mode) {
-      this.rl.setPrompt(text);
+    if (this.reader && !this.mode) {
+      this.reader.rl.setPrompt(text);
     }
   }
 
@@ -496,7 +478,7 @@ export class Shell {
     if (config.message) {
       process.stdout.write(`${config.message}\n`);
     }
-    this.rl?.setPrompt(config.prompt);
+    this.reader?.rl.setPrompt(config.prompt);
   }
 
   /**
@@ -505,6 +487,6 @@ export class Shell {
   exitMode(): void {
     this.mode = null;
     this.modeHistory = [];
-    this.rl?.setPrompt(this.promptStr);
+    this.reader?.rl.setPrompt(this.promptStr);
   }
 }

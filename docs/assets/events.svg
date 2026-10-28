@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 480" width="960" height="480" role="img" aria-labelledby="ttl dsc">
   <title id="ttl">Lifecycle events and plugin registration</title>
-  <desc id="dsc">The left panel is a vertical timeline of one command run: resolve and parse, command.validate(ctx), beforeExecute(ctx), action(ctx), afterExecute(ctx). A rail beside the timeline marks that any stage can fail, and two arrows leave the same failure point — one to commandError(err, ctx) and one to error(err) — because both fire. Below, the exit event fires on every cli.start exit path but not on the normal programmatic path. The right panel shows two cli.use calls handing a PluginContext to each plugin, which can call command(), on(), off() and catch(), all writing into one shared command registry and event listener list; plugin bodies run in a single serial queue and a plugin that throws is fatal.</desc>
+  <desc id="dsc">The left panel is a vertical timeline of one command run: resolve and parse, command.validate(ctx), beforeExecute(ctx), action(ctx), afterExecute(ctx). A rail beside the timeline marks that any stage can fail, and two arrows leave the same failure point — one to commandError(err, ctx) and one to error(err) — because both fire. Below, the exit event fires once when cli.start ends but not on the normal programmatic path. The right panel shows two cli.use calls handing a PluginContext to each plugin, which can call command(), on(), off() and catch(), all writing into one shared command registry and event listener list; plugin bodies run in a single serial queue and a plugin that throws is fatal.</desc>
 
   <style>
     .bg    { fill:#f6f8fa }
@@ -101,7 +101,7 @@
   <path class="ln2" d="M 143 306 V 330" marker-end="url(#b)"/>
   <rect class="alt" x="48" y="332" width="190" height="34" rx="7"/>
   <text class="mono2" x="143" y="354" text-anchor="middle">exit</text>
-  <text class="s" x="252" y="346">fires on every <tspan class="monod">cli.start()</tspan> exit path.</text>
+  <text class="s" x="252" y="346">fires once when <tspan class="monod">cli.start()</tspan> ends.</text>
   <text class="s" x="252" y="360">It does NOT fire on the normal <tspan class="monod">cli.</tspan><tspan class="monod">exec</tspan><tspan class="monod">()</tspan> path.</text>
 
   <text class="s" x="40" y="392">Handlers run in registration order and are awaited; a handler that</text>

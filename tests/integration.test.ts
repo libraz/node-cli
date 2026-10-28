@@ -5,9 +5,11 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { CLI } from "../src/cli.js";
 import { createCLI } from "../src/index.js";
-import { createMockStdout, createMockTTY } from "./helpers.js";
+import { createMockStdout, createMockTTY, restoreProcessStateAfterEach } from "./helpers.js";
 
 describe("CLI (integration)", () => {
+  restoreProcessStateAfterEach();
+
   it("creates CLI via factory function", () => {
     const cli = createCLI({ name: "test" });
     expect(cli).toBeInstanceOf(CLI);
@@ -20,7 +22,6 @@ describe("CLI (integration)", () => {
 
     // Redirect stderr to avoid error output
     const _stderr = createMockStdout();
-    const _origStderr = process.stderr.write;
 
     await cli.start(["greet", "world"]);
     expect(action).toHaveBeenCalledOnce();
@@ -62,15 +63,11 @@ describe("CLI (integration)", () => {
         }),
     );
 
-    try {
-      const execution = cli.start(["wait"]);
-      await running;
-      process.emit("SIGINT");
-      await execution;
-      expect(process.exitCode).toBe(130);
-    } finally {
-      process.exitCode = 0;
-    }
+    const execution = cli.start(["wait"]);
+    await running;
+    process.emit("SIGINT");
+    await execution;
+    expect(process.exitCode).toBe(130);
   });
 
   it("uses exit status 130 when a SIGINT-aborted action rejects", async () => {
@@ -92,39 +89,25 @@ describe("CLI (integration)", () => {
     );
 
     const stderr = createMockStdout();
-    const originalWrite = process.stderr.write;
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
-    try {
-      const execution = cli.start(["abort"]);
-      await running;
-      process.emit("SIGINT");
-      await execution;
-      expect(process.exitCode).toBe(130);
-      expect(stderr.getOutput()).toBe(
-        "\nInterrupted. Press Ctrl-C again to force quit.\nCancelled\n",
-      );
-    } finally {
-      process.stderr.write = originalWrite;
-      process.exitCode = 0;
-    }
+    const execution = cli.start(["abort"]);
+    await running;
+    process.emit("SIGINT");
+    await execution;
+    expect(process.exitCode).toBe(130);
+    expect(stderr.getOutput()).toBe(
+      "\nInterrupted. Press Ctrl-C again to force quit.\nCancelled\n",
+    );
   });
 
   it("handles command not found in direct mode", async () => {
     const cli = createCLI();
     const stderr = createMockStdout();
-    const origWrite = process.stderr.write;
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
-    try {
-      await cli.start(["nonexistent"]);
-    } finally {
-      process.stderr.write = origWrite;
-    }
+    await cli.start(["nonexistent"]);
     expect(process.exitCode).toBe(1);
     expect(stderr.getOutput()).toContain("Command not found");
-
-    // Reset exit code
-    process.exitCode = 0;
   });
 
   it("built-in help command works", async () => {
@@ -132,14 +115,9 @@ describe("CLI (integration)", () => {
     cli.command("deploy <env>").description("Deploy app");
 
     const stdout = createMockStdout();
-    const origWrite = process.stdout.write;
     process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
 
-    try {
-      await cli.start(["help"]);
-    } finally {
-      process.stdout.write = origWrite;
-    }
+    await cli.start(["help"]);
     expect(stdout.getOutput()).toContain("deploy <env>");
     expect(stdout.getOutput()).toContain("Deploy app");
   });
@@ -152,14 +130,9 @@ describe("CLI (integration)", () => {
       .option("--force", { type: "boolean", description: "Skip confirmation" });
 
     const stdout = createMockStdout();
-    const origWrite = process.stdout.write;
     process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
 
-    try {
-      await cli.start(["help", "deploy"]);
-    } finally {
-      process.stdout.write = origWrite;
-    }
+    await cli.start(["help", "deploy"]);
     expect(stdout.getOutput()).toContain("Deploy to environment");
     expect(stdout.getOutput()).toContain("--force");
   });
@@ -206,18 +179,10 @@ describe("CLI (integration)", () => {
       .action(() => {});
 
     const stderr = createMockStdout();
-    const origWrite = process.stderr.write;
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
-    try {
-      await cli.start(["login", "--token", "abc"]);
-    } finally {
-      process.stderr.write = origWrite;
-    }
+    await cli.start(["login", "--token", "abc"]);
     expect(stderr.getOutput()).toContain("Token too short");
-
-    // Reset exit code
-    process.exitCode = 0;
   });
 
   it("prompt and history methods are chainable", () => {

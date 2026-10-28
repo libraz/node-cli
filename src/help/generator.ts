@@ -1,7 +1,7 @@
-import { formatOptionFlag, helpFlagBindings } from "../command/parser.js";
-import { type CommandRegistry, hasUnreachableSubcommands } from "../command/registry.js";
+import { formatOptionFlag, helpFlagBindings, negatedFlag } from "../command/parser.js";
+import { type CommandRegistry, visibleSubcommands } from "../command/registry.js";
 import { stringWidth } from "../output/color.js";
-import { isShellCommand, SHELL_COMMANDS_LABEL } from "../shell/builtins.js";
+import { isShellCommand, shellCommandsLabel } from "../shell/builtins.js";
 import type { ArgDef, CommandDefinition, OptionDef } from "../types.js";
 
 /**
@@ -48,13 +48,15 @@ export class HelpGenerator {
    */
   generateIndex(): string {
     const commands = this.registry
-      .allTopLevel()
-      .filter((command) => !command.hidden)
+      .visibleTopLevel()
       // The framework's own help command is registered before application
       // commands. Keep application registration order while listing that helper
       // last, so it does not occupy the first, most prominent command slot.
       .sort((left, right) => (left.name === "help" ? 1 : right.name === "help" ? -1 : 0));
-    if (commands.length === 0) return `No commands available.\n\n${SHELL_COMMANDS_LABEL}`;
+    const shellLabel = shellCommandsLabel(this.registry);
+    if (commands.length === 0) {
+      return shellLabel ? `No commands available.\n\n${shellLabel}` : "No commands available.";
+    }
 
     const lines: string[] = [];
 
@@ -86,7 +88,9 @@ export class HelpGenerator {
     if (version) {
       lines.push("", "Options:", "  -V, --version    Show the CLI version");
     }
-    lines.push("", SHELL_COMMANDS_LABEL, 'Type "help <command>" for more information.');
+    lines.push("");
+    if (shellLabel) lines.push(shellLabel);
+    lines.push('Type "help <command>" for more information.');
 
     return lines.join("\n");
   }
@@ -145,7 +149,7 @@ export class HelpGenerator {
     // (e.g. `-h, --host`), only the remaining unbound form is shown, so a working
     // built-in flag is never hidden and a shadowed one is never falsely promised.
     const visibleOptions = [...command.options.values()].filter((o) => !o.schema.hidden);
-    const optionEntries = formatOptionEntries(visibleOptions);
+    const optionEntries = formatOptionEntries(visibleOptions, command.options);
     const bindsHelp = helpFlagBindings(command.options);
     const helpForms: string[] = [];
     if (!bindsHelp.short) helpForms.push("-h");
@@ -161,23 +165,17 @@ export class HelpGenerator {
     // Subcommands — omitted when the command itself takes positional arguments,
     // because the parser would consume any subcommand name as an argument value,
     // making those subcommands unreachable. Advertising them would mislead.
-    if (command.subcommands.size > 0 && !hasUnreachableSubcommands(command)) {
-      // Deduplicate: aliases point to the same definition object
-      const subEntries: [string, string][] = [...new Set(command.subcommands.values())]
-        .filter((sub) => !sub.hidden)
-        .map((sub) => {
-          const usage = formatCommandUsage(sub);
-          const aliasNote =
-            sub.aliases && sub.aliases.length > 0 ? ` (alias: ${sub.aliases.join(", ")})` : "";
-          return [usage, `${sub.description ?? ""}${aliasNote}`];
-        });
-      // The heading is only written once there is something to list, so a
-      // command whose subcommands are all hidden does not end on a bare label.
-      if (subEntries.length > 0) {
-        lines.push("", "Commands:");
-        appendAlignedEntries(lines, subEntries);
-        lines.push("", `Type "help ${commandPath.join(" ")} <command>" for more information.`);
-      }
+    const visibleSubs = visibleSubcommands(command);
+    if (visibleSubs.length > 0) {
+      const subEntries: [string, string][] = visibleSubs.map((sub) => {
+        const usage = formatCommandUsage(sub);
+        const aliasNote =
+          sub.aliases && sub.aliases.length > 0 ? ` (alias: ${sub.aliases.join(", ")})` : "";
+        return [usage, `${sub.description ?? ""}${aliasNote}`];
+      });
+      lines.push("", "Commands:");
+      appendAlignedEntries(lines, subEntries);
+      lines.push("", `Type "help ${commandPath.join(" ")} <command>" for more information.`);
     }
 
     return lines.join("\n");
@@ -277,9 +275,13 @@ function formatCommandUsage(cmd: CommandDefinition): string {
  * schema description, required marker, default value, and allowed choices.
  *
  * @param options - The visible option definitions to format.
+ * @param allOptions - Every option of the command, used to decide which negations apply.
  * @returns An array of `[flags, description]` tuples.
  */
-function formatOptionEntries(options: OptionDef[]): [string, string][] {
+function formatOptionEntries(
+  options: OptionDef[],
+  allOptions: Map<string, OptionDef>,
+): [string, string][] {
   return options.map((opt) => {
     const parts: string[] = [];
 
@@ -314,11 +316,9 @@ function formatOptionEntries(options: OptionDef[]): [string, string][] {
     if (opt.schema.choices) {
       descParts.push(`[${opt.schema.choices.join(", ")}]`);
     }
-    // Boolean options accept an implicit negated form (`--no-<name>`) at parse
-    // time and in completion; note it here so it is discoverable in help too.
-    if (opt.schema.type === "boolean") {
-      descParts.push(`(negate with --no-${opt.long})`);
-    }
+    // Note the implicit negated form only when parsing it really negates this option.
+    const negated = negatedFlag(opt, allOptions);
+    if (negated) descParts.push(`(negate with ${negated})`);
 
     return [flags, descParts.join(" ")] as [string, string];
   });

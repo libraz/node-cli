@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { splitPipes } from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
@@ -35,10 +35,10 @@ describe("splitPipes", () => {
 describe("piped execution", () => {
   it("executes piped commands passing stdout to stdin", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "produce").action((ctx) => {
+    CommandBuilder.create(registry, "produce").action((ctx) => {
       ctx.stdout.write("hello from produce");
     });
-    new CommandBuilder(registry, "consume").action(async (ctx) => {
+    CommandBuilder.create(registry, "consume").action(async (ctx) => {
       if (ctx.stdin) {
         const chunks: Buffer[] = [];
         for await (const chunk of ctx.stdin) {
@@ -60,10 +60,10 @@ describe("piped execution", () => {
 
   it("passes injected stdin to the first pipeline stage", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "source").action(async (ctx) => {
+    CommandBuilder.create(registry, "source").action(async (ctx) => {
       for await (const chunk of ctx.stdin ?? []) ctx.stdout.write(chunk);
     });
-    new CommandBuilder(registry, "consume").action(async (ctx) => {
+    CommandBuilder.create(registry, "consume").action(async (ctx) => {
       for await (const chunk of ctx.stdin ?? []) ctx.stdout.write(chunk.toString().toUpperCase());
     });
     const router = new CommandRouter(registry);
@@ -79,7 +79,7 @@ describe("piped execution", () => {
 
   it("single command without pipe works normally", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "hello").action((ctx) => {
+    CommandBuilder.create(registry, "hello").action((ctx) => {
       ctx.stdout.write("world");
     });
 
@@ -94,7 +94,7 @@ describe("piped execution", () => {
     const registry = new CommandRegistry();
     let producerReleased = false;
 
-    new CommandBuilder(registry, "produce").action(async (ctx) => {
+    CommandBuilder.create(registry, "produce").action(async (ctx) => {
       while (!producerReleased) {
         const canContinue = ctx.stdout.write("x".repeat(1024));
         if (!canContinue) {
@@ -106,7 +106,7 @@ describe("piped execution", () => {
       }
     });
 
-    new CommandBuilder(registry, "take").action(async (ctx) => {
+    CommandBuilder.create(registry, "take").action(async (ctx) => {
       if (!ctx.stdin) return;
       await new Promise<void>((resolve) => ctx.stdin?.once("data", () => resolve()));
       ctx.stdout.write("done");
@@ -127,7 +127,7 @@ describe("piped execution", () => {
   it("aborts an external-I/O upstream when a downstream stage finishes early", async () => {
     const registry = new CommandRegistry();
     let upstreamAborted = false;
-    new CommandBuilder(registry, "external").action(
+    CommandBuilder.create(registry, "external").action(
       (ctx) =>
         new Promise<void>((resolve) => {
           ctx.signal.addEventListener("abort", () => {
@@ -136,7 +136,7 @@ describe("piped execution", () => {
           });
         }),
     );
-    new CommandBuilder(registry, "take").action(() => {});
+    CommandBuilder.create(registry, "take").action(() => {});
     const router = new CommandRouter(registry);
     await expect(router.execute("external | take")).resolves.toBeUndefined();
     expect(upstreamAborted).toBe(true);
@@ -146,7 +146,7 @@ describe("piped execution", () => {
     const registry = new CommandRegistry();
     const aborted: string[] = [];
     const waitForAbort = (name: string) =>
-      new CommandBuilder(registry, name).action(
+      CommandBuilder.create(registry, name).action(
         (ctx) =>
           new Promise<void>((resolve) => {
             ctx.signal.addEventListener(
@@ -161,7 +161,7 @@ describe("piped execution", () => {
       );
     waitForAbort("source");
     waitForAbort("middle");
-    new CommandBuilder(registry, "fail").action(() => {
+    CommandBuilder.create(registry, "fail").action(() => {
       throw new Error("stage failed");
     });
 
@@ -179,7 +179,7 @@ describe("piped execution", () => {
   it("preserves the initiating stage error when aborted siblings reject with AbortError", async () => {
     const registry = new CommandRegistry();
     const waitForAbort = (name: string) =>
-      new CommandBuilder(registry, name).action(
+      CommandBuilder.create(registry, name).action(
         (ctx) =>
           new Promise<void>((_resolve, reject) => {
             ctx.signal.addEventListener(
@@ -191,7 +191,7 @@ describe("piped execution", () => {
       );
     waitForAbort("source");
     waitForAbort("middle");
-    new CommandBuilder(registry, "fail").action(() => {
+    CommandBuilder.create(registry, "fail").action(() => {
       throw new Error("database failed");
     });
 
@@ -201,7 +201,7 @@ describe("piped execution", () => {
 
   it("does not emit failure events for a graceful abort-aware early stop", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "source").action(
+    CommandBuilder.create(registry, "source").action(
       (ctx) =>
         new Promise<void>((_resolve, reject) => {
           ctx.signal.addEventListener(
@@ -211,7 +211,7 @@ describe("piped execution", () => {
           );
         }),
     );
-    new CommandBuilder(registry, "take").action(() => {});
+    CommandBuilder.create(registry, "take").action(() => {});
     const router = new CommandRouter(registry);
     const commandErrors: Error[] = [];
     const errors: Error[] = [];
@@ -225,7 +225,7 @@ describe("piped execution", () => {
 
   it("does not hide a genuine upstream error after a downstream early stop", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "source").action(
+    CommandBuilder.create(registry, "source").action(
       (ctx) =>
         new Promise<void>((_resolve, reject) => {
           ctx.signal.addEventListener("abort", () => reject(new Error("late source failure")), {
@@ -233,7 +233,7 @@ describe("piped execution", () => {
           });
         }),
     );
-    new CommandBuilder(registry, "take").action(() => {});
+    CommandBuilder.create(registry, "take").action(() => {});
 
     const router = new CommandRouter(registry);
     await expect(router.execute("source | take")).rejects.toThrow("late source failure");
@@ -243,10 +243,10 @@ describe("piped execution", () => {
 describe("pipeline outcome and backpressure", () => {
   it("reports the exit code of the stage that actually failed", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "ok").action((ctx) => {
+    CommandBuilder.create(registry, "ok").action((ctx) => {
       ctx.stdout.write("data\n");
     });
-    new CommandBuilder(registry, "boom").action(() => {
+    CommandBuilder.create(registry, "boom").action(() => {
       throw Object.assign(new Error("stage failed"), { exitCode: 7 });
     });
 
@@ -261,14 +261,14 @@ describe("pipeline outcome and backpressure", () => {
 
   it("destroys the downstream pipe when a middle stage throws", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "source").action((ctx) => {
+    CommandBuilder.create(registry, "source").action((ctx) => {
       ctx.stdout.write("data\n");
     });
-    new CommandBuilder(registry, "middle").action(() => {
+    CommandBuilder.create(registry, "middle").action(() => {
       throw new Error("middle failed");
     });
     let downstreamSawEnd = false;
-    new CommandBuilder(registry, "sink").action(async (ctx) => {
+    CommandBuilder.create(registry, "sink").action(async (ctx) => {
       try {
         for await (const _chunk of ctx.stdin as Readable) {
           // Drain until the stream ends or is destroyed.
@@ -288,5 +288,31 @@ describe("pipeline outcome and backpressure", () => {
     ).rejects.toThrow("middle failed");
     // The sink must not be left waiting on a producer that will never write.
     expect(downstreamSawEnd).toBe(true);
+  });
+});
+
+describe("graceful pipeline stop", () => {
+  it("aborts an upstream stage without running its cancel handler", async () => {
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const cancel = vi.fn();
+    let upstreamSignal: AbortSignal | undefined;
+    CommandBuilder.create(registry, "produce")
+      .cancel(cancel)
+      .action(
+        (ctx) =>
+          new Promise<void>((resolveProduce) => {
+            upstreamSignal = ctx.signal;
+            ctx.stdout.write("line\n");
+            ctx.signal.addEventListener("abort", () => resolveProduce());
+          }),
+      );
+    CommandBuilder.create(registry, "first").action(async (ctx) => {
+      for await (const _chunk of ctx.stdin as Readable) break;
+    });
+
+    await router.execute("produce | first", { stdout: createMockStdout() });
+    expect(upstreamSignal?.aborted).toBe(true);
+    expect(cancel).not.toHaveBeenCalled();
   });
 });

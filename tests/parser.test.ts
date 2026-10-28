@@ -176,14 +176,14 @@ describe("parseOptionFlags", () => {
 describe("parse", () => {
   function createRegistry() {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .option("--force", { type: "boolean" })
       .option("-t, --tag <tag>", { type: "string" })
       .option("-p, --port <port>", { type: "number" })
       .option("-l, --label <label>", { type: "string[]" });
 
-    new CommandBuilder(registry, "user create <name>");
-    new CommandBuilder(registry, "user delete <name>");
+    CommandBuilder.create(registry, "user create <name>");
+    CommandBuilder.create(registry, "user delete <name>");
     return registry;
   }
 
@@ -230,7 +230,7 @@ describe("parse", () => {
 
   it("parses short-only options under their short key", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "serve").option("-p <port>", { type: "number" });
+    CommandBuilder.create(registry, "serve").option("-p <port>", { type: "number" });
 
     const result = parse("serve -p 3000", registry);
     expect(result.options.p).toBe("3000");
@@ -259,7 +259,7 @@ describe("parse", () => {
 
   it("stores reserved property names without changing record prototypes", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "set <__proto__>")
+    CommandBuilder.create(registry, "set <__proto__>")
       .option("--constructor <value>", { required: true })
       .action(() => {});
     const result = parse("set safe --constructor value", registry);
@@ -271,9 +271,11 @@ describe("parse", () => {
 
   it("distinguishes implicit help from a command-defined help option", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "custom").option("--help", { type: "boolean" }).action(() => {});
+    CommandBuilder.create(registry, "custom")
+      .option("--help", { type: "boolean" })
+      .action(() => {});
     expect(parse("custom --help", registry)).toMatchObject({ builtInHelp: false });
-    new CommandBuilder(registry, "implicit").action(() => {});
+    CommandBuilder.create(registry, "implicit").action(() => {});
     expect(parse("implicit --help", registry)).toMatchObject({ builtInHelp: true });
   });
 
@@ -326,6 +328,47 @@ describe("parse", () => {
     expect(() => parse("deploy prod --no-force=false", registry)).toThrow(InvalidOptionError);
   });
 
+  describe("negation resolution", () => {
+    function negRegistry(): CommandRegistry {
+      const reg = new CommandRegistry();
+      CommandBuilder.create(reg, "paint")
+        .option("--no-colour, --no-color", { type: "boolean" })
+        .option("-v, --verbose", { type: "boolean" })
+        .option("--port <port>", { type: "string" })
+        .action(() => {});
+      return reg;
+    }
+
+    it("treats a long alias spelled --no-... as a declared name", () => {
+      const reg = negRegistry();
+      expect(parse("paint --no-colour", reg).options).toEqual({ "no-color": true });
+      expect(parse("paint --no-color", reg).options).toEqual({ "no-color": true });
+    });
+
+    it("reports an unknown --no-x=value as an unknown option", () => {
+      expect(() => parse("paint --no-bogus=1", negRegistry())).toThrow(UnknownOptionError);
+    });
+
+    it("reports the long name when --no-x=value targets an alias", () => {
+      try {
+        parse("paint --no-v=1", negRegistry());
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(InvalidOptionError);
+        expect((error as InvalidOptionError).optionName).toBe("verbose");
+      }
+    });
+
+    it("reports a non-boolean target before the value", () => {
+      try {
+        parse("paint --no-port=1", negRegistry());
+        expect.unreachable();
+      } catch (error) {
+        expect((error as InvalidOptionError).message).toContain("only be used with boolean");
+      }
+    });
+  });
+
   it("tracks extra positional args", () => {
     const registry = createRegistry();
     const result = parse("deploy prod extra", registry);
@@ -337,12 +380,57 @@ describe("parse", () => {
     expect(() => parse("deploy prod > output.txt", registry)).toThrow(ParseError);
     expect(() => parse("deploy < input.txt", registry)).toThrow(ParseError);
   });
+
+  it("rejects a redirection operator that follows an option", () => {
+    const registry = createRegistry();
+    expect(() => parse("deploy prod --tag > out.txt", registry)).toThrow(ParseError);
+    expect(() => splitPipes("deploy prod -t > out.txt")).toThrow(ParseError);
+  });
+
+  it("treats redirection characters as literal after -- and in argv input", () => {
+    const registry = createRegistry();
+    expect(parse("deploy -- > out.txt", registry).args).toEqual({ env: ">" });
+    expect(parse(["deploy", "--tag", ">"], registry).options.tag).toBe(">");
+    expect(parse(["deploy", "<"], registry).args).toEqual({ env: "<" });
+    expect(parse('deploy ">"', registry).args).toEqual({ env: ">" });
+  });
+
+  it("lets --help and -h win over every other parse error", () => {
+    const registry = createRegistry();
+    for (const line of [
+      "deploy --prot 80 --help",
+      "deploy --port --help",
+      "deploy -pf -h",
+      "deploy --no-port -h",
+      "deploy a --bogus -h",
+      "deploy -h --bogus",
+    ]) {
+      expect(parse(line, registry).builtInHelp, line).toBe(true);
+    }
+    expect(() => parse("deploy --bogus -- --help", registry)).toThrow(UnknownOptionError);
+  });
+
+  it("resolves a single-dash token the same with or without =value", () => {
+    const registry = new CommandRegistry();
+    CommandBuilder.create(registry, "run")
+      .option("-d, --dry", { type: "boolean" })
+      .option("-v, --verbose", { type: "boolean" })
+      .option("-q, --quiet", { type: "boolean" })
+      .option("-p, --port <port>", { type: "string" })
+      .action(() => {});
+    expect(() => parse("run -dry", registry)).toThrow(UnknownOptionError);
+    expect(() => parse("run -dry=1", registry)).toThrow(UnknownOptionError);
+    expect(() => parse("run -vq=1", registry)).toThrow(InvalidOptionError);
+    expect(() => parse("run -port=80", registry)).toThrow(InvalidOptionError);
+    expect(() => parse("run -port", registry)).toThrow(InvalidOptionError);
+    expect(parse("run -p=80", registry).options.port).toBe("80");
+  });
 });
 
 describe("one resolution shared by parsing, help and completion", () => {
   it("parses a multi-character long alias and advertises it with two dashes", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "run")
+    CommandBuilder.create(registry, "run")
       .option("--verbose, --loud", { type: "boolean" })
       .action(() => {});
 
@@ -362,7 +450,9 @@ describe("one resolution shared by parsing, help and completion", () => {
 
   it("stops advertising built-in help once a command binds the flag itself", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "run").option("--h <n>", { type: "string" }).action(() => {});
+    CommandBuilder.create(registry, "run")
+      .option("--h <n>", { type: "string" })
+      .action(() => {});
 
     // The parser binds -h to the declared option, so neither surface may keep
     // offering it as the built-in help flag.
@@ -376,7 +466,7 @@ describe("one resolution shared by parsing, help and completion", () => {
 describe("option redefinition", () => {
   it("leaves the option set unchanged when a redefinition is rejected", () => {
     const registry = new CommandRegistry();
-    const builder = new CommandBuilder(registry, "run")
+    const builder = CommandBuilder.create(registry, "run")
       .option("--verbose", { type: "boolean" })
       .option("--tag <t>", { type: "string", alias: "t" });
     const before = [...(registry.resolve(["run"])?.options.keys() ?? [])];
@@ -390,7 +480,7 @@ describe("option redefinition", () => {
 
   it("keeps its position when an option is redefined", () => {
     const registry = new CommandRegistry();
-    const builder = new CommandBuilder(registry, "run")
+    const builder = CommandBuilder.create(registry, "run")
       .option("--alpha", { type: "boolean" })
       .option("--beta", { type: "boolean" });
     builder.option("--alpha", { type: "boolean", description: "refined" });

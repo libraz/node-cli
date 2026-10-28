@@ -1,12 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLI } from "../src/cli.js";
-import { createMockStdout } from "./helpers.js";
+import { createMockStdout, restoreProcessStateAfterEach } from "./helpers.js";
 
 describe("plugin system", () => {
-  const originalExitCode = process.exitCode;
-
+  restoreProcessStateAfterEach();
   afterEach(() => {
-    process.exitCode = originalExitCode;
     vi.restoreAllMocks();
   });
   it("registers commands via plugin", async () => {

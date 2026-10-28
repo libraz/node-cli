@@ -7,7 +7,9 @@ describe("custom SIGINT handler", () => {
     const registry = new CommandRegistry();
     const handler = vi.fn();
 
-    new CommandBuilder(registry, "longrun").cancel(handler).action(() => {});
+    CommandBuilder.create(registry, "longrun")
+      .cancel(handler)
+      .action(() => {});
 
     const cmd = registry.resolve(["longrun"]);
     expect(cmd).toBeDefined();
@@ -19,7 +21,7 @@ describe("custom SIGINT handler", () => {
     const cancelFn = vi.fn();
     const actionFn = vi.fn();
 
-    new CommandBuilder(registry, "task").action(actionFn).cancel(cancelFn);
+    CommandBuilder.create(registry, "task").action(actionFn).cancel(cancelFn);
 
     const cmd = registry.resolve(["task"]);
     expect(cmd?.cancelHandler).toBe(cancelFn);

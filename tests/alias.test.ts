@@ -7,7 +7,7 @@ import { ShellCompleter } from "../src/shell/completion.js";
 describe("command aliases", () => {
   function createRegistry() {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .description("Deploy to environment")
       .alias("d", "dep")
       .action(() => {});
@@ -45,7 +45,7 @@ describe("command aliases", () => {
 
   it("subcommand aliases work", () => {
     const registry = new CommandRegistry();
-    const parent = new CommandBuilder(registry, "user").description("User management");
+    const parent = CommandBuilder.create(registry, "user").description("User management");
     parent
       .command("create <name>")
       .alias("c", "new")
@@ -80,8 +80,8 @@ describe("command aliases", () => {
 
   it("rolls back a multi-alias registration when a later alias collides", () => {
     const registry = new CommandRegistry();
-    const owner = new CommandBuilder(registry, "owner").alias("taken");
-    const candidate = new CommandBuilder(registry, "candidate");
+    const owner = CommandBuilder.create(registry, "owner").alias("taken");
+    const candidate = CommandBuilder.create(registry, "candidate");
 
     expect(() => candidate.alias("fresh", "taken")).toThrow(/already maps/);
     expect(registry.resolve(["fresh"])).toBeUndefined();

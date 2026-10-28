@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
-import { type ModeConfig, Shell } from "../src/shell/repl.js";
+import { InteractiveShell, type ModeConfig } from "../src/shell/repl.js";
 import { createMockTTY } from "./helpers.js";
 
 function feedLines(stdin: PassThrough, lines: string[]): void {
@@ -29,39 +29,10 @@ async function createHistoryFixture(): Promise<{ filePath: string; cleanup: () =
 }
 
 describe("mode command", () => {
-  it("ModeConfig interface is exported", () => {
-    const config: ModeConfig = {
-      prompt: "mode> ",
-      action: () => {},
-    };
-    expect(config.prompt).toBe("mode> ");
-    expect(typeof config.action).toBe("function");
-  });
-
-  it("ModeConfig with message", () => {
-    const config: ModeConfig = {
-      prompt: "sql> ",
-      action: () => {},
-      message: "Entering SQL mode",
-    };
-    expect(config.message).toBe("Entering SQL mode");
-  });
-
-  it("ModeConfig supports isolated completion and session history policies", () => {
-    const config: ModeConfig = {
-      prompt: "sql> ",
-      action: () => {},
-      completer: (line) => [["SELECT"], line],
-      history: "session",
-    };
-    expect(config.completer?.("S")).toEqual([["SELECT"], "S"]);
-    expect(config.history).toBe("session");
-  });
-
   it("falls back to no mode completions when its completer rejects", async () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "> ",
@@ -73,22 +44,53 @@ describe("mode command", () => {
       completer: async () => Promise.reject(new Error("completion failed")),
     });
     const internal = shell as unknown as {
-      openReadline(history: string[]): void;
-      rl?: { completer?: (line: string) => Promise<[string[], string]>; close(): void };
+      openReader(history: string[]): void;
+      closeReader(): void;
+      reader?: { rl: { completer?: (line: string) => Promise<[string[], string]> } };
     };
 
-    internal.openReadline([]);
+    internal.openReader([]);
     try {
-      await expect(internal.rl?.completer?.("sel")).resolves.toEqual([[], "sel"]);
+      await expect(internal.reader?.rl.completer?.("sel")).resolves.toEqual([[], "sel"]);
     } finally {
-      internal.rl?.close();
+      internal.closeReader();
+    }
+  });
+
+  it("offers nothing when an async mode completer resolves a malformed result", async () => {
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const shell = new InteractiveShell({
+      router,
+      registry,
+      prompt: "> ",
+      historyFile: "mode-history-test",
+    });
+    const results: unknown[] = [undefined, [1, 2]];
+    shell.enterMode({
+      prompt: "mode> ",
+      action: () => {},
+      completer: async () => results.shift() as [string[], string],
+    });
+    const internal = shell as unknown as {
+      openReader(history: string[]): void;
+      closeReader(): void;
+      reader?: { rl: { completer?: (line: string) => Promise<[string[], string]> } };
+    };
+
+    internal.openReader([]);
+    try {
+      await expect(internal.reader?.rl.completer?.("sel")).resolves.toEqual([[], "sel"]);
+      await expect(internal.reader?.rl.completer?.("sel")).resolves.toEqual([[], "sel"]);
+    } finally {
+      internal.closeReader();
     }
   });
 
   it("resumes readline when a mode completer never settles", async () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "> ",
@@ -100,17 +102,18 @@ describe("mode command", () => {
       completer: () => new Promise<[string[], string]>(() => {}),
     });
     const internal = shell as unknown as {
-      openReadline(history: string[]): void;
+      openReader(history: string[]): void;
+      closeReader(): void;
       completer: { completionTimeoutMs: number };
-      rl?: { completer?: (line: string) => Promise<[string[], string]>; close(): void };
+      reader?: { rl: { completer?: (line: string) => Promise<[string[], string]> } };
     };
     internal.completer.completionTimeoutMs = 1;
 
-    internal.openReadline([]);
+    internal.openReader([]);
     try {
-      await expect(internal.rl?.completer?.("sel")).resolves.toEqual([[], "sel"]);
+      await expect(internal.reader?.rl.completer?.("sel")).resolves.toEqual([[], "sel"]);
     } finally {
-      internal.rl?.close();
+      internal.closeReader();
     }
   });
 
@@ -118,7 +121,7 @@ describe("mode command", () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
     const completer = vi.fn(async (line: string) => [["SELECT"], line] as [string[], string]);
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "> ",
@@ -126,16 +129,17 @@ describe("mode command", () => {
     });
     shell.enterMode({ prompt: "sql> ", action: () => {}, completer });
     const internal = shell as unknown as {
-      openReadline(history: string[]): void;
-      rl?: { completer?: (line: string) => Promise<[string[], string]>; close(): void };
+      openReader(history: string[]): void;
+      closeReader(): void;
+      reader?: { rl: { completer?: (line: string) => Promise<[string[], string]> } };
     };
 
-    internal.openReadline([]);
+    internal.openReader([]);
     try {
-      await expect(internal.rl?.completer?.("SEL")).resolves.toEqual([["SELECT"], "SEL"]);
+      await expect(internal.reader?.rl.completer?.("SEL")).resolves.toEqual([["SELECT"], "SEL"]);
       expect(completer).toHaveBeenCalledWith("SEL");
     } finally {
-      internal.rl?.close();
+      internal.closeReader();
     }
   });
 
@@ -150,7 +154,7 @@ describe("mode command", () => {
     const router = new CommandRouter(registry);
     const historyFixture = await createHistoryFixture();
     const observedHistories: string[][] = [];
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "app> ",
@@ -183,7 +187,7 @@ describe("mode command", () => {
 
     const noHistoryFixture = await createHistoryFixture();
     const noHistoryInput = new PassThrough();
-    const noHistoryShell = new Shell({
+    const noHistoryShell = new InteractiveShell({
       router: new CommandRouter(new CommandRegistry()),
       registry: new CommandRegistry(),
       prompt: "app> ",
@@ -218,7 +222,7 @@ describe("mode command", () => {
   it("Shell has enterMode, exitMode, and setPrompt methods", () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "> ",
@@ -233,7 +237,7 @@ describe("mode command", () => {
   it("setPrompt records the new prompt even before start() creates readline", () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "> ",
@@ -250,7 +254,7 @@ describe("mode command", () => {
   it("updates an active parent prompt and stops the shell", () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "> ",
@@ -259,10 +263,10 @@ describe("mode command", () => {
     const setPrompt = vi.fn();
     const close = vi.fn();
     const internal = shell as unknown as {
-      rl: { setPrompt(prompt: string): void; close(): void };
+      reader: { rl: { setPrompt(prompt: string): void }; close(): void };
       running: boolean;
     };
-    internal.rl = { setPrompt, close };
+    internal.reader = { rl: { setPrompt }, close };
     internal.running = true;
 
     shell.setPrompt("app> ");
@@ -276,14 +280,16 @@ describe("mode command", () => {
   it("enterMode and exitMode update an active readline prompt", () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "> ",
       historyFile: "mode-history-test",
     });
     const setPrompt = vi.fn();
-    (shell as unknown as { rl: { setPrompt: (prompt: string) => void } }).rl = { setPrompt };
+    (shell as unknown as { reader: { rl: { setPrompt: (prompt: string) => void } } }).reader = {
+      rl: { setPrompt },
+    };
 
     shell.enterMode({
       prompt: "sql> ",
@@ -298,7 +304,7 @@ describe("mode command", () => {
   it("command action can enter mode via shell", async () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "> ",
@@ -306,7 +312,7 @@ describe("mode command", () => {
     });
 
     const modeAction = vi.fn();
-    new CommandBuilder(registry, "sql").action((ctx) => {
+    CommandBuilder.create(registry, "sql").action((ctx) => {
       ctx.shell?.enterMode({
         prompt: "sql> ",
         action: modeAction,
@@ -338,7 +344,7 @@ describe("mode command", () => {
     const sigintListeners = process.listenerCount("SIGINT");
     router.on("exit", onExit);
 
-    new CommandBuilder(registry, "sql").action((ctx) => {
+    CommandBuilder.create(registry, "sql").action((ctx) => {
       seen.push("enter");
       ctx.shell?.enterMode({
         prompt: "sql> ",
@@ -350,7 +356,7 @@ describe("mode command", () => {
       });
     });
 
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "app> ",
@@ -398,7 +404,7 @@ describe("mode command", () => {
     const router = new CommandRouter(registry);
     const modeEntered = vi.fn();
 
-    new CommandBuilder(registry, "sql").action((ctx) => {
+    CommandBuilder.create(registry, "sql").action((ctx) => {
       ctx.shell?.enterMode({
         prompt: "sql> ",
         action: () => {},
@@ -406,7 +412,7 @@ describe("mode command", () => {
       modeEntered();
     });
 
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "app> ",
@@ -422,7 +428,8 @@ describe("mode command", () => {
       stdin.write("sql\n");
       await vi.waitFor(() => expect(modeEntered).toHaveBeenCalledOnce());
 
-      (shell as unknown as { rl?: { close: () => void } }).rl?.close();
+      // Readline closes itself on Ctrl-D.
+      (shell as unknown as { reader?: { rl: { close: () => void } } }).reader?.rl.close();
       await vi.waitFor(() => expect(stdout.getOutput()).toContain("app> "));
       stdin.end("quit\n");
 
@@ -450,10 +457,10 @@ describe("mode command", () => {
     const router = new CommandRouter(registry);
     const fresh = vi.fn();
     const staleFresh = vi.fn();
-    new CommandBuilder(registry, "fresh").action(fresh);
-    new CommandBuilder(registry, "stalefresh").action(staleFresh);
+    CommandBuilder.create(registry, "fresh").action(fresh);
+    CommandBuilder.create(registry, "stalefresh").action(staleFresh);
 
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "app> ",
@@ -466,18 +473,24 @@ describe("mode command", () => {
 
     try {
       const running = shell.start();
-      await vi.waitFor(() => expect((shell as unknown as { rl?: unknown }).rl).toBeDefined());
+      await vi.waitFor(() =>
+        expect((shell as unknown as { reader?: unknown }).reader).toBeDefined(),
+      );
       stdin.write("stale");
       await vi.waitFor(() =>
-        expect((shell as unknown as { rl?: { line: string } }).rl?.line).toBe("stale"),
+        expect((shell as unknown as { reader?: { rl: { line: string } } }).reader?.rl.line).toBe(
+          "stale",
+        ),
       );
       (
         shell as unknown as {
-          rl?: { emit: (event: string) => boolean; line: string };
+          reader?: { rl: { emit: (event: string) => boolean } };
         }
-      ).rl?.emit("SIGINT");
+      ).reader?.rl.emit("SIGINT");
       await vi.waitFor(() =>
-        expect((shell as unknown as { rl?: { line: string } }).rl?.line).toBe(""),
+        expect((shell as unknown as { reader?: { rl: { line: string } } }).reader?.rl.line).toBe(
+          "",
+        ),
       );
       stdin.end("fresh\nquit\n");
 
@@ -507,7 +520,7 @@ describe("mode command", () => {
     let modeSignal: AbortSignal | undefined;
     const modeActionStarted = vi.fn();
 
-    new CommandBuilder(registry, "sql").action((ctx) => {
+    CommandBuilder.create(registry, "sql").action((ctx) => {
       ctx.shell?.enterMode({
         prompt: "sql> ",
         action: (_input, modeCtx) =>
@@ -519,7 +532,7 @@ describe("mode command", () => {
       });
     });
 
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "app> ",
@@ -544,7 +557,9 @@ describe("mode command", () => {
       expect(modeSignal?.aborted).toBe(true);
 
       resolveModeAction?.();
-      await vi.waitFor(() => expect((shell as unknown as { rl?: unknown }).rl).toBeDefined());
+      await vi.waitFor(() =>
+        expect((shell as unknown as { reader?: unknown }).reader).toBeDefined(),
+      );
       feedLines(stdin, ["exit", "quit"]);
 
       await expect(running).resolves.toBeUndefined();
@@ -575,10 +590,10 @@ describe("leaving a mode when the app registers its own exit command", () => {
 
     // A mode does not dispatch through the registry, so an application command
     // named "exit" is unreachable inside it and must not shadow the way out.
-    new CommandBuilder(registry, "exit").action(() => {
+    CommandBuilder.create(registry, "exit").action(() => {
       seen.push("app-exit");
     });
-    new CommandBuilder(registry, "sql").action((ctx) => {
+    CommandBuilder.create(registry, "sql").action((ctx) => {
       ctx.shell?.enterMode({
         prompt: "sql> ",
         action(input) {
@@ -587,7 +602,7 @@ describe("leaving a mode when the app registers its own exit command", () => {
       });
     });
 
-    const shell = new Shell({
+    const shell = new InteractiveShell({
       router,
       registry,
       prompt: "app> ",

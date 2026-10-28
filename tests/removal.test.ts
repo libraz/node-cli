@@ -5,7 +5,7 @@ import { CommandRegistry } from "../src/command/registry.js";
 describe("command removal", () => {
   it("removes a top-level command", () => {
     const registry = new CommandRegistry();
-    const builder = new CommandBuilder(registry, "deploy <env>").action(() => {});
+    const builder = CommandBuilder.create(registry, "deploy <env>").action(() => {});
 
     expect(registry.resolve(["deploy"])).toBeDefined();
     const removed = builder.remove();
@@ -15,7 +15,7 @@ describe("command removal", () => {
 
   it("removes a subcommand", () => {
     const registry = new CommandRegistry();
-    const parent = new CommandBuilder(registry, "user").description("User management");
+    const parent = CommandBuilder.create(registry, "user").description("User management");
     const child = parent.command("create <name>").action(() => {});
 
     expect(registry.resolve(["user", "create"])).toBeDefined();
@@ -34,7 +34,9 @@ describe("command removal", () => {
 
   it("removes aliases when command is removed", () => {
     const registry = new CommandRegistry();
-    const builder = new CommandBuilder(registry, "deploy <env>").alias("d").action(() => {});
+    const builder = CommandBuilder.create(registry, "deploy <env>")
+      .alias("d")
+      .action(() => {});
 
     expect(registry.resolve(["d"])).toBeDefined();
     builder.remove();
@@ -48,9 +50,9 @@ describe("command removal", () => {
 
   it("does not let a stale builder remove or alias a replacement command", () => {
     const registry = new CommandRegistry();
-    const stale = new CommandBuilder(registry, "temporary");
+    const stale = CommandBuilder.create(registry, "temporary");
     expect(stale.remove()).toBe(true);
-    const replacement = new CommandBuilder(registry, "temporary").action(() => {});
+    const replacement = CommandBuilder.create(registry, "temporary").action(() => {});
 
     expect(stale.remove()).toBe(false);
     expect(() => stale.alias("old")).toThrow(/detached/);
@@ -61,9 +63,9 @@ describe("command removal", () => {
 
   it("does not let a stale builder attach a subcommand to a replacement", () => {
     const registry = new CommandRegistry();
-    const stale = new CommandBuilder(registry, "parent");
+    const stale = CommandBuilder.create(registry, "parent");
     stale.remove();
-    new CommandBuilder(registry, "parent");
+    CommandBuilder.create(registry, "parent");
 
     expect(() => stale.command("child")).toThrow(/detached/);
     expect(registry.resolve(["parent", "child"])).toBeUndefined();
@@ -71,7 +73,7 @@ describe("command removal", () => {
 
   it("rejects every configuration method after removal", () => {
     const registry = new CommandRegistry();
-    const builder = new CommandBuilder(registry, "task");
+    const builder = CommandBuilder.create(registry, "task");
     builder.remove();
 
     expect(() => builder.description("x")).toThrow(/detached/);

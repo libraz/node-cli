@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { guardCall } from "../guard.js";
 
 const PRIVATE_FILE_MODE = 0o600;
 const LOCK_RETRIES = 50;
@@ -156,6 +157,8 @@ export class History {
    * @returns A copy of the loaded history entries.
    */
   async load(): Promise<string[]> {
+    // A zero limit disables history; the file on disk is left untouched.
+    if (this.maxSize === 0) return [];
     try {
       const diskLines = await this.readSafeLines();
       this.needsCompaction = diskLines.length > this.maxSize;
@@ -176,11 +179,22 @@ export class History {
   /**
    * Adds a line to the history.
    * Empty or whitespace-only lines are ignored. Consecutive duplicate
-   * entries are also skipped.
+   * entries are also skipped. A throwing filter is reported and the line is
+   * not recorded, since it may be the secret the filter exists to redact.
    * @param line - The command line string to add.
    */
   add(line: string): void {
-    const filtered = this.filter ? this.filter(line) : line;
+    const { filter } = this;
+    const filtered = filter
+      ? guardCall<string | null>(
+          () => filter(line),
+          (error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            process.stderr.write(`Warning: History filter failed; line not recorded: ${message}\n`);
+            return null;
+          },
+        )
+      : line;
     if (filtered === null) return;
     // Sanitize after filtering so a filter that emits control characters (or a
     // raw line containing them) cannot corrupt the one-entry-per-line format or
@@ -288,7 +302,7 @@ export class History {
     // reported once. Retrying for every command cannot make persistence succeed
     // and only floods stderr; following a symlink would also weaken the security
     // guarantee that rejected it in the first place.
-    if (this.persistenceDisabled) return;
+    if (this.persistenceDisabled || this.maxSize === 0) return;
     let lock: Awaited<ReturnType<typeof open>> | undefined;
     const lockPath = `${this.filePath}.lock`;
     let tempPath: string | undefined;

@@ -22,12 +22,22 @@ export class CommandBuilder {
 
   /**
    * Creates a new CommandBuilder and registers the command with the given registry.
+   * Application code obtains builders from `cli.command()` and `.command()`.
    *
+   * @internal
    * @param registry - The command registry that holds all registered commands.
    * @param definitionStr - A definition string describing the command name and its arguments (e.g., `"serve <port>"`).
    * @param parentPath - The path of parent command names leading to this command. Defaults to an empty array for root commands.
    */
-  constructor(registry: CommandRegistry, definitionStr: string, parentPath: string[] = []) {
+  static create(
+    registry: CommandRegistry,
+    definitionStr: string,
+    parentPath: string[] = [],
+  ): CommandBuilder {
+    return new CommandBuilder(registry, definitionStr, parentPath);
+  }
+
+  private constructor(registry: CommandRegistry, definitionStr: string, parentPath: string[]) {
     this.registry = registry;
 
     const { parentPath: defParent, name, argDefs } = parseDefinitionString(definitionStr);
@@ -280,6 +290,6 @@ export class CommandBuilder {
   command(definitionStr: string): CommandBuilder {
     this.assertRegistered();
     const fullParentPath = [...this.parentPath, this.definition.name];
-    return new CommandBuilder(this.registry, definitionStr, fullParentPath);
+    return CommandBuilder.create(this.registry, definitionStr, fullParentPath);
   }
 }

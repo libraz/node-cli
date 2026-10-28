@@ -7,7 +7,7 @@ import { createMockStdout } from "./helpers.js";
 describe("event system", () => {
   it("hands commandError listeners a null-prototype context on failure paths", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>").action(() => {});
+    CommandBuilder.create(registry, "deploy <env>").action(() => {});
     const router = new CommandRouter(registry);
     const seen: Array<Record<string, unknown>> = [];
     router.on("commandError", (_error, ctx) => {
@@ -31,10 +31,10 @@ describe("event system", () => {
 
   function createRouter() {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>").action((ctx) => {
+    CommandBuilder.create(registry, "deploy <env>").action((ctx) => {
       ctx.stdout.write("deployed\n");
     });
-    new CommandBuilder(registry, "fail").action(() => {
+    CommandBuilder.create(registry, "fail").action(() => {
       throw new Error("boom");
     });
     const router = new CommandRouter(registry);

@@ -202,7 +202,7 @@ In the path form, a parent that does not exist yet is created automatically as a
 **group** — a command with a name and no action. In the builder form,
 `cli.command("db")` is that same group as long as no `action()` is set on it.
 
-![Command tree for an application named myapp: the root fans out into the groups db and user plus the command deploy. The db group holds the subcommands migrate and seed; the user group holds create with the aliases c and new, drawn as arrows that resolve to the canonical name create. A separate branch shows the command task taking a positional argument name and an action, with its subcommand list greyed out and struck through to mark it unreachable.](../assets/command-tree.svg)
+![Command tree for an application named myapp: the root has three children. deploy takes an env argument and carries the alias d; db is a group with no action whose children are migrate and seed; user is a group with no action whose children are create <name> and delete <name>. Notes explain that an alias resolves to the real name, that running myapp db alone prints that group's help, and how myapp db migrate --steps 2 splits into the command path db migrate and the option --steps 2. A warning box at the bottom shows the pitfall: report <file> has both an argument and a subcommand, so its child daily is unreachable.](../assets/command-tree.svg)
 
 Dispatch walks the typed tokens from the root downwards, matching each token
 against the subcommands of the command matched so far, and stops at the first
@@ -221,9 +221,10 @@ A group has no action, so it cannot run. It behaves as follows:
 
 Declaring the same command path twice merges the two declarations rather than
 replacing or duplicating the command. `action`, `description`, the completion
-provider, `aliases`, `validate`, and the cancel handler each overwrite the
-previous value when the new declaration sets one; options merge key by key; the
-positional argument list is replaced wholesale, including with an empty list.
+provider, `validate`, and the cancel handler each overwrite the previous value
+when the new declaration sets one; options merge key by key; aliases are added to
+the existing set, so earlier aliases keep resolving; the positional argument list
+is replaced wholesale, including with an empty list.
 
 ```typescript
 cli.command("status <target>").action(showStatus);

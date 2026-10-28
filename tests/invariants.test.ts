@@ -33,7 +33,12 @@ import { maskInput, prompt } from "../src/output/prompt.js";
 import { table } from "../src/output/table.js";
 import { ShellCompleter } from "../src/shell/completion.js";
 import type { CommandContext } from "../src/types.js";
-import { createMockStdin, createMockStdout, createMockTTY } from "./helpers.js";
+import {
+  createMockStdin,
+  createMockStdout,
+  createMockTTY,
+  restoreProcessStateAfterEach,
+} from "./helpers.js";
 
 function ctxStub(): CommandContext {
   const out = createMockStdout();
@@ -85,7 +90,7 @@ describe("structured errors", () => {
 describe("version and top-level help", () => {
   function router() {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "greet <name>").action(() => {});
+    CommandBuilder.create(registry, "greet <name>").action(() => {});
     const r = new CommandRouter(registry);
     r.setVersion("1.2.3");
     r.setHelpGenerator(new HelpGenerator(registry, { name: "app", version: "1.2.3" }));
@@ -114,14 +119,14 @@ describe("version and top-level help", () => {
 describe("alias handling", () => {
   it("throws when an alias collides with an existing command", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "list").action(() => {});
-    const ls = new CommandBuilder(registry, "ls").action(() => {});
+    CommandBuilder.create(registry, "list").action(() => {});
+    const ls = CommandBuilder.create(registry, "ls").action(() => {});
     expect(() => ls.alias("list")).toThrow(/conflicts/);
   });
 
   it("does not let aliases inflate subcommand counts", () => {
     const registry = new CommandRegistry();
-    const user = new CommandBuilder(registry, "user");
+    const user = CommandBuilder.create(registry, "user");
     user
       .command("create <n>")
       .alias("c", "new")
@@ -135,7 +140,9 @@ describe("alias handling", () => {
 
   it("dedupes repeated aliases and the command's own name", () => {
     const registry = new CommandRegistry();
-    const b = new CommandBuilder(registry, "deploy").alias("d", "d", "deploy").action(() => {});
+    const b = CommandBuilder.create(registry, "deploy")
+      .alias("d", "d", "deploy")
+      .action(() => {});
     expect(b.command).toBeTypeOf("function");
     expect(registry.resolve(["deploy"])?.aliases).toEqual(["d"]);
   });
@@ -146,7 +153,7 @@ describe("alias handling", () => {
 describe("option schema wiring", () => {
   it("honours schema.alias as a short flag", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "serve").option("--port <n>", {
+    CommandBuilder.create(registry, "serve").option("--port <n>", {
       type: "number",
       alias: "p",
     });
@@ -158,7 +165,7 @@ describe("option schema wiring", () => {
   it("does not mutate the caller's schema object", () => {
     const registry = new CommandRegistry();
     const schema = {} as Record<string, unknown>;
-    new CommandBuilder(registry, "x").option("--flag", schema);
+    CommandBuilder.create(registry, "x").option("--flag", schema);
     expect(schema.type).toBeUndefined();
     expect(schema.default).toBeUndefined();
   });
@@ -166,13 +173,13 @@ describe("option schema wiring", () => {
   it("rejects invalid defaults while the option is being defined", () => {
     const registry = new CommandRegistry();
     expect(() =>
-      new CommandBuilder(registry, "serve").option("--port <port>", {
+      CommandBuilder.create(registry, "serve").option("--port <port>", {
         type: "number",
         default: "not-a-number",
       }),
     ).toThrow(/Invalid default for --port/);
     expect(() =>
-      new CommandBuilder(registry, "mode").option("--env <env>", {
+      CommandBuilder.create(registry, "mode").option("--env <env>", {
         choices: ["dev", "prod"],
         default: "test",
       }),
@@ -185,7 +192,7 @@ describe("option schema wiring", () => {
 describe("option resolver", () => {
   function defs(flags: string, schema: Record<string, unknown>) {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "c").option(flags, schema);
+    CommandBuilder.create(registry, "c").option(flags, schema);
     return registry.resolve(["c"])?.options ?? new Map();
   }
 
@@ -221,7 +228,7 @@ describe("option resolver", () => {
 describe("router error events", () => {
   function router() {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .option("--count <n>", { type: "number" })
       .action(() => {});
     return new CommandRouter(registry);
@@ -255,7 +262,7 @@ describe("router error events", () => {
   it("a throwing event listener does not abort command flow", async () => {
     const registry = new CommandRegistry();
     let ran = false;
-    new CommandBuilder(registry, "deploy <env>").action(() => {
+    CommandBuilder.create(registry, "deploy <env>").action(() => {
       ran = true;
     });
     const r = new CommandRouter(registry);
@@ -273,7 +280,7 @@ describe("router error events", () => {
 describe("required variadic argument", () => {
   it("fails when zero values are provided", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "add <...files>").action(() => {});
+    CommandBuilder.create(registry, "add <...files>").action(() => {});
     const r = new CommandRouter(registry);
     const out = createMockStdout();
     await expect(r.execute("add", { stdout: out, stderr: out })).rejects.toBeInstanceOf(
@@ -288,10 +295,12 @@ describe("command cancellation", () => {
   it("invokes the active command's cancel handler via triggerCancel()", async () => {
     const registry = new CommandRegistry();
     const cancel = vi.fn();
-    new CommandBuilder(registry, "work").cancel(cancel).action(async () => {
-      // The handler should be reachable while the action is in flight.
-      expect(r.triggerCancel()).toBe(true);
-    });
+    CommandBuilder.create(registry, "work")
+      .cancel(cancel)
+      .action(async () => {
+        // The handler should be reachable while the action is in flight.
+        expect(r.triggerCancel()).toBe(true);
+      });
     const r = new CommandRouter(registry);
     const out = createMockStdout();
     await r.execute("work", { stdout: out, stderr: out });
@@ -334,6 +343,7 @@ describe("tokenize and splitPipes", () => {
 // ── color: nesting, width, strip, per-stream ──
 
 describe("color and width", () => {
+  restoreProcessStateAfterEach(["NO_COLOR", "FORCE_COLOR", "TERM"]);
   beforeEach(() => setColorEnabled(true));
   afterEach(() => resetColorEnabled());
 
@@ -358,6 +368,8 @@ describe("color and width", () => {
   it("createColorizer disables color for a non-TTY stream", () => {
     resetColorEnabled();
     delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+    process.env.TERM = "xterm";
     const plain = createColorizer(createMockStdout());
     expect(plain.red("x")).toBe("x");
     const tty = createColorizer(createMockTTY());
@@ -395,22 +407,39 @@ describe("table robustness", () => {
 // ── progress hygiene ──
 
 describe("progress hygiene", () => {
-  it("spinner.stop() is idempotent and clears its timer", () => {
-    const stream = createMockTTY();
-    const sp = progress.spinner({ stream, label: "x" });
-    sp.start();
-    sp.succeed("done");
-    // Second terminal call must be a no-op (no extra output).
-    const before = stream.getOutput();
-    sp.fail("again");
-    expect(stream.getOutput()).toBe(before);
+  it("a finished spinner ignores further terminal calls and holds no timer", () => {
+    vi.useFakeTimers();
+    try {
+      const stream = createMockTTY();
+      const sp = progress.spinner({ stream, label: "x" });
+      sp.start();
+      expect(vi.getTimerCount()).toBe(1);
+      sp.succeed("done");
+      expect(vi.getTimerCount()).toBe(0);
+      // Second terminal call must be a no-op (no extra output).
+      const before = stream.getOutput();
+      sp.fail("again");
+      sp.stop();
+      expect(stream.getOutput()).toBe(before);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("bar.update clamps within [0, total]", () => {
     const stream = createMockTTY();
     const bar = progress.bar({ total: 10, stream });
-    bar.update(999);
-    expect(stream.getOutput()).toContain("10/10");
+    try {
+      bar.update(-5);
+      expect(stream.getOutput()).toContain("0/10");
+      bar.update(999);
+      expect(stream.getOutput()).toContain("10/10");
+      expect(stream.getOutput()).not.toContain("999");
+      expect(stream.getOutput()).not.toContain("-5");
+    } finally {
+      bar.stop();
+    }
   });
 });
 
@@ -458,7 +487,7 @@ describe("logger child level", () => {
 describe("help completeness", () => {
   function help() {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>")
+    CommandBuilder.create(registry, "deploy <env>")
       .alias("d")
       .option("--force", { type: "boolean", default: true })
       .action(() => {});
@@ -481,7 +510,7 @@ describe("help completeness", () => {
 describe("completion improvements", () => {
   function completer() {
     const registry = new CommandRegistry();
-    const b = new CommandBuilder(registry, "git");
+    const b = CommandBuilder.create(registry, "git");
     b.command("commit")
       .option("--message <m>", { type: "string" })
       .action(() => {});
@@ -500,7 +529,7 @@ describe("custom completer context", () => {
   it("receives parsed args/options and is prefix-filtered", () => {
     const registry = new CommandRegistry();
     let received: { options: Record<string, unknown> } | null = null;
-    new CommandBuilder(registry, "run")
+    CommandBuilder.create(registry, "run")
       .option("--env <e>", { type: "string" })
       .complete((c) => {
         received = c;
@@ -519,7 +548,7 @@ describe("custom completer context", () => {
 describe("pipeline early termination", () => {
   it("does not fail when a downstream stage stops early and the producer is signal-aware", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "produce").action(
+    CommandBuilder.create(registry, "produce").action(
       (ctx) =>
         new Promise<void>((_resolve, reject) => {
           const timer = setInterval(() => ctx.stdout.write("data\n"), 5);
@@ -530,7 +559,7 @@ describe("pipeline early termination", () => {
           });
         }),
     );
-    new CommandBuilder(registry, "head1").action(async (ctx) => {
+    CommandBuilder.create(registry, "head1").action(async (ctx) => {
       if (ctx.stdin) await new Promise<void>((resolve) => ctx.stdin?.once("data", () => resolve()));
       ctx.stdout.write("ok");
     });
@@ -549,8 +578,8 @@ describe("pipeline early termination", () => {
 describe("subcommands shadowed by a positional argument", () => {
   const build = () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "deploy <env>").action(() => {});
-    new CommandBuilder(registry, "deploy status").action(() => {});
+    CommandBuilder.create(registry, "deploy <env>").action(() => {});
+    CommandBuilder.create(registry, "deploy status").action(() => {});
     return registry;
   };
 
@@ -586,7 +615,7 @@ describe("quote handling in pipe splitting", () => {
 describe("negative-number arguments", () => {
   it("parses a bare negative number as a positional value, not an unknown option", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "calc <n>").action(() => {});
+    CommandBuilder.create(registry, "calc <n>").action(() => {});
     expect(parse(["calc", "-5"], registry).args.n).toBe("-5");
     expect(parse(["calc", "-.5"], registry).args.n).toBe("-.5");
     expect(parse(["calc", "-3.14"], registry).args.n).toBe("-3.14");
@@ -595,7 +624,9 @@ describe("negative-number arguments", () => {
 
   it("gives an exact numeric-looking option alias precedence over positional parsing", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "calc [n]").option("-1, --one").action(() => {});
+    CommandBuilder.create(registry, "calc [n]")
+      .option("-1, --one")
+      .action(() => {});
     const result = parse(["calc", "-1"], registry);
     expect(result.options.one).toBe(true);
     expect(result.args.n).toBeUndefined();
@@ -607,7 +638,7 @@ describe("negative-number arguments", () => {
 describe("built-in help flag", () => {
   it("still triggers help inside a short-flag cluster", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "x").option("-v, --verbose");
+    CommandBuilder.create(registry, "x").option("-v, --verbose");
     const result = parse(["x", "-vh"], registry);
     expect(result.builtInHelp).toBe(true);
     expect(result.options.verbose).toBe(true);
@@ -615,7 +646,7 @@ describe("built-in help flag", () => {
 
   const withBoundShort = () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "srv").option("-h, --host <host>");
+    CommandBuilder.create(registry, "srv").option("-h, --host <host>");
     return registry;
   };
 
@@ -652,7 +683,7 @@ describe("definition parsing: name after an argument", () => {
 describe("completion after the -- terminator", () => {
   it("offers no option flags", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "srv").option("--host <host>");
+    CommandBuilder.create(registry, "srv").option("--host <host>");
     const [candidates] = new ShellCompleter(registry).complete("srv -- ") as [string[], string];
     expect(candidates).not.toContain("--help");
     expect(candidates).not.toContain("--host");
@@ -664,13 +695,13 @@ describe("completion after the -- terminator", () => {
 describe("help discoverability", () => {
   it("notes command aliases in the top-level index", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "list").alias("ls").description("List things");
+    CommandBuilder.create(registry, "list").alias("ls").description("List things");
     expect(new HelpGenerator(registry).generateIndex()).toContain("alias: ls");
   });
 
   it("advertises the --no- negation of a boolean option", () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "build").option("--minify", { type: "boolean" });
+    CommandBuilder.create(registry, "build").option("--minify", { type: "boolean" });
     expect(new HelpGenerator(registry).generateCommand(["build"])).toContain("--no-minify");
   });
 });
@@ -710,7 +741,7 @@ describe("cancellation classification", () => {
 describe("cancel handler failures", () => {
   it("routes a rejected async cancel handler to the error event", async () => {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "hang")
+    CommandBuilder.create(registry, "hang")
       .cancel(async () => {
         throw new Error("cleanup failed");
       })
@@ -744,7 +775,9 @@ describe("prompting after end of input", () => {
     stdin.push(null);
     await new Promise((resolve) => stdin.once("end", resolve).resume());
 
-    await expect(prompt.text("name", { stdin, stdout: createMockStdout() })).rejects.toThrow();
+    await expect(prompt.text("name", { stdin, stdout: createMockStdout() })).rejects.toBeInstanceOf(
+      PromptCancelError,
+    );
   });
 });
 
@@ -824,7 +857,7 @@ describe("prompt terminal mode", () => {
 describe("numeric option bounds", () => {
   function numberDefs() {
     const registry = new CommandRegistry();
-    new CommandBuilder(registry, "size").option("--bytes <n>", { type: "number" });
+    CommandBuilder.create(registry, "size").option("--bytes <n>", { type: "number" });
     return registry.resolve(["size"])?.options ?? new Map();
   }
 
@@ -842,7 +875,7 @@ describe("numeric option bounds", () => {
 
   it("rejects the same value as a declared default", () => {
     expect(() =>
-      new CommandBuilder(new CommandRegistry(), "size").option("--bytes <n>", {
+      CommandBuilder.create(new CommandRegistry(), "size").option("--bytes <n>", {
         type: "number",
         default: "1e20",
       }),
@@ -855,7 +888,7 @@ describe("numeric option bounds", () => {
 describe("actionless command groups", () => {
   function group(withChild: boolean) {
     const registry = new CommandRegistry();
-    const db = new CommandBuilder(registry, "db");
+    const db = CommandBuilder.create(registry, "db");
     if (withChild) db.command("status").action(() => {});
     return new CommandRouter(registry);
   }

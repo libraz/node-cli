@@ -6,8 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { History } from "../src/shell/history.js";
+import { restoreProcessStateAfterEach } from "./helpers.js";
 
 describe("History", () => {
+  restoreProcessStateAfterEach();
+
   let tempDir: string;
   let filePath: string;
 
@@ -197,9 +200,43 @@ describe("History", () => {
     disabled.add("ignored");
     await disabled.save();
     expect(disabled.entries()).toEqual([]);
-    expect(await readFile(filePath, "utf8")).toBe("");
+    expect(existsSync(filePath)).toBe(false);
     expect(() => new History({ filePath, maxSize: -1 })).toThrow(RangeError);
     expect(() => new History({ filePath, maxSize: Number.NaN })).toThrow(RangeError);
+  });
+
+  it("leaves an existing history file untouched when maxSize is 0", async () => {
+    await writeFile(filePath, "one\ntwo\nthree\n", { mode: 0o644 });
+    const before = await lstat(filePath);
+    const disabled = new History({ filePath, maxSize: 0 });
+    expect(await disabled.load()).toEqual([]);
+    disabled.add("x");
+    await disabled.save();
+    expect(await readFile(filePath, "utf8")).toBe("one\ntwo\nthree\n");
+    const after = await lstat(filePath);
+    expect(after.ino).toBe(before.ino);
+    expect(after.mode).toBe(before.mode);
+  });
+
+  it("does not record a line whose filter throws, and reports it once", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const history = new History({
+        filePath,
+        filter: (line) => {
+          if (line.startsWith("boom")) throw new Error("filter broke");
+          return line;
+        },
+      });
+      history.add("before");
+      expect(() => history.add("boom x")).not.toThrow();
+      history.add("after");
+      expect(history.entries()).toEqual(["before", "after"]);
+      expect(stderr).toHaveBeenCalledOnce();
+      expect(String(stderr.mock.calls[0][0])).toContain("filter broke");
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it("breaks a stale lock left by a killed session and saves", async () => {
@@ -285,18 +322,13 @@ describe("History", () => {
     const history = new History({ filePath: join(blocker, "history"), maxSize: 100 });
 
     const warnings: string[] = [];
-    const originalWrite = process.stderr.write;
     process.stderr.write = ((chunk: string) => {
       warnings.push(String(chunk));
       return true;
     }) as typeof process.stderr.write;
-    try {
-      for (const line of ["one", "two", "three"]) {
-        history.add(line);
-        await history.save();
-      }
-    } finally {
-      process.stderr.write = originalWrite;
+    for (const line of ["one", "two", "three"]) {
+      history.add(line);
+      await history.save();
     }
 
     expect(warnings.filter((line) => line.includes("Could not save history"))).toHaveLength(1);

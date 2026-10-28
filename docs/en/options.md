@@ -126,8 +126,9 @@ A boolean option normally needs no value at all: writing `--verbose` sets it to
 `true`. The table above applies when a value is attached explicitly, as in
 `--verbose=0`.
 
-**`number`** accepts only plain decimal notation, optionally signed, optionally
-with a fractional part and an exponent. It rejects several forms that JavaScript's
+**`number`** accepts only plain decimal notation, optionally preceded by `-` (a leading `+`
+is rejected), optionally with a fractional part and an exponent (which may carry
+`+` or `-`). It rejects several forms that JavaScript's
 own `Number()` would accept:
 
 | Input | Result |
@@ -135,6 +136,7 @@ own `Number()` would accept:
 | `8080`, `-5`, `3.14`, `1e3` | Accepted |
 | `0x1f`, `0o17`, `0b101` | Rejected — hexadecimal, octal, and binary literals |
 | `007` | Rejected — zero-padded integers |
+| `+5` | Rejected — leading plus sign |
 | `Infinity`, `NaN` | Rejected |
 | `""`, `"   "` | Rejected — blank strings |
 | a magnitude above `Number.MAX_SAFE_INTEGER` | Rejected, with a message naming the safe-integer limit rather than calling the value "not a number" |
@@ -271,7 +273,7 @@ To validate the command as a whole rather than one option, use
 | `--` | Every token after it becomes a positional value, verbatim |
 | `-5`, `-3.14` | A positional value. `-5` is an option only if an option or alias is literally named `5`; `-3.14` can never be one, because a name may not contain `.` |
 | `-` alone | A positional value |
-| a standalone `<` or `>` token | `ParseError: Redirection operator "<" is not supported` |
+| a standalone, unquoted `<` or `>` word in a line of text, before `--` | `ParseError: Redirection operator "<" is not supported`. Argv arrays are never checked: their elements are literal |
 
 An unrecognized flag raises `UnknownOptionError`, including a character inside a
 short cluster. A character in a cluster that names a value-taking option, and a
@@ -333,7 +335,7 @@ Four rules apply:
   `--no-color` then sets that option to `true` rather than setting `color` to
   `false`.
 
-Help notes the negated form automatically next to every boolean option.
+Help and tab completion note the negated form next to every boolean option for which it works; a boolean whose `--no-<name>` spelling belongs to another option is not advertised.
 
 ## The `--` separator
 

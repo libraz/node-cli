@@ -1,3 +1,7 @@
+import type { Writable } from "node:stream";
+import { renderSafe } from "./output/color.js";
+import { writeThrough } from "./output/region.js";
+
 /**
  * Machine-readable error codes carried by {@link CLIError} instances.
  */
@@ -253,7 +257,8 @@ export function toError(err: unknown): Error {
  *
  * @param err - The thrown value.
  * @param options.stream - Where to write. Callers with an execution-local stderr
- * pass it here rather than reaching for `process.stderr`.
+ * pass it here rather than reaching for `process.stderr`. The text is sanitized,
+ * since messages quote argv and thrown values, and written around a live frame.
  * @param options.interrupted - True when the failure followed a user interrupt,
  * which is presented as a clean `Cancelled` line regardless of the error value.
  * @param options.debugStack - Whether `NODE_CLI_DEBUG=1` may print a stack.
@@ -262,20 +267,29 @@ export function toError(err: unknown): Error {
 export function presentError(
   err: unknown,
   options: {
-    stream: { write(chunk: string): unknown };
+    stream: Writable;
     interrupted?: boolean;
     debugStack?: boolean;
   },
 ): number {
   const { stream, interrupted = false, debugStack = false } = options;
   if (interrupted || isCancellationError(err)) {
-    stream.write(`${interrupted ? "Cancelled" : formatErrorMessage(err)}\n`);
+    writeDiagnostic(stream, interrupted ? "Cancelled" : formatErrorMessage(err));
     return 130;
   }
   if (debugStack && process.env.NODE_CLI_DEBUG === "1" && err instanceof Error && err.stack) {
-    stream.write(`${err.stack}\n`);
+    writeDiagnostic(stream, err.stack);
   } else {
-    stream.write(`Error: ${formatErrorMessage(err)}\n`);
+    writeDiagnostic(stream, `Error: ${formatErrorMessage(err)}`);
   }
   return err instanceof CLIError ? err.exitCode : 1;
+}
+
+/**
+ * Writes one framework diagnostic line. Every error report goes through here:
+ * its text quotes argv and thrown values, so control sequences are stripped and
+ * styling closed, and it is written around any frame a renderer has drawn.
+ */
+export function writeDiagnostic(stream: Writable, text: string): void {
+  writeThrough(stream, `${renderSafe(text, { singleLine: false })}\n`);
 }

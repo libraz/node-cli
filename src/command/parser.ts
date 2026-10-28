@@ -15,16 +15,25 @@ export function stripOptionPrefix(flag: string): string {
 }
 
 /**
- * Builds an alias → canonical-long-name map for a command's options. Shared by
- * the parser and completion so both resolve short aliases identically.
+ * Formats an option alias the way the parser accepts it: one dash for a
+ * single-character alias, two for a longer one.
  *
- * @param options - The command's option definitions.
- * @returns A map from each alias to its option's long name.
+ * @param alias - The alias without leading dashes.
+ * @returns The alias spelled as a flag.
  */
 export function formatOptionFlag(alias: string): string {
   return alias.length === 1 ? `-${alias}` : `--${alias}`;
 }
 
+/**
+ * Resolves a flag name (long name or alias) to its option definition. The one
+ * lookup the parser, help and completion share, so they cannot disagree.
+ *
+ * @param name - The flag name without leading dashes.
+ * @param options - The command's option definitions.
+ * @param aliasMap - Optional prebuilt alias map for `options`.
+ * @returns The matching definition, or `undefined` when no option owns the name.
+ */
 export function resolveOptionName(
   name: string,
   options: Map<string, OptionDef>,
@@ -36,6 +45,13 @@ export function resolveOptionName(
   return long === undefined ? undefined : options.get(long);
 }
 
+/**
+ * Builds an alias → canonical-long-name map for a command's options. Shared by
+ * the parser and completion so both resolve aliases identically.
+ *
+ * @param options - The command's option definitions.
+ * @returns A map from each alias to its option's long name.
+ */
 export function buildAliasMap(options: Map<string, OptionDef>): Map<string, string> {
   const aliasMap = new Map<string, string>();
   for (const [, def] of options) {
@@ -44,6 +60,42 @@ export function buildAliasMap(options: Map<string, OptionDef>): Map<string, stri
     }
   }
   return aliasMap;
+}
+
+/**
+ * Decides whether a flag name is a `--no-<name>` negation. The single place the
+ * negation spelling is defined, so the parser, help and completion agree.
+ * A name that an option owns literally (long name or alias) is not a negation.
+ *
+ * @param name - The flag name without leading dashes (e.g. `no-color`).
+ * @param options - The command's option definitions.
+ * @param aliasMap - Optional prebuilt alias map for `options`.
+ * @returns `undefined` when `name` is not a negation; otherwise the typed target
+ *   name and the option it resolves to (`undefined` when no such option exists).
+ */
+export function resolveNegation(
+  name: string,
+  options: Map<string, OptionDef>,
+  aliasMap?: Map<string, string>,
+): { typed: string; def: OptionDef | undefined } | undefined {
+  const map = aliasMap ?? buildAliasMap(options);
+  if (!name.startsWith("no-") || resolveOptionName(name, options, map)) return undefined;
+  const typed = name.slice(3);
+  return { typed, def: resolveOptionName(typed, options, map) };
+}
+
+/**
+ * Returns the `--no-<long>` flag help and completion may advertise for an option,
+ * or `undefined` when parsing that spelling would not set the option to false.
+ *
+ * @param def - The option definition.
+ * @param options - The command's option definitions.
+ * @returns The negated flag, or `undefined`.
+ */
+export function negatedFlag(def: OptionDef, options: Map<string, OptionDef>): string | undefined {
+  if (def.schema.type !== "boolean") return undefined;
+  const name = `no-${def.long}`;
+  return resolveNegation(name, options)?.def === def ? `--${name}` : undefined;
 }
 
 /**
@@ -66,35 +118,136 @@ export function helpFlagBindings(options: Map<string, OptionDef>): {
   };
 }
 
+/** One word of an input line as the tokenizer sees it. */
+export interface ScannedWord {
+  /** The word with quotes and escapes resolved. */
+  value: string;
+  /** The word exactly as typed, quotes and escapes included. */
+  raw: string;
+  /** Index of the word's first character in the input. */
+  start: number;
+}
+
+/** Result of {@link scanWords}. */
+export interface WordScan {
+  /** Every word, including the one still being typed. */
+  words: ScannedWord[];
+  /** The quote left open at the end of the input, if any. */
+  openQuote?: "single" | "double";
+  /** True when the input ends between words, so the next character starts a new one. */
+  atBoundary: boolean;
+}
+
 /**
- * Splits an input string into segments at top-level delimiter characters,
- * respecting single quotes, double quotes, and backslash escaping. This is the
- * shared scanner behind both {@link tokenize} and {@link splitPipes}.
+ * The single quote- and escape-aware word scan. Whitespace splits words only
+ * outside quotes and when not backslash-escaped; single quotes are literal and
+ * double quotes honour `\"`, `\\`, `\$`, `` \` `` and `\<newline>`. Both
+ * {@link tokenize} and tab-completion derive word boundaries from it.
  *
  * @param input - The raw input string.
- * @param isDelimiter - Returns true for characters that separate segments at top level.
- * @param preserveSyntax - When false, quote and escape characters are consumed
- *   (used for tokenizing). When true, they are kept verbatim so the segment can
- *   be re-tokenized later (used for pipe splitting).
- * @returns The list of segments (empty segments are dropped).
+ * @returns The words, any open quote, and whether the input ends at a word boundary.
  */
-function splitRespectingQuotes(
-  input: string,
-  isDelimiter: (ch: string) => boolean,
-  preserveSyntax: boolean,
-): string[] {
+export function scanWords(input: string): WordScan {
+  const words: ScannedWord[] = [];
+  let value = "";
+  let start = -1;
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  const flush = (end: number) => {
+    if (start >= 0) words.push({ value, raw: input.slice(start, end), start });
+    value = "";
+    start = -1;
+  };
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (escaped) {
+      value += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (start < 0 && (inSingle || inDouble || !/\s/.test(ch))) start = i;
+
+    if (ch === "\\") {
+      if (inSingle) {
+        // Single quotes are fully literal: a backslash inside them is ordinary.
+        value += ch;
+      } else if (inDouble) {
+        const next = input[i + 1];
+        if (next !== undefined && ['"', "\\", "$", "`", "\n"].includes(next)) {
+          escaped = true;
+        } else {
+          value += ch;
+        }
+      } else {
+        escaped = true;
+      }
+      continue;
+    }
+
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+
+    if (!inSingle && !inDouble && /\s/.test(ch)) {
+      flush(i);
+      continue;
+    }
+
+    value += ch;
+  }
+
+  if (escaped) value += "\\";
+  const openQuote = inSingle ? "single" : inDouble ? "double" : undefined;
+  const atBoundary = start < 0;
+  flush(input.length);
+  return { words, openQuote, atBoundary };
+}
+
+/**
+ * Rejects a standalone, unquoted `<` or `>` word before the `--` separator in
+ * string input. Argv input never goes through here: its elements are literal.
+ *
+ * @param input - The raw input string.
+ * @throws {ParseError} When a redirection operator is present.
+ */
+function assertNoRedirection(input: string): void {
+  for (const { raw } of scanWords(input).words) {
+    if (raw === "--") return;
+    if (raw === "<" || raw === ">") {
+      throw new ParseError(`Redirection operator "${raw}" is not supported`);
+    }
+  }
+}
+
+/**
+ * Splits a pipeline string into segments at top-level `|` characters, keeping
+ * quotes and escapes verbatim so each segment can be tokenized again later.
+ *
+ * @param input - The raw input string.
+ * @returns The trimmed, non-empty segments.
+ */
+function splitAtPipes(input: string): string[] {
   const segments: string[] = [];
   let current = "";
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
-  let tokenStarted = false;
 
   const flush = () => {
-    const seg = preserveSyntax ? current.trim() : current;
-    if (seg.length > 0 || (!preserveSyntax && tokenStarted)) segments.push(seg);
+    const seg = current.trim();
+    if (seg.length > 0) segments.push(seg);
     current = "";
-    tokenStarted = false;
   };
 
   for (let i = 0; i < input.length; i++) {
@@ -102,61 +255,26 @@ function splitRespectingQuotes(
 
     if (escaped) {
       current += ch;
-      tokenStarted = true;
       escaped = false;
       continue;
     }
 
-    if (ch === "\\") {
-      tokenStarted = true;
-      if (inSingle) {
-        // Single quotes are fully literal in BOTH modes: a backslash inside them
-        // is an ordinary character, never an escape. Treating it as an escape
-        // (the preserveSyntax path used by pipe-splitting) made splitPipes reject
-        // inputs like `echo 'a\'` that tokenize accepts.
-        current += ch;
-        continue;
-      }
-      if (inDouble && !preserveSyntax) {
-        const next = input[i + 1];
-        if (next !== undefined && ['"', "\\", "$", "`", "\n"].includes(next)) {
-          escaped = true;
-        } else {
-          current += ch;
-        }
-        continue;
-      }
-      if (preserveSyntax) current += ch;
+    // A backslash escapes only outside single quotes; single quotes are literal.
+    if (ch === "\\" && !inSingle) {
+      current += ch;
       escaped = true;
       continue;
     }
 
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      tokenStarted = true;
-      if (preserveSyntax) current += ch;
-      continue;
-    }
-
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      tokenStarted = true;
-      if (preserveSyntax) current += ch;
-      continue;
-    }
-
-    if (!inSingle && !inDouble && isDelimiter(ch)) {
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '"' && !inSingle) inDouble = !inDouble;
+    else if (ch === "|" && !inSingle && !inDouble) {
       flush();
       continue;
     }
-
     current += ch;
-    tokenStarted = true;
   }
 
-  if (escaped && !preserveSyntax) {
-    current += "\\";
-  }
   if (inSingle || inDouble) {
     const quote = inSingle ? "single" : "double";
     throw new ParseError(`Unclosed ${quote} quote in input`, { quote });
@@ -176,7 +294,11 @@ function splitRespectingQuotes(
  * @returns An array of parsed tokens.
  */
 export function tokenize(input: string): string[] {
-  return splitRespectingQuotes(input, (ch) => /\s/.test(ch), false);
+  const { words, openQuote } = scanWords(input);
+  if (openQuote) {
+    throw new ParseError(`Unclosed ${openQuote} quote in input`, { quote: openQuote });
+  }
+  return words.map((word) => word.value);
 }
 
 /**
@@ -344,6 +466,7 @@ export function parseOptionFlags(flags: string): {
  * @returns The fully parsed result including command path, arguments, and options.
  */
 export function parse(input: string | string[], registry: CommandRegistry): ParseResult {
+  if (typeof input === "string") assertNoRedirection(input);
   const rawInput = Array.isArray(input) ? input.join(" ") : input;
   const tokens = Array.isArray(input) ? input : tokenize(input);
   const rawArgv = Array.isArray(input) ? [...input] : undefined;
@@ -399,9 +522,26 @@ function extractOptionsAndArgs(
 ): { positional: string[]; options: Record<string, unknown>; builtInHelp: boolean } {
   const positional: string[] = [];
   const options: Record<string, unknown> = Object.create(null);
-  let pastDoubleDash = false;
-  let builtInHelp = false;
+  // An unbound --help / -h anywhere before `--` wins over every other parse error;
+  // whatever was collected before the error is kept.
+  const builtInHelp = hasBuiltInHelpToken(tokens, command.options, buildAliasMap(command.options));
+  try {
+    scanTokens(tokens, command, positional, options);
+  } catch (error) {
+    if (!builtInHelp) throw error;
+  }
+  if (builtInHelp) options.help = true;
+  return { positional, options, builtInHelp };
+}
 
+/** Walks the tokens, filling `positional` and `options` and throwing on the first error. */
+function scanTokens(
+  tokens: string[],
+  command: CommandDefinition,
+  positional: string[],
+  options: Record<string, unknown>,
+): void {
+  let pastDoubleDash = false;
   const optionDefs = command.options;
   const aliasMap = buildAliasMap(optionDefs);
 
@@ -415,10 +555,6 @@ function extractOptionsAndArgs(
       continue;
     }
 
-    if (token === "<" || token === ">") {
-      throw new ParseError(`Redirection operator "${token}" is not supported`);
-    }
-
     if (token === "--") {
       pastDoubleDash = true;
       i++;
@@ -427,26 +563,28 @@ function extractOptionsAndArgs(
 
     // Negated boolean (--no-x), unless an option is literally named "no-x".
     const negatedEqIndex = token.indexOf("=");
-    const negatedLiteralName = token.slice(2, negatedEqIndex === -1 ? undefined : negatedEqIndex);
-    if (token.startsWith("--no-") && !optionDefs.has(negatedLiteralName)) {
-      const typed = token.slice(5, negatedEqIndex === -1 ? undefined : negatedEqIndex);
+    const flagName = token.slice(2, negatedEqIndex === -1 ? undefined : negatedEqIndex);
+    const negation = token.startsWith("--")
+      ? resolveNegation(flagName, optionDefs, aliasMap)
+      : undefined;
+    if (negation) {
+      const spelling = `--${flagName}`;
+      const def = negation.def;
+      if (!def) {
+        throw new UnknownOptionError(spelling);
+      }
+      if (def.schema.type !== "boolean") {
+        throw new InvalidOptionError(`Option ${spelling} can only be used with boolean options`, {
+          optionName: def.long,
+        });
+      }
       if (negatedEqIndex !== -1) {
-        throw new InvalidOptionError(`Option --no-${typed} does not accept a value`, {
-          optionName: typed,
+        throw new InvalidOptionError(`Option ${spelling} does not accept a value`, {
+          optionName: def.long,
           value: token.slice(negatedEqIndex + 1),
         });
       }
-      const def = resolveOptionName(typed, optionDefs, aliasMap);
-      if (!def) {
-        throw new UnknownOptionError(`--no-${typed}`);
-      }
-      const name = def.long;
-      if (def.schema.type !== "boolean") {
-        throw new InvalidOptionError(`Option --no-${typed} can only be used with boolean options`, {
-          optionName: name,
-        });
-      }
-      options[name] = false;
+      options[def.long] = false;
       i++;
       continue;
     }
@@ -467,9 +605,8 @@ function extractOptionsAndArgs(
       const typed = token.slice(2);
       const def = resolveOptionName(typed, optionDefs, aliasMap);
       if (!def) {
+        // Help itself is raised by the caller's pre-scan; just skip the token.
         if (typed === "help") {
-          builtInHelp = true;
-          options.help = true;
           i++;
           continue;
         }
@@ -513,7 +650,7 @@ function extractOptionsAndArgs(
 
     if (token.startsWith("-") && token.length > 1 && !token.startsWith("-", 1)) {
       const eqIndex = token.indexOf("=");
-      if (eqIndex !== -1) {
+      if (eqIndex !== -1 && eqIndex <= 2) {
         const alias = token.slice(1, eqIndex);
         const def = resolveOptionName(alias, optionDefs, aliasMap);
         if (!def) {
@@ -524,15 +661,13 @@ function extractOptionsAndArgs(
         continue;
       }
 
-      const chars = token.slice(1);
+      // A cluster written with `=value` is read as the cluster first, so `-xyz=1`
+      // means what `-xyz` means.
+      const chars = token.slice(1, eqIndex === -1 ? undefined : eqIndex);
       if (chars.length === 1) {
         const def = resolveOptionName(chars, optionDefs, aliasMap);
         if (!def) {
-          // Mirror the long `--help` fallback so `-h` works on every command
-          // unless the user has explicitly bound `-h` to another option.
           if (chars === "h") {
-            builtInHelp = true;
-            options.help = true;
             i++;
             continue;
           }
@@ -561,13 +696,7 @@ function extractOptionsAndArgs(
         for (const ch of chars) {
           const def = resolveOptionName(ch, optionDefs, aliasMap);
           if (!def) {
-            // Mirror the single-flag `-h` fallback so help works inside a cluster
-            // (e.g. `-vh`) unless the user has bound `-h` to another option.
-            if (ch === "h") {
-              builtInHelp = true;
-              options.help = true;
-              continue;
-            }
+            if (ch === "h") continue;
             throw new UnknownOptionError(`-${ch}`);
           }
           const name = def.long;
@@ -579,6 +708,12 @@ function extractOptionsAndArgs(
           }
           options[name] = true;
         }
+        if (eqIndex !== -1) {
+          throw new InvalidOptionError(`Option -${chars} does not accept a value`, {
+            optionName: resolveOptionName(chars[chars.length - 1], optionDefs, aliasMap)?.long,
+            value: token.slice(eqIndex + 1),
+          });
+        }
         i++;
       }
       continue;
@@ -587,8 +722,35 @@ function extractOptionsAndArgs(
     positional.push(token);
     i++;
   }
+}
 
-  return { positional, options, builtInHelp };
+/**
+ * Reports whether a token list asks for the built-in help: an unbound `--help`,
+ * or an `h` in a single-dash cluster while `-h` is unbound, before any `--`.
+ */
+function hasBuiltInHelpToken(
+  tokens: string[],
+  options: Map<string, OptionDef>,
+  aliasMap: Map<string, string>,
+): boolean {
+  const longBound = resolveOptionName("help", options, aliasMap) !== undefined;
+  const shortBound = resolveOptionName("h", options, aliasMap) !== undefined;
+  for (const token of tokens) {
+    if (token === "--") return false;
+    if (token === "--help" && !longBound) return true;
+    if (
+      !shortBound &&
+      token.length > 1 &&
+      token.startsWith("-") &&
+      !token.startsWith("--") &&
+      !token.includes("=") &&
+      Number.isNaN(Number(token)) &&
+      token.includes("h")
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function looksLikeOption(token: string, currentDef: { schema: { type?: string } }): boolean {
@@ -673,6 +835,7 @@ function mapPositionalArgs(
  * @returns An array of trimmed command strings.
  */
 export function splitPipes(input: string): string[] {
+  assertNoRedirection(input);
   let previousPipe = true;
   let inSingle = false;
   let inDouble = false;
@@ -684,7 +847,7 @@ export function splitPipes(input: string): string[] {
       continue;
     }
     // A backslash escapes only outside single quotes; single quotes are literal
-    // (matching splitRespectingQuotes), so quote state stays balanced.
+    // (matching splitAtPipes), so quote state stays balanced.
     if (ch === "\\" && !inSingle) {
       escaped = true;
       previousPipe = false;
@@ -711,7 +874,7 @@ export function splitPipes(input: string): string[] {
     throw new ParseError("Invalid trailing pipe");
   }
   // Preserve quotes/escapes so each segment can be tokenized again downstream.
-  return splitRespectingQuotes(input, (ch) => ch === "|", true);
+  return splitAtPipes(input);
 }
 
 /**
