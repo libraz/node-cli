@@ -226,7 +226,7 @@ describe("c (template tag)", () => {
   });
 });
 
-describe("stringWidth", () => {
+describe("width of symbols and large cells", () => {
   it("distinguishes narrow dingbats from wide emoji and CJK", () => {
     expect(stringWidth("✓✔✗")).toBe(3);
     expect(stringWidth("⭐⌚日本")).toBe(8);

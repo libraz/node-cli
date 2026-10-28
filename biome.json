@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.11/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
   "linter": {
     "enabled": true,
     "rules": {
@@ -16,6 +16,11 @@
     "formatter": {
       "quoteStyle": "double",
       "semicolons": "always"
+    }
+  },
+  "markdown": {
+    "formatter": {
+      "enabled": false
     }
   }
 }
