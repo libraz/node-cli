@@ -7,7 +7,7 @@ import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
 import type { CompletionContext } from "../src/index.js";
-import { InteractiveShell, type ModeConfig } from "../src/shell/repl.js";
+import { InteractiveShell, type ModeOptions } from "../src/shell/repl.js";
 import { createMockTTY } from "./helpers.js";
 
 function feedLines(stdin: PassThrough, lines: string[]): void {
@@ -381,7 +381,7 @@ describe("mode command", () => {
     await router.execute("sql", { shell, stdout, stderr: stdout });
 
     // The action ran and the shell is now in the mode it asked for.
-    const entered = (shell as unknown as { mode: ModeConfig | null }).mode;
+    const entered = (shell as unknown as { mode: ModeOptions | null }).mode;
     expect(entered?.prompt).toBe("sql> ");
     expect(entered?.action).toBe(modeAction);
   });

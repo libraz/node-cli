@@ -64,7 +64,7 @@ describe("async option callbacks", () => {
 
     const failure = cli.exec("serve --port x", quiet());
     await expect(failure).rejects.toBeInstanceOf(ValidationError);
-    await expect(failure).rejects.toMatchObject({ code: "VALIDATION_ERROR", optionName: "port" });
+    await expect(failure).rejects.toMatchObject({ code: "VALIDATION_FAILED", optionName: "port" });
   });
 
   it("awaits an async option validate and stops on rejection", async () => {
@@ -83,7 +83,7 @@ describe("async option callbacks", () => {
       });
 
     const failure = cli.exec("serve --host bad", quiet());
-    await expect(failure).rejects.toMatchObject({ code: "VALIDATION_ERROR", optionName: "host" });
+    await expect(failure).rejects.toMatchObject({ code: "VALIDATION_FAILED", optionName: "host" });
     expect(ran).toBe(false);
 
     await cli.exec("serve --host good", quiet());
@@ -104,7 +104,7 @@ describe("async option callbacks", () => {
       });
 
     await expect(cli.exec("deploy prod", quiet())).rejects.toMatchObject({
-      code: "VALIDATION_ERROR",
+      code: "VALIDATION_FAILED",
     });
     expect(ran).toBe(false);
   });

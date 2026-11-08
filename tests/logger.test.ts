@@ -14,7 +14,7 @@ describe("logger", () => {
 
   it("logs info messages", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream });
+    const log = createLogger({ stderr: stream });
     log.info("hello");
     expect(stream.getOutput()).toContain("hello");
     expect(stream.getOutput()).toContain("[INFO]");
@@ -22,7 +22,7 @@ describe("logger", () => {
 
   it("removes terminal control sequences from untrusted log messages", () => {
     const stream = createMockStdout();
-    createLogger({ stream }).info("\x1b]2;spoofed\x07hello\rworld");
+    createLogger({ stderr: stream }).info("\x1b]2;spoofed\x07hello\rworld");
     expect(stream.getOutput()).not.toContain("\x1b]2;");
     // The carriage return is removed, but as a space: dropping it outright
     // would join two words the caller kept apart.
@@ -32,14 +32,14 @@ describe("logger", () => {
 
   it("suppresses debug at info level", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, level: "info" });
+    const log = createLogger({ stderr: stream, level: "info" });
     log.debug("hidden");
     expect(stream.getOutput()).toBe("");
   });
 
   it("shows debug at debug level", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, level: "debug" });
+    const log = createLogger({ stderr: stream, level: "debug" });
     log.debug("visible");
     expect(stream.getOutput()).toContain("visible");
     expect(stream.getOutput()).toContain("[DEBUG]");
@@ -47,7 +47,7 @@ describe("logger", () => {
 
   it("logs all levels correctly", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, level: "debug" });
+    const log = createLogger({ stderr: stream, level: "debug" });
     log.debug("d");
     log.info("i");
     log.success("s");
@@ -63,7 +63,7 @@ describe("logger", () => {
 
   it("silent level suppresses all", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, level: "silent" });
+    const log = createLogger({ stderr: stream, level: "silent" });
     log.debug("a");
     log.info("b");
     log.warn("c");
@@ -73,14 +73,14 @@ describe("logger", () => {
 
   it("adds prefix", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, prefix: "app" });
+    const log = createLogger({ stderr: stream, prefix: "app" });
     log.info("hello");
     expect(stream.getOutput()).toContain("[app]");
   });
 
   it("creates child logger with combined prefix", () => {
     const stream = createMockStdout();
-    const parent = createLogger({ stream, prefix: "app" });
+    const parent = createLogger({ stderr: stream, prefix: "app" });
     const child = parent.child("db");
     child.info("connected");
     expect(stream.getOutput()).toContain("[app:db]");
@@ -88,7 +88,7 @@ describe("logger", () => {
 
   it("changes level dynamically", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, level: "info" });
+    const log = createLogger({ stderr: stream, level: "info" });
     log.debug("hidden");
     expect(stream.getOutput()).toBe("");
 
@@ -99,7 +99,7 @@ describe("logger", () => {
 
   it("adds timestamp", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, timestamp: true });
+    const log = createLogger({ stderr: stream, timestamp: true });
     log.info("hello");
     // Should contain HH:MM:SS pattern
     expect(stream.getOutput()).toMatch(/\d{2}:\d{2}:\d{2}/);
@@ -107,21 +107,21 @@ describe("logger", () => {
 
   it("supports printf-style formatting", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream });
+    const log = createLogger({ stderr: stream });
     log.info("hello %s, count: %d", "world", 42);
     expect(stream.getOutput()).toContain("hello world, count: 42");
   });
 
   it("renders icon, then prefix, then message in that order", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, prefix: "app" });
+    const log = createLogger({ stderr: stream, prefix: "app" });
     log.info("hi");
     expect(stream.getOutput()).toBe("[INFO] [app] hi\n");
   });
 
   it("child setLevel does not affect the parent", () => {
     const stream = createMockStdout();
-    const parent = createLogger({ stream, level: "info" });
+    const parent = createLogger({ stderr: stream, level: "info" });
     const child = parent.child("db");
     child.setLevel("debug");
 
@@ -134,7 +134,7 @@ describe("logger", () => {
 
   it("child dynamically inherits parent level changes until overridden", () => {
     const stream = createMockStdout();
-    const parent = createLogger({ stream, level: "warn" });
+    const parent = createLogger({ stderr: stream, level: "warn" });
     const child = parent.child("db");
     child.info("hidden");
     expect(stream.getOutput()).toBe("");
@@ -173,7 +173,7 @@ describe("logger", () => {
         return stream;
       },
     } as unknown as Writable;
-    const log = createLogger({ stream, bufferLimit: 1 });
+    const log = createLogger({ stderr: stream, bufferLimit: 1 });
     log.info("first");
     log.info("dropped");
     log.info("latest");
@@ -204,7 +204,7 @@ describe("logger", () => {
         return stream;
       },
     } as unknown as Writable;
-    const parent = createLogger({ stream });
+    const parent = createLogger({ stderr: stream });
     const child = parent.child("db");
     child.info("connecting");
 
@@ -247,7 +247,7 @@ describe("logger", () => {
           return stream;
         },
       } as unknown as Writable;
-      const log = createLogger({ stream });
+      const log = createLogger({ stderr: stream });
       log.info("queued");
       const flushed = log.flush();
       if (terminalEvent === "error") {
@@ -291,12 +291,12 @@ function renderRows(output: string): string[] {
 describe("untrusted logger metadata", () => {
   it("strips control sequences from a prefix and from child names", () => {
     const stream = createMockStdout();
-    createLogger({ stream, prefix: "\x1b]2;spoofed\x07api" }).info("hello");
+    createLogger({ stderr: stream, prefix: "\x1b]2;spoofed\x07api" }).info("hello");
     expect(stream.getOutput()).not.toContain("\x1b]2;");
     expect(stream.getOutput()).toContain("[api]");
 
     const childStream = createMockStdout();
-    createLogger({ stream: childStream }).child("\x1b]2;spoofed\x07db").info("hello");
+    createLogger({ stderr: childStream }).child("\x1b]2;spoofed\x07db").info("hello");
     expect(childStream.getOutput()).not.toContain("\x1b]2;");
     expect(childStream.getOutput()).toContain("[db]");
   });
@@ -312,8 +312,8 @@ describe("logging beside an active progress renderer", () => {
   it("emits the log line on a cleared row and lets the renderer redraw", () => {
     restoreCursor();
     const stream = createMockTTY();
-    const spinner = progress.spinner({ label: "working", stream });
-    const log = createLogger({ stream, timestamp: false });
+    const spinner = progress.spinner({ label: "working", stderr: stream });
+    const log = createLogger({ stderr: stream, timestamp: false });
     const before = stream.getOutput().length;
 
     log.info("hello");
@@ -338,7 +338,7 @@ describe("logging beside an active progress renderer", () => {
 
   it("writes straight through when no renderer owns the stream", () => {
     const stream = createMockTTY();
-    createLogger({ stream, timestamp: false }).info("hello");
+    createLogger({ stderr: stream, timestamp: false }).info("hello");
     expect(stream.getOutput().startsWith("\r\x1b[K")).toBe(false);
     expect(stream.getOutput()).toContain("hello");
   });
@@ -347,7 +347,7 @@ describe("logging beside an active progress renderer", () => {
 describe("child level inheritance", () => {
   it("follows a later parent setLevel and is not overridden by the child", () => {
     const stream = createMockStdout();
-    const parent = createLogger({ stream });
+    const parent = createLogger({ stderr: stream });
     const child = parent.child("db");
 
     parent.setLevel("debug");
@@ -369,7 +369,7 @@ describe("logger stream failure", () => {
 
   it("rejects flush instead of crashing when the file cannot be opened", async () => {
     const stream = createWriteStream("/nonexistent-logger-dir/x.log");
-    const log = createLogger({ stream });
+    const log = createLogger({ stderr: stream });
     log.info("hello");
     await expect(log.flush()).rejects.toThrow(/ENOENT/);
     await expect(log.flush()).rejects.toThrow(/ENOENT/);
@@ -381,7 +381,7 @@ describe("logger stream failure", () => {
         setImmediate(() => callback(new Error("disk full")));
       },
     });
-    const log = createLogger({ stream });
+    const log = createLogger({ stderr: stream });
     log.info("lost");
     await expect(log.flush()).rejects.toThrow("disk full");
     expect(() => log.info("later")).not.toThrow();
@@ -398,7 +398,7 @@ describe("logger stream failure", () => {
         }, 20);
       },
     });
-    const log = createLogger({ stream });
+    const log = createLogger({ stderr: stream });
     log.info("slow");
     await log.flush();
     expect(written).toBe(true);
@@ -418,7 +418,7 @@ describe("logger tree sharing one stream", () => {
         setImmediate(callback);
       },
     });
-    const parent = createLogger({ stream });
+    const parent = createLogger({ stderr: stream });
     const child = parent.child("c");
     parent.info("p1");
     parent.info("p2");
@@ -450,7 +450,7 @@ describe("logger tree sharing one stream", () => {
         return stream;
       },
     } as unknown as Writable;
-    const parent = createLogger({ stream, bufferLimit: 2 });
+    const parent = createLogger({ stderr: stream, bufferLimit: 2 });
     const child = parent.child("c");
     parent.info("first");
     parent.info("p1");
@@ -470,7 +470,7 @@ describe("logger input handling", () => {
 
   it("does not throw when formatting an argument runs throwing caller code", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream });
+    const log = createLogger({ stderr: stream });
     const hostile = {
       toString() {
         throw new Error("boom");
@@ -488,7 +488,7 @@ describe("logger input handling", () => {
   it("closes styling and links a message leaves open before the newline", () => {
     const stream = createMockStdout();
     const message = "\x1b[31mred \x1b]8;;https://example.invalid\x1b\\link";
-    createLogger({ stream }).info(message);
+    createLogger({ stderr: stream }).info(message);
     const closed = renderSafe(message, { singleLine: false });
     expect(closed).not.toBe(message);
     expect(stream.getOutput().endsWith(`${closed}\n`)).toBe(true);
@@ -497,7 +497,7 @@ describe("logger input handling", () => {
 
   it("rejects an unknown level instead of muting every line", () => {
     expect(() => createLogger({ level: "verbose" as never })).toThrow(RangeError);
-    const log = createLogger({ stream: createMockStdout() });
+    const log = createLogger({ stderr: createMockStdout() });
     expect(() => log.setLevel("WARN" as never)).toThrow(RangeError);
     expect(() => log.setLevel("toString" as never)).toThrow(RangeError);
     expect(() => log.setLevel("WARN" as never)).toThrow(
@@ -507,7 +507,7 @@ describe("logger input handling", () => {
 
   it("returns the logger from setLevel so calls chain", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream, level: "error" });
+    const log = createLogger({ stderr: stream, level: "error" });
     expect(log.setLevel("debug")).toBe(log);
     log.setLevel("info").setLevel("debug").debug("chained");
     expect(stream.getOutput()).toContain("chained");
@@ -515,7 +515,7 @@ describe("logger input handling", () => {
 
   it("accepts non-string messages", () => {
     const stream = createMockStdout();
-    const log = createLogger({ stream });
+    const log = createLogger({ stderr: stream });
     log.info(new Error("boom"));
     log.warn({ a: 1 });
     log.error(42);
@@ -534,7 +534,7 @@ describe("logger input handling", () => {
         throw new Error("redraw failed");
       },
     });
-    const log = createLogger({ stream });
+    const log = createLogger({ stderr: stream });
     expect(() => log.info("one")).not.toThrow();
     expect(() => log.info("two")).not.toThrow();
     expect(stream.getOutput()).toContain("one");

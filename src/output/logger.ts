@@ -23,7 +23,7 @@ export interface LoggerOptions {
   /** Whether to include a timestamp (HH:MM:SS) in each log line. Defaults to false. */
   timestamp?: boolean;
   /** Output stream for log messages. Defaults to process.stderr. */
-  stream?: Writable;
+  stderr?: Writable;
   /** Maximum log lines queued while the stream is backpressured. Defaults to 1000. */
   bufferLimit?: number;
 }
@@ -264,7 +264,7 @@ function buildLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel)
 
   const prefix = options.prefix;
   const timestamp = options.timestamp ?? false;
-  const stream = options.stream ?? process.stderr;
+  const stream = options.stderr ?? process.stderr;
   const bufferLimit = options.bufferLimit ?? 1000;
   if (!Number.isSafeInteger(bufferLimit) || bufferLimit < 0) {
     throw usageError(
@@ -353,7 +353,10 @@ function buildLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel)
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
       // No explicit level → the child inherits this logger's effective level
       // dynamically (so later parent.setLevel calls still reach it).
-      return buildLogger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
+      return buildLogger(
+        { prefix: fullPrefix, timestamp, stderr: stream, bufferLimit },
+        effectiveLevel,
+      );
     },
     flush() {
       return flushStream(stream, state);

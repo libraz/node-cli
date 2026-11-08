@@ -7,12 +7,7 @@ import { CommandBuilder } from "../src/command/builder.js";
 import { activePipeSegment, parse, parseDefinitionString } from "../src/command/parser.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
-import {
-  CLIError,
-  InvalidOptionError,
-  MissingOptionError,
-  PromptCancelError,
-} from "../src/errors.js";
+import { CancelledError, CLIError, InvalidOptionError, MissingOptionError } from "../src/errors.js";
 import { HelpGenerator } from "../src/help/generator.js";
 import { createCLI } from "../src/index.js";
 import { ShellCompleter } from "../src/shell/completion.js";
@@ -120,10 +115,10 @@ describe("missing variadic arguments", () => {
 });
 
 describe("direct mode prompt cancellation display", () => {
-  it("prints Cancelled instead of a raw PromptCancelError message", async () => {
+  it("prints Cancelled instead of a raw CancelledError message", async () => {
     const cli = createCLI();
     cli.command("ask").action(() => {
-      throw new PromptCancelError();
+      throw new CancelledError();
     });
     const stderr = createMockStdout();
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
@@ -139,7 +134,7 @@ describe("direct mode prompt cancellation display", () => {
   it("uses a CLIError's custom exit code in direct mode", async () => {
     const cli = createCLI();
     cli.command("fail").action(() => {
-      throw new CLIError("custom failure", { code: "VALIDATION_ERROR", exitCode: 42 });
+      throw new CLIError("custom failure", { code: "VALIDATION_FAILED", exitCode: 42 });
     });
     const stderr = createMockStdout();
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;

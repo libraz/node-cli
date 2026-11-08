@@ -5,7 +5,7 @@ import { CommandRegistry, visibleSubcommands } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
 import { CommandNotFoundError, presentError, usageError } from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
-import { streamIsTTY } from "./output/color.js";
+import { isTTY } from "./output/color.js";
 import { isShellCommand, SHELL_COMMANDS } from "./shell/builtins.js";
 import { InteractiveShell } from "./shell/repl.js";
 import type {
@@ -366,7 +366,7 @@ export class CLI {
       } finally {
         await this.router.emitExit();
       }
-    } else if (streamIsTTY(process.stdin) && streamIsTTY(process.stdout)) {
+    } else if (isTTY(process.stdin) && isTTY(process.stdout)) {
       // Interactive shell mode
       let banner: string;
       if (this.bannerStr !== undefined) {

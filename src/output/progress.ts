@@ -2,12 +2,12 @@ import type { Writable } from "node:stream";
 import { usageError } from "../errors.js";
 import { finiteInteger, guardCall, MAX_RENDER_WIDTH } from "../guard.js";
 import {
-  type ColorProxy,
+  type Colorizer,
   createColorizer,
   isStyleName,
+  isTTY,
   renderSafe,
   type StyleSpec,
-  streamIsTTY,
   stringWidth,
 } from "./color.js";
 import { type RegionOwner, setRegionOwner } from "./region.js";
@@ -31,9 +31,9 @@ export interface BarOptions {
   /** Custom format function that receives bar state and returns a display string. */
   format?: (state: BarState) => string;
   /** Output stream for rendering. Defaults to process.stderr. */
-  stream?: Writable;
+  stderr?: Writable;
   /** Style applied to the bar, such as `"green"` or `"bold.cyan"`. An unknown name throws at creation. */
-  color?: StyleSpec;
+  style?: StyleSpec;
 }
 
 /**
@@ -90,9 +90,9 @@ export interface SpinnerOptions {
   /** Animation interval in milliseconds. A finite number above 0. Defaults to 80. */
   intervalMs?: number;
   /** Output stream for rendering. Defaults to process.stderr. */
-  stream?: Writable;
+  stderr?: Writable;
   /** Style applied to the spinner frame, such as `"cyan"`. An unknown name throws at creation. */
-  color?: StyleSpec;
+  style?: StyleSpec;
 }
 
 /**
@@ -123,7 +123,7 @@ export interface Spinner {
  */
 export interface MultiBarOptions {
   /** Output stream shared by every bar in the group. Defaults to process.stderr. */
-  stream?: Writable;
+  stderr?: Writable;
 }
 
 /**
@@ -134,7 +134,7 @@ export interface MultiBarOptions {
  */
 export interface MultiBar {
   /** Adds a new progress bar drawn in the group's stream and returns its handle. */
-  add(options: Omit<BarOptions, "stream">): Bar;
+  add(options: Omit<BarOptions, "stderr">): Bar;
   /** Completes every unfinished bar with `✔` and closes the group. */
   succeed(message?: string): void;
   /** Ends every unfinished bar with `✖` and closes the group. */
@@ -169,7 +169,7 @@ function safeLine(text: string): string {
 }
 
 /** Applies a validated style chain such as `bold.cyan`; a failing colorizer leaves the text as is. */
-function applyColor(colorizer: ColorProxy, spec: StyleSpec | undefined, text: string): string {
+function applyColor(colorizer: Colorizer, spec: StyleSpec | undefined, text: string): string {
   if (spec === undefined) return text;
   return guardCall(
     () => {
@@ -328,7 +328,7 @@ function registerExitRestore(): void {
 
 /** Shares cursor ownership between every indicator writing to the same stream. */
 function acquireTerminal(stream: Writable): () => void {
-  if (!streamIsTTY(stream)) return () => {};
+  if (!isTTY(stream)) return () => {};
 
   let session = terminalSessions.get(stream);
   if (!session) {
@@ -368,7 +368,7 @@ function acquireTerminal(stream: Writable): () => void {
  * callers that need concurrent bars should use progress.multi().
  */
 function acquireVisualTerminal(stream: Writable, owner: symbol, region: RegionOwner): () => void {
-  if (!streamIsTTY(stream)) return () => {};
+  if (!isTTY(stream)) return () => {};
   const currentOwner = visualOwners.get(stream);
   if (currentOwner && currentOwner !== owner) {
     throw usageError(
@@ -424,17 +424,17 @@ function clampProgressValue(value: number, total: number, fallback: number): num
 // ── Validation ──
 
 /** Checks a style name or dot-separated chain; every segment must be a built-in style. */
-function checkColor(value: unknown): void {
+function checkStyle(value: unknown): void {
   if (value === undefined) return;
   if (typeof value !== "string") {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", "color must be a string");
+    throw usageError("type", "ERR_INVALID_ARG_TYPE", "style must be a string");
   }
   for (const segment of value.split(".")) {
     if (!isStyleName(segment)) {
       throw usageError(
         "range",
         "ERR_INVALID_ARG_VALUE",
-        `color contains the unknown style "${segment}" in "${value}"`,
+        `style contains the unknown style "${segment}" in "${value}"`,
       );
     }
   }
@@ -515,7 +515,7 @@ const verbMarks = {
 type Verb = keyof typeof verbMarks;
 
 /** The row that replaces a finished indicator: a marker, then the one-line message. */
-function resultLine(col: ColorProxy, verb: Verb, message: string): string {
+function resultLine(col: Colorizer, verb: Verb, message: string): string {
   const mark = verbMarks[verb];
   const text = safeLine(message);
   return text === "" ? col[mark.style](mark.symbol) : `${col[mark.style](mark.symbol)} ${text}`;
@@ -531,17 +531,17 @@ function resultLine(col: ColorProxy, verb: Verb, message: string): string {
 type ResolvedBarOptions = Required<
   Pick<BarOptions, "total" | "label" | "width" | "filled" | "empty">
 > &
-  Pick<BarOptions, "format" | "color">;
+  Pick<BarOptions, "format" | "style">;
 
 /**
  * Applies defaults and validates a caller's bar options once. Both the
  * standalone bar and each bar added to a multi-bar group resolve here, so the
  * two cannot disagree about what a given option means.
  */
-function normalizeBarOptions(options: Omit<BarOptions, "stream">): ResolvedBarOptions {
+function normalizeBarOptions(options: Omit<BarOptions, "stderr">): ResolvedBarOptions {
   const total = checkTotal(options.total);
   const width = checkWidth(options.width);
-  checkColor(options.color);
+  checkStyle(options.style);
   return {
     total,
     label: options.label ?? "",
@@ -549,16 +549,12 @@ function normalizeBarOptions(options: Omit<BarOptions, "stream">): ResolvedBarOp
     filled: options.filled ?? "█",
     empty: options.empty ?? "░",
     format: options.format,
-    color: options.color,
+    style: options.style,
   };
 }
 
 /** Renders the shared single-line representation used by standalone and multi bars. */
-function renderBarLine(
-  state: BarState,
-  options: ResolvedBarOptions,
-  colorizer: ColorProxy,
-): string {
+function renderBarLine(state: BarState, options: ResolvedBarOptions, colorizer: Colorizer): string {
   if (options.format) return safeLine(options.format(state));
 
   const filled = safeLine(options.filled);
@@ -566,7 +562,7 @@ function renderBarLine(
   const filledCount = Math.round((state.percent / 100) * options.width);
   const bar = applyColor(
     colorizer,
-    options.color,
+    options.style,
     filled.repeat(filledCount) + empty.repeat(options.width - filledCount),
   );
 
@@ -595,7 +591,7 @@ function barState(current: number, total: number, startTime: number): BarState {
  */
 function createBar(options: BarOptions): Bar {
   const resolved = normalizeBarOptions(options);
-  const stream = options.stream ?? process.stderr;
+  const stream = options.stderr ?? process.stderr;
   const { total } = resolved;
 
   let current = 0;
@@ -605,7 +601,7 @@ function createBar(options: BarOptions): Bar {
   let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-bar");
   const startTime = Date.now();
-  const tty = streamIsTTY(stream);
+  const tty = isTTY(stream);
   const col = createColorizer(stream);
   const frameWriter = createFrameWriter(stream);
 
@@ -688,9 +684,9 @@ function createBar(options: BarOptions): Bar {
 function createSpinner(options: SpinnerOptions = {}): Spinner {
   const frames = checkFrames(options.frames);
   const intervalMs = checkIntervalMs(options.intervalMs);
-  checkColor(options.color);
-  const stream = options.stream ?? process.stderr;
-  const spinnerColor = options.color;
+  checkStyle(options.style);
+  const stream = options.stderr ?? process.stderr;
+  const spinnerColor = options.style;
 
   const safeFrames = frames.map((frame) => safeLine(frame));
   let label = options.label ?? "";
@@ -701,7 +697,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   let releaseTerminal: (() => void) | null = null;
   let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-spinner");
-  const tty = streamIsTTY(stream);
+  const tty = isTTY(stream);
   const col = createColorizer(stream);
   const frameWriter = createFrameWriter(stream);
 
@@ -801,8 +797,8 @@ type MultiEntry = {
  * On a TTY the group claims its stream when it is created.
  */
 function createMultiBar(options: MultiBarOptions = {}): MultiBar {
-  const stream = options.stream ?? process.stderr;
-  const tty = streamIsTTY(stream);
+  const stream = options.stderr ?? process.stderr;
+  const tty = isTTY(stream);
   const col = createColorizer(stream);
   const bars: MultiEntry[] = [];
   // Number of physical rows written by the previous renderAll, used to move the
@@ -877,7 +873,7 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
   if (tty) startTerminalSession();
 
   return {
-    add(barOptions: Omit<BarOptions, "stream">): Bar {
+    add(barOptions: Omit<BarOptions, "stderr">): Bar {
       // Every other operation on a closed group is a silent no-op, so a worker
       // that adds a bar just after `finally { multi.stop() }` gets an inert
       // handle rather than an unhandled rejection that fails the command.

@@ -62,7 +62,7 @@ describe("tokenize", () => {
     try {
       tokenize("echo 'hello");
     } catch (error) {
-      expect(error).toMatchObject({ code: "PARSE_ERROR", quote: "single" });
+      expect(error).toMatchObject({ code: "PARSE_FAILED", quote: "single" });
     }
   });
 });

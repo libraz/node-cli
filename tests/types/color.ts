@@ -1,18 +1,18 @@
 import type { Writable } from "node:stream";
 import {
   type ColorFn,
-  type ColorProxy,
-  c,
+  type Colorizer,
   color,
+  colorTag,
   createColorizer,
-  createTemplateTag,
+  createColorTag,
   isStyleName,
+  isTTY,
   type SanitizeTerminalTextOptions,
   type StyleName,
   type StyleSpec,
   sanitizeTerminalText,
   setColorEnabled,
-  streamIsTTY,
   truncateAnsi,
 } from "../../src/index.js";
 
@@ -37,7 +37,7 @@ color.red = color.green;
 color[dynamicName];
 
 // createColorizer takes any Writable and returns the same proxy type.
-const proxy: ColorProxy = createColorizer(stream);
+const proxy: Colorizer = createColorizer(stream);
 const proxied: string = proxy.green("ok");
 void proxied;
 // @ts-expect-error the argument must be a Writable
@@ -73,15 +73,15 @@ const specList: readonly StyleSpec[] = ["red.bold"] as const;
 void specList;
 
 // The template tag is a TemplateStringsArray tag, bound to a stream.
-const tag = createTemplateTag(stream);
+const tag = createColorTag(stream);
 const tagged: string = tag`{red ${1}}`;
-const stdoutTagged: string = c`{bold ok}`;
+const stdoutTagged: string = colorTag`{bold ok}`;
 void tagged;
 void stdoutTagged;
 // @ts-expect-error the argument must be a Writable
-createTemplateTag(42);
+createColorTag(42);
 // @ts-expect-error the stream is required
-createTemplateTag();
+createColorTag();
 
 // setColorEnabled takes a boolean or "auto".
 setColorEnabled(true);
@@ -100,8 +100,8 @@ import { resetColorEnabled } from "../../src/index.js";
 
 void resetColorEnabled;
 
-// streamIsTTY accepts any value.
-const tty: boolean = streamIsTTY(undefined) || streamIsTTY(stream) || streamIsTTY("x");
+// isTTY accepts any value.
+const tty: boolean = isTTY(undefined) || isTTY(stream) || isTTY("x");
 void tty;
 
 // truncateAnsi names its third parameter `ellipsis`; the width is a number.

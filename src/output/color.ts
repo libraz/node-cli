@@ -82,7 +82,7 @@ let _enabled: boolean | null = null;
  * @param value - Any value; non-objects are never TTYs.
  * @returns True when `value` is an object whose `isTTY` is `true`.
  */
-export function streamIsTTY(value: unknown): boolean {
+export function isTTY(value: unknown): boolean {
   return (
     typeof value === "object" && value !== null && (value as { isTTY?: unknown }).isTTY === true
   );
@@ -111,7 +111,7 @@ export function isColorEnabled(stream?: Writable): boolean {
   }
   if (process.env.TERM === "dumb") return false;
   const target = stream ?? process.stdout;
-  return streamIsTTY(target);
+  return isTTY(target);
 }
 
 /**
@@ -167,7 +167,7 @@ function applyStyle(text: string, codes: [number, number][], enabled: boolean): 
 export type ColorFn = ((text: string) => string) & { readonly [K in StyleName]: ColorFn };
 
 /** The object behind {@link color} and {@link createColorizer}: one chainable {@link ColorFn} per style. */
-export type ColorProxy = { readonly [K in StyleName]: ColorFn };
+export type Colorizer = { readonly [K in StyleName]: ColorFn };
 
 /**
  * True when `name` is one of the built-in style names. Callers that resolve a
@@ -213,8 +213,8 @@ function createChain(accumulated: [number, number][], isEnabled: () => boolean):
   }) as ColorFn;
 }
 
-function createColorProxy(isEnabled: () => boolean): ColorProxy {
-  return new Proxy({} as ColorProxy, {
+function createColorProxy(isEnabled: () => boolean): Colorizer {
+  return new Proxy({} as Colorizer, {
     get: (target, prop) =>
       styleTrap(target, prop, (name) => createChain([styles[name]], isEnabled)),
   });
@@ -233,7 +233,7 @@ function createColorProxy(isEnabled: () => boolean): ColorProxy {
  * color.bold.underline("hi");  // bold + underlined text
  * ```
  */
-export const color: ColorProxy = createColorProxy(() => isColorEnabled());
+export const color: Colorizer = createColorProxy(() => isColorEnabled());
 
 /**
  * Creates a color proxy whose enablement is tied to a specific output stream.
@@ -245,17 +245,18 @@ export const color: ColorProxy = createColorProxy(() => isColorEnabled());
  * @param stream - The output stream color will be written to.
  * @returns A chainable color proxy bound to the stream's TTY status.
  */
-export function createColorizer(stream: Writable): ColorProxy {
+export function createColorizer(stream: Writable): Colorizer {
   return createColorProxy(() => isColorEnabled(stream));
 }
 
 // ── Template tag ──
 
-function templateTag(
-  isEnabled: () => boolean,
-): (strings: TemplateStringsArray, ...values: unknown[]) => string {
+function templateTag(isEnabled: () => boolean): ColorTag {
   return (strings, ...values) => formatTemplate(isEnabled(), strings, values);
 }
+
+/** A tagged template literal that applies `{styleName text}` markup. */
+export type ColorTag = (strings: TemplateStringsArray, ...values: unknown[]) => string;
 
 /**
  * Creates a tagged template literal for inline color formatting whose
@@ -271,29 +272,25 @@ function templateTag(
  *
  * @example
  * ```ts
- * const e = createTemplateTag(process.stderr);
+ * const e = createColorTag(process.stderr);
  * e`{bold.red Error}: something went wrong`;
  * ```
  */
-export function createTemplateTag(
-  stream: Writable,
-): (strings: TemplateStringsArray, ...values: unknown[]) => string {
+export function createColorTag(stream: Writable): ColorTag {
   return templateTag(() => isColorEnabled(stream));
 }
 
 /**
  * Tagged template literal for inline color formatting, bound to `process.stdout`.
- * Use {@link createTemplateTag} to bind another stream.
+ * Use {@link createColorTag} to bind another stream.
  *
  * @example
  * ```ts
- * c`Status: {green OK}`;
- * c`{bold.red Error}: something went wrong`;
+ * colorTag`Status: {green OK}`;
+ * colorTag`{bold.red Error}: something went wrong`;
  * ```
  */
-export const c: (strings: TemplateStringsArray, ...values: unknown[]) => string = templateTag(() =>
-  isColorEnabled(),
-);
+export const colorTag: ColorTag = templateTag(() => isColorEnabled());
 
 function formatTemplate(
   enabled: boolean,

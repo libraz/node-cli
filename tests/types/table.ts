@@ -37,7 +37,7 @@ const options: TableOptions = {
   columns: ["a"],
   header: true,
   border: "rounded",
-  borderColor: "cyan",
+  borderStyle: "cyan",
   headerStyle: "cyan.bold",
   paddingLeft: 1,
   paddingRight: 1,
@@ -49,11 +49,11 @@ const options: TableOptions = {
 void options;
 void table([], { headerStyle: "none" });
 // @ts-expect-error "none" is only a header style, not a border colour
-void table([], { borderColor: "none" });
+void table([], { borderStyle: "none" });
 // @ts-expect-error an unknown style name
 void table([], { headerStyle: "bolld" });
 // @ts-expect-error a plain string is not a StyleSpec
-void table([], { borderColor: dynamicStyle });
+void table([], { borderStyle: dynamicStyle });
 // @ts-expect-error unknown border preset
 void table([], { border: "dotted" });
 
@@ -72,7 +72,7 @@ void table([], { headerLabels: { a: "A" } });
 void table([], { padding: 2 });
 // @ts-expect-error replaced by ellipsis
 void table([], { truncate: "." });
-// @ts-expect-error replaced by borderColor, headerStyle, paddingLeft, paddingRight and rowSeparators
+// @ts-expect-error replaced by borderStyle, headerStyle, paddingLeft, paddingRight and rowSeparators
 void table([], { style: { head: "red" } });
 
 // TableChars uses camelCase keys.

@@ -387,13 +387,13 @@ export class CommandBuilder<
    * typed from its own definition and does not inherit this command's options.
    * Repeated call: the same name merges into the existing subcommand.
    *
-   * @param definitionStr - The definition string for the subcommand (e.g., `"list [filter]"`).
+   * @param definition - The definition string for the subcommand (e.g., `"list [filter]"`).
    * @returns A new {@link CommandBuilder} for configuring the subcommand.
    * @throws {Error} `ERR_INVALID_DEFINITION` for a malformed definition string.
    */
-  command<D extends string>(definitionStr: D): CommandBuilderFor<D> {
+  command<D extends string>(definition: D): CommandBuilderFor<D> {
     this.assertRegistered();
     const fullParentPath = [...this.parentPath, this.definition.name];
-    return CommandBuilder.create(this.registry, definitionStr, fullParentPath);
+    return CommandBuilder.create(this.registry, definition, fullParentPath);
   }
 }

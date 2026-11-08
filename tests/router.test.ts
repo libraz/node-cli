@@ -257,7 +257,7 @@ describe("router diagnostics", () => {
     const { registry, router } = setup();
     const stderr = createMockTTY();
     CommandBuilder.create(registry, "work").action(() => {
-      progress.spinner({ label: "working", stream: stderr });
+      progress.spinner({ label: "working", stderr });
       throw new Error("work failed");
     });
     router.on("error", () => {
@@ -287,7 +287,7 @@ describe("router diagnostics", () => {
     CommandBuilder.create(registry, "work").action(
       (ctx) =>
         new Promise<void>((resolveAction) => {
-          const spinner = progress.spinner({ label: "working", stream: ctx.stderr });
+          const spinner = progress.spinner({ label: "working", stderr: ctx.stderr });
           // Cleanup takes a moment, so the hint is written while the frame is live.
           ctx.signal.addEventListener("abort", () => {
             setTimeout(() => {

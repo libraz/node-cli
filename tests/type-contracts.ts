@@ -3,7 +3,7 @@ import type {
   CommandBuilder,
   CommandContext,
   ConfirmOptions,
-  ModeConfig,
+  ModeOptions,
   MultiselectOptions,
   PasswordOptions,
   SelectOptions,
@@ -54,11 +54,11 @@ const multiselectValidateWrong: MultiselectOptions<number> = {
 };
 
 // A mode action's streams are accepted by every output API.
-const mode: ModeConfig = {
+const mode: ModeOptions = {
   prompt: "> ",
   action: async (_input, mctx) => {
-    createLogger({ stream: mctx.stderr }).info("ok");
-    progress.spinner({ stream: mctx.stderr }).stop();
+    createLogger({ stderr: mctx.stderr }).info("ok");
+    progress.spinner({ stderr: mctx.stderr }).stop();
     await prompt.text("name", { stderr: mctx.stderr });
   },
 };

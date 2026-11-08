@@ -3,7 +3,7 @@ import { usageError } from "../errors.js";
 import { guardCall, MAX_RENDER_WIDTH, ownValue } from "../guard.js";
 import {
   type ColorFn,
-  type ColorProxy,
+  type Colorizer,
   closeAnsiState,
   createColorizer,
   isStyleName,
@@ -88,7 +88,7 @@ export interface TableOptions {
   /** Custom border characters. Implicitly sets border to "custom" if provided without border option. */
   chars?: TableChars;
   /** Style of the border glyphs, for example `"dim"` or `"cyan.bold"`. */
-  borderColor?: StyleSpec;
+  borderStyle?: StyleSpec;
   /** Style of the header text, or `"none"` for plain text. Defaults to `"bold"`. */
   headerStyle?: StyleSpec | "none";
   /** Spaces inside each cell on the left. Defaults to 1 with a frame and 0 with `border: "none"`. */
@@ -352,7 +352,7 @@ function validateOptions(options: TableOptions): void {
     }
   }
   checkStyle("headerStyle", options.headerStyle, true);
-  checkStyle("borderColor", options.borderColor);
+  checkStyle("borderStyle", options.borderStyle);
   checkInteger("paddingLeft", options.paddingLeft, 0, false, true);
   checkInteger("paddingRight", options.paddingRight, 0, false, true);
   checkInteger("gap", options.gap, 0, false, true);
@@ -429,9 +429,9 @@ export function table(
   const getAlign = buildAlignFn(specs);
 
   // Apply border color wrapper
-  const { borderColor } = options;
-  const bc = borderColor
-    ? (s: string) => applyStyleChain(colorizer, s, borderColor)
+  const { borderStyle } = options;
+  const bc = borderStyle
+    ? (s: string) => applyStyleChain(colorizer, s, borderStyle)
     : (s: string) => s;
 
   // Render
@@ -651,7 +651,7 @@ function truncateCell(
  * Applies a dot-chained style (for example "cyan.bold") to text. The chain was
  * validated up front, so every segment names a built-in style.
  */
-function applyStyleChain(colorizer: ColorProxy, text: string, chain: string): string {
+function applyStyleChain(colorizer: Colorizer, text: string, chain: string): string {
   let node: Record<string, unknown> = colorizer;
   for (const part of chain.split(".")) node = node[part] as Record<string, unknown>;
   return (node as unknown as ColorFn)(text);

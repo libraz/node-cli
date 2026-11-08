@@ -1,14 +1,14 @@
 import { type Readable, Writable } from "node:stream";
-import { PromptCancelError, usageError } from "../errors.js";
+import { CancelledError, usageError } from "../errors.js";
 import type { StdioOptions } from "../types.js";
 import {
   type color as c,
   createColorizer,
   isControlCode,
+  isTTY,
   renderSafe,
   splitAnsi,
   splitGraphemes,
-  streamIsTTY,
   stripAnsi,
 } from "./color.js";
 import { type LineReader, openLineReader } from "./line-reader.js";
@@ -180,7 +180,7 @@ interface CancelableReader {
   reader: LineReader;
   signal: AbortSignal;
   /** Builds the cancellation error, carrying the caller's abort reason when there is one. */
-  cancelError: () => PromptCancelError;
+  cancelError: () => CancelledError;
   dispose: () => void;
 }
 
@@ -223,8 +223,8 @@ function createCancelableReader(
   // character-level editing exist only in that mode, so deciding it from the
   // output too meant `mycli init | tee log` silently downgraded a prompt on a
   // real terminal: Ctrl-C killed the process instead of raising
-  // PromptCancelError, and arrow keys arrived as raw escape sequences.
-  const terminal = terminalOverride ?? streamIsTTY(input);
+  // CancelledError, and arrow keys arrived as raw escape sequences.
+  const terminal = terminalOverride ?? isTTY(input);
   const reader = openLineReader({ input, output, terminal });
   const controller = new AbortController();
   const onSigint = () => controller.abort();
@@ -240,14 +240,14 @@ function createCancelableReader(
   };
 
   const cancelError = () =>
-    new PromptCancelError(externalSignal?.aborted ? { cause: externalSignal.reason } : {});
+    new CancelledError(externalSignal?.aborted ? { cause: externalSignal.reason } : {});
 
   return { reader, signal: controller.signal, cancelError, dispose };
 }
 
 /**
  * Asks a single question, translating a Ctrl+C abort, the end of input (Ctrl+D,
- * EOF, a destroyed stream) or an input error into a {@link PromptCancelError}.
+ * EOF, a destroyed stream) or an input error into a {@link CancelledError}.
  */
 async function ask(session: CancelableReader, query: string): Promise<string> {
   const { reader, signal } = session;
@@ -271,7 +271,7 @@ async function ask(session: CancelableReader, query: string): Promise<string> {
  * @param message - The question to display.
  * @param options - Text prompt options.
  * @returns The entered text value.
- * @throws PromptCancelError if the user cancels (e.g., Ctrl+C).
+ * @throws CancelledError if the user cancels (e.g., Ctrl+C).
  */
 async function text(message: string, options: TextOptions = {}): Promise<string> {
   const { default: defaultValue, validate, required = true, marker = "?", trim = true } = options;
@@ -327,7 +327,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
  * @param message - The question to display.
  * @param options - Confirmation prompt options.
  * @returns True if the user confirmed, false otherwise.
- * @throws PromptCancelError if the user cancels.
+ * @throws CancelledError if the user cancels.
  */
 async function confirm(message: string, options: ConfirmOptions = {}): Promise<boolean> {
   const { default: defaultValue = false, marker = "?" } = options;
@@ -373,7 +373,7 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
  * @param choices - Available choices.
  * @param options - Prompt options.
  * @returns The value of the selected choice.
- * @throws PromptCancelError if the user cancels.
+ * @throws CancelledError if the user cancels.
  */
 async function select<T = string>(
   message: string,
@@ -465,7 +465,7 @@ async function select<T = string>(
  * @param choices - Available choices.
  * @param options - Multiselect prompt options (default/min/max constraints).
  * @returns An array of selected values.
- * @throws PromptCancelError if the user cancels.
+ * @throws CancelledError if the user cancels.
  */
 async function multiselect<T = string>(
   message: string,
@@ -633,12 +633,12 @@ export function maskInput(chunk: string): string {
  * @param message - The question to display.
  * @param options - Prompt options.
  * @returns The entered password string.
- * @throws PromptCancelError if the user cancels.
+ * @throws CancelledError if the user cancels.
  */
 async function password(message: string, options: PasswordOptions = {}): Promise<string> {
   const { validate, required = true, marker = "?", trim = false } = options;
   const stdin = options.stdin ?? process.stdin;
-  const stdinIsTTY = streamIsTTY(stdin);
+  const stdinIsTTY = isTTY(stdin);
   const promptOutput = options.stderr ?? process.stderr;
   const col = createColorizer(promptOutput);
 

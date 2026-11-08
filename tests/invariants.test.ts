@@ -4,6 +4,7 @@ import { parse, parseDefinitionString, splitPipes, tokenize } from "../src/comma
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
 import {
+  CancelledError,
   CLIError,
   CommandNotFoundError,
   ExtraArgumentError,
@@ -12,7 +13,6 @@ import {
   isCancellationError,
   MissingArgumentError,
   MissingOptionError,
-  PromptCancelError,
   UnknownOptionError,
   ValidationError,
 } from "../src/errors.js";
@@ -410,7 +410,7 @@ describe("progress hygiene", () => {
     vi.useFakeTimers();
     try {
       const stream = createMockTTY();
-      const sp = progress.spinner({ stream, label: "x" });
+      const sp = progress.spinner({ stderr: stream, label: "x" });
       expect(vi.getTimerCount()).toBe(1);
       sp.succeed("done");
       expect(vi.getTimerCount()).toBe(0);
@@ -427,7 +427,7 @@ describe("progress hygiene", () => {
 
   it("bar.update clamps within [0, total]", () => {
     const stream = createMockTTY();
-    const bar = progress.bar({ total: 10, stream });
+    const bar = progress.bar({ total: 10, stderr: stream });
     try {
       bar.update(-5);
       expect(stream.getOutput()).toContain("0/10");
@@ -472,7 +472,7 @@ describe("prompt fixes", () => {
 describe("logger child level", () => {
   it("propagates setLevel to existing children", () => {
     const stream = createMockStdout();
-    const log = createLogger({ level: "info", stream });
+    const log = createLogger({ level: "info", stderr: stream });
     const child = log.child("db");
     log.setLevel("debug");
     child.debug("hello");
@@ -774,7 +774,7 @@ describe("prompting after end of input", () => {
     await new Promise((resolve) => stdin.once("end", resolve).resume());
 
     await expect(prompt.text("name", { stdin, stderr: createMockStdout() })).rejects.toBeInstanceOf(
-      PromptCancelError,
+      CancelledError,
     );
   });
 });
@@ -784,7 +784,7 @@ describe("prompting after end of input", () => {
 describe("logging with non-string messages", () => {
   it("renders an object or an Error instead of throwing", () => {
     const out = createMockStdout();
-    const log = createLogger({ stream: out });
+    const log = createLogger({ stderr: out });
 
     // Reachable from plain JavaScript, where the `string` type is not enforced.
     const info = log.info as unknown as (value: unknown) => void;
@@ -846,7 +846,7 @@ describe("prompt terminal mode", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     stdin.feed("\u0003");
 
-    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(pending).rejects.toBeInstanceOf(CancelledError);
   });
 });
 

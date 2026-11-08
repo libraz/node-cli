@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { usageError } from "../src/errors.js";
 import {
+  CancelledError,
   CLIError,
   CommandNotFoundError,
   ExtraArgumentError,
@@ -11,7 +12,6 @@ import {
   MissingArgumentError,
   MissingOptionError,
   ParseError,
-  PromptCancelError,
   UnknownOptionError,
   ValidationError,
 } from "../src/index.js";
@@ -27,7 +27,7 @@ describe("CLIError", () => {
   });
 
   it("defaults exitCode to 1", () => {
-    expect(new CLIError("boom", { code: "VALIDATION_ERROR" }).exitCode).toBe(1);
+    expect(new CLIError("boom", { code: "VALIDATION_FAILED" }).exitCode).toBe(1);
   });
 });
 
@@ -42,9 +42,9 @@ describe("built-in error classes", () => {
       [new MissingOptionError("o", { cause }), "MISSING_OPTION"],
       [new InvalidOptionError("m", { cause }), "INVALID_OPTION"],
       [new UnknownOptionError("--x", { cause }), "UNKNOWN_OPTION"],
-      [new ValidationError("m", { cause }), "VALIDATION_ERROR"],
-      [new ParseError("m", { cause }), "PARSE_ERROR"],
-      [new PromptCancelError({ cause }), "PROMPT_CANCELLED"],
+      [new ValidationError("m", { cause }), "VALIDATION_FAILED"],
+      [new ParseError("m", { cause }), "PARSE_FAILED"],
+      [new CancelledError({ cause }), "CANCELLED"],
     ];
     for (const [e, code] of cases) {
       expect(e.code).toBe(code);
@@ -53,8 +53,8 @@ describe("built-in error classes", () => {
     }
   });
 
-  it("PromptCancelError exits 130 and needs no arguments", () => {
-    const e = new PromptCancelError();
+  it("CancelledError exits 130 and needs no arguments", () => {
+    const e = new CancelledError();
     expect(e.exitCode).toBe(130);
     expect(e.cause).toBeUndefined();
   });
@@ -98,13 +98,13 @@ describe("built-in error classes", () => {
 describe("isBuiltinCLIError", () => {
   it("accepts built-in classes", () => {
     expect(isBuiltinCLIError(new ParseError("m"))).toBe(true);
-    expect(isBuiltinCLIError(new PromptCancelError())).toBe(true);
+    expect(isBuiltinCLIError(new CancelledError())).toBe(true);
   });
 
   it("rejects custom subclasses and non-errors", () => {
     class Mine extends CLIError {}
     expect(isBuiltinCLIError(new Mine("m", { code: "MINE" }))).toBe(false);
-    expect(isBuiltinCLIError(new CLIError("m", { code: "VALIDATION_ERROR" }))).toBe(false);
+    expect(isBuiltinCLIError(new CLIError("m", { code: "VALIDATION_FAILED" }))).toBe(false);
     expect(isBuiltinCLIError(new Error("m"))).toBe(false);
     expect(isBuiltinCLIError("x")).toBe(false);
     expect(isBuiltinCLIError(null)).toBe(false);
@@ -131,8 +131,8 @@ describe("usageError", () => {
 describe("isCancellationError / formatErrorMessage", () => {
   const abortError = () => Object.assign(new Error("aborted"), { name: "AbortError" });
 
-  it("treats PromptCancelError as cancellation", () => {
-    expect(isCancellationError(new PromptCancelError(), new AbortController().signal)).toBe(true);
+  it("treats CancelledError as cancellation", () => {
+    expect(isCancellationError(new CancelledError(), new AbortController().signal)).toBe(true);
   });
 
   it("treats AbortError as cancellation only when the signal is aborted", () => {
@@ -145,7 +145,7 @@ describe("isCancellationError / formatErrorMessage", () => {
 
   it("formatErrorMessage returns the message without special cases", () => {
     expect(formatErrorMessage(new Error("plain"))).toBe("plain");
-    expect(formatErrorMessage(new PromptCancelError())).toBe(new PromptCancelError().message);
+    expect(formatErrorMessage(new CancelledError())).toBe(new CancelledError().message);
     expect(formatErrorMessage(abortError())).toBe("aborted");
     expect(formatErrorMessage("str")).toBe("str");
   });

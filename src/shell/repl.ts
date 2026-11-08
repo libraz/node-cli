@@ -1,7 +1,7 @@
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
 import { presentError } from "../errors.js";
-import { streamIsTTY } from "../output/color.js";
+import { isTTY } from "../output/color.js";
 import { inputExhausted, type LineReader, openLineReader } from "../output/line-reader.js";
 import { releaseAll } from "../output/progress.js";
 import type { Completer, CompletionContext, ModeContext } from "../types.js";
@@ -12,10 +12,13 @@ import { History } from "./history.js";
 /** Milliseconds a SIGTERM leaves cancelled work to clean up before the shell exits. */
 const SIGTERM_GRACE_MS = 200;
 
+/** Handler invoked with each line of input within a mode. */
+export type ModeAction = (input: string, ctx: ModeContext) => void | Promise<void>;
+
 /**
  * Definition of a mode sub-REPL with its own prompt and action handler.
  */
-export interface ModeConfig {
+export interface ModeOptions {
   /** The prompt string displayed in mode. */
   prompt: string;
   /**
@@ -24,7 +27,7 @@ export interface ModeConfig {
    * SIGTERM during the action, so a long-running mode action (e.g. a slow query)
    * can cancel cooperatively. A second Ctrl-C force-quits the process.
    */
-  action: (input: string, ctx: ModeContext) => void | Promise<void>;
+  action: ModeAction;
   /** Banner printed once when entering the mode. */
   banner?: string;
   /**
@@ -43,7 +46,7 @@ export interface Shell {
   /** Changes the prompt; inside a mode the change applies after leaving it. */
   setPrompt(text: string): this;
   /** Enters a mode sub-REPL that routes every line to the mode's action. */
-  enterMode(config: ModeConfig): void;
+  enterMode(config: ModeOptions): void;
   /** Leaves the current mode and returns to the command prompt. */
   exitMode(): void;
   /** Ends the shell session after the current input. */
@@ -69,7 +72,7 @@ export class InteractiveShell implements Shell {
   /** Cancels the running mode action, so SIGTERM reaches it as Ctrl-C does. */
   private modeController?: AbortController;
   private running = false;
-  private mode: ModeConfig | null = null;
+  private mode: ModeOptions | null = null;
   private modeHistory: string[] = [];
   private readonly beforeExecute?: () => Promise<void>;
 
@@ -134,7 +137,7 @@ export class InteractiveShell implements Shell {
           ? (line: string) => Promise.resolve(this.completer.runModeProvider(modeCompleter, line))
           : undefined
         : (line: string) => this.completer.complete(line),
-      terminal: streamIsTTY(process.stdin) && streamIsTTY(process.stdout),
+      terminal: isTTY(process.stdin) && isTTY(process.stdout),
     });
     const { rl } = reader;
 
@@ -391,7 +394,7 @@ export class InteractiveShell implements Shell {
    * execution, so cancellation is driven by a dedicated controller: Ctrl-C or
    * SIGTERM aborts its signal (cooperative), a second Ctrl-C force-quits.
    */
-  private async runModeAction(mode: ModeConfig, input: string): Promise<void> {
+  private async runModeAction(mode: ModeOptions, input: string): Promise<void> {
     const controller = new AbortController();
     this.modeController = controller;
     try {
@@ -467,7 +470,7 @@ export class InteractiveShell implements Shell {
    *
    * @param config - The mode configuration.
    */
-  enterMode(config: ModeConfig): void {
+  enterMode(config: ModeOptions): void {
     this.mode = config;
     this.modeHistory = [];
     if (config.banner) {

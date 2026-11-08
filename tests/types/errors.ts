@@ -46,17 +46,17 @@ if (isBuiltinCLIError(e)) {
       void name;
       break;
     }
-    case "VALIDATION_ERROR": {
+    case "VALIDATION_FAILED": {
       const name: string | undefined = e.optionName;
       void name;
       break;
     }
-    case "PARSE_ERROR": {
+    case "PARSE_FAILED": {
       const quote: "single" | "double" | undefined = e.quote;
       void quote;
       break;
     }
-    case "PROMPT_CANCELLED":
+    case "CANCELLED":
       break;
     default: {
       const unreachable: never = e;
@@ -65,15 +65,15 @@ if (isBuiltinCLIError(e)) {
   }
 }
 
-const err = new CLIError("m", { code: "VALIDATION_ERROR" });
+const err = new CLIError("m", { code: "VALIDATION_FAILED" });
 const code: CLIErrorCode | (string & {}) = err.code;
 void code;
 
 // @ts-expect-error `code` is readonly.
-err.code = "PARSE_ERROR";
+err.code = "PARSE_FAILED";
 
 // @ts-expect-error the positional constructor shape is gone.
-new CLIError("m", "VALIDATION_ERROR");
+new CLIError("m", "VALIDATION_FAILED");
 
 // @ts-expect-error the signal argument is required.
 isCancellationError(err);

@@ -1,7 +1,7 @@
 import type { Readable, Writable } from "node:stream";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { PromptCancelError } from "../src/errors.js";
+import { CancelledError } from "../src/errors.js";
 import type { Choice, PromptOptions, SelectChoice, TextOptions } from "../src/index.js";
 import { setColorEnabled } from "../src/output/color.js";
 import { createMockStdin, createMockStdout, restoreProcessStateAfterEach } from "./helpers.js";
@@ -33,10 +33,10 @@ describe("prompt", () => {
     expect(prompt.password).toBeTypeOf("function");
   });
 
-  it("PromptCancelError has correct code", () => {
-    const err = new PromptCancelError();
-    expect(err.code).toBe("PROMPT_CANCELLED");
-    expect(err.name).toBe("PromptCancelError");
+  it("CancelledError has correct code", () => {
+    const err = new CancelledError();
+    expect(err.code).toBe("CANCELLED");
+    expect(err.name).toBe("CancelledError");
     expect(err.message).toBe("Prompt cancelled");
   });
 
@@ -115,7 +115,7 @@ describe("prompt", () => {
     });
     controller.abort();
 
-    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(pending).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("rejects concurrent prompts reading from the same input", async () => {
@@ -131,7 +131,7 @@ describe("prompt", () => {
       prompt.text("Second", { stdin: streams.stdin, stderr: streams.stderr }),
     ).rejects.toMatchObject({ code: "ERR_INPUT_BUSY" });
     controller.abort();
-    await expect(first).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(first).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("re-prompts text until validation succeeds", async () => {
@@ -493,7 +493,7 @@ describe("prompt", () => {
     ];
 
     expect(answers).toEqual(["a", true, "prod", "secret", ["a", "b"]]);
-    await expect(prompt.text("More", io)).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(prompt.text("More", io)).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("keeps unanswered lines for the next prompt after the input ends", async () => {
@@ -582,27 +582,27 @@ describe("prompt", () => {
     expect(redraws).toBe(4);
   });
 
-  it("text rejects with PromptCancelError on EOF", async () => {
+  it("text rejects with CancelledError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
     const promise = prompt.text("Name", { stdin: streams.stdin, stderr: streams.stderr });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(promise).rejects.toBeInstanceOf(CancelledError);
   });
 
-  it("confirm rejects with PromptCancelError on EOF", async () => {
+  it("confirm rejects with CancelledError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
     const promise = prompt.confirm("Continue?", { stdin: streams.stdin, stderr: streams.stderr });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(promise).rejects.toBeInstanceOf(CancelledError);
   });
 
-  it("select rejects with PromptCancelError on EOF", async () => {
+  it("select rejects with CancelledError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
@@ -612,10 +612,10 @@ describe("prompt", () => {
     });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(promise).rejects.toBeInstanceOf(CancelledError);
   });
 
-  it("multiselect rejects with PromptCancelError on EOF", async () => {
+  it("multiselect rejects with CancelledError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
@@ -625,10 +625,10 @@ describe("prompt", () => {
     });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(promise).rejects.toBeInstanceOf(CancelledError);
   });
 
-  it("password rejects with PromptCancelError on EOF", async () => {
+  it("password rejects with CancelledError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
@@ -638,7 +638,7 @@ describe("prompt", () => {
     });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(promise).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("text with an empty-string default resolves immediately on Enter", async () => {
@@ -773,7 +773,7 @@ describe("prompt options shared with the command context", () => {
       stderr: streams.stderr,
       signal: AbortSignal.abort(),
     });
-    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(pending).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("renders the marker in place of the default symbol", async () => {
@@ -801,9 +801,9 @@ describe("prompt options shared with the command context", () => {
     });
     controller.abort(reason);
     const error = await pending.catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(PromptCancelError);
-    expect((error as PromptCancelError).code).toBe("PROMPT_CANCELLED");
-    expect((error as PromptCancelError).cause).toBe(reason);
+    expect(error).toBeInstanceOf(CancelledError);
+    expect((error as CancelledError).code).toBe("CANCELLED");
+    expect((error as CancelledError).cause).toBe(reason);
   });
 
   it("awaits an async validate and re-asks when it rejects", async () => {
@@ -932,7 +932,7 @@ describe("terminal state is handled the same way by every prompt kind", () => {
 
     const aborted = start(stdin, stderr, controller.signal);
     controller.abort();
-    await expect(aborted).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(aborted).rejects.toBeInstanceOf(CancelledError);
 
     // The lock is per call, so the same stream must be usable immediately.
     const second = start(stdin, stderr);
@@ -946,7 +946,7 @@ describe("terminal state is handled the same way by every prompt kind", () => {
     const stdin = createMockStdin();
     stdin.destroy();
 
-    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(CancelledError);
   });
 
   it.each(Object.keys(kinds))("rejects when input is destroyed while pending: %s", async (name) => {
@@ -956,7 +956,7 @@ describe("terminal state is handled the same way by every prompt kind", () => {
     await vi.waitFor(() => expect(stderr.getOutput()).not.toBe(""));
     stdin.destroy();
 
-    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(pending).rejects.toBeInstanceOf(CancelledError);
   });
 
   it.each(Object.keys(kinds))("rejects when input errors while pending: %s", async (name) => {
@@ -966,7 +966,7 @@ describe("terminal state is handled the same way by every prompt kind", () => {
     await vi.waitFor(() => expect(stderr.getOutput()).not.toBe(""));
     stdin.destroy(new Error("EIO"));
 
-    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(pending).rejects.toBeInstanceOf(CancelledError);
     await vi.waitFor(() => expect(stdin.closed).toBe(true));
     expect(stdin.listenerCount("error")).toBe(0);
   });
@@ -976,6 +976,6 @@ describe("terminal state is handled the same way by every prompt kind", () => {
     stdin.push(null);
     await new Promise((resolve) => stdin.once("end", resolve).resume());
 
-    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(PromptCancelError);
+    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(CancelledError);
   });
 });

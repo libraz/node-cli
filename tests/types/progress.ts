@@ -29,10 +29,10 @@ multi.stop();
 spinner.setLabel("next");
 
 // Creation takes the options shape and returns the handle directly.
-const created: Bar = progress.bar({ total: 10, label: "x", color: "green", stream });
-const chained: Bar = progress.bar({ total: 10, color: "bold.cyan" });
-const spin: Spinner = progress.spinner({ intervalMs: 80, frames: ["a", "b"], color: "cyan" });
-const group: MultiBar = progress.multi({ stream });
+const created: Bar = progress.bar({ total: 10, label: "x", style: "green", stderr: stream });
+const chained: Bar = progress.bar({ total: 10, style: "bold.cyan" });
+const spin: Spinner = progress.spinner({ intervalMs: 80, frames: ["a", "b"], style: "cyan" });
+const group: MultiBar = progress.multi({ stderr: stream });
 const added: Bar = group.add({ total: 3, label: "file" });
 void [created, chained, spin, added];
 
@@ -46,11 +46,11 @@ const format: BarOptions["format"] = (state: BarState) =>
   `${state.elapsedMs} ${state.etaMs} ${state.ratePerSecond} ${state.percent}`;
 void format;
 
-const groupOptions: MultiBarOptions = { stream };
+const groupOptions: MultiBarOptions = { stderr: stream };
 void groupOptions;
 
 // @ts-expect-error unknown style names are rejected
-progress.bar({ total: 1, color: "nonsense" });
+progress.bar({ total: 1, style: "nonsense" });
 
 // @ts-expect-error the interval option is intervalMs
 progress.spinner({ interval: 80 });
@@ -65,7 +65,7 @@ spinner.start();
 spinner.update("x");
 
 // @ts-expect-error a bar added to a group uses the group's stream
-group.add({ total: 1, stream });
+group.add({ total: 1, stderr: stream });
 
 // @ts-expect-error BarState fields carry their unit
 const oldElapsed = ((state: BarState) => state.elapsed) as unknown;

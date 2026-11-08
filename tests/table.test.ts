@@ -353,7 +353,7 @@ describe("table", () => {
   it("accepts the documented grey border colour", () => {
     let result = "";
     expect(() => {
-      result = table([{ a: 1 }], { border: "single", borderColor: "grey" });
+      result = table([{ a: 1 }], { border: "single", borderStyle: "grey" });
     }).not.toThrow();
     expect(result).toContain("1");
   });
@@ -551,7 +551,7 @@ describe("table input hardening", () => {
     setColorEnabled(true);
     for (const name of ["toString", "constructor", "red.constructor", "valueOf"]) {
       expect(() => table([{ a: "x" }], { headerStyle: name as never })).toThrow(RangeError);
-      expect(() => table([{ a: "x" }], { borderColor: name as never })).toThrow(RangeError);
+      expect(() => table([{ a: "x" }], { borderStyle: name as never })).toThrow(RangeError);
     }
   });
 
@@ -618,7 +618,7 @@ describe("borderless and simple modes honour every table option", () => {
     setColorEnabled(true);
     const out = table([["a"]], {
       border: "simple",
-      borderColor: "red",
+      borderStyle: "red",
     });
     const separator = out.split("\n")[1];
     expect(separator.startsWith("\x1b[31m")).toBe(true);
@@ -881,11 +881,11 @@ describe("table colour follows the stream", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("applies headerStyle and borderColor chains", () => {
+  it("applies headerStyle and borderStyle chains", () => {
     const out = table(rows, {
       border: "single",
       headerStyle: "red.underline",
-      borderColor: "cyan",
+      borderStyle: "cyan",
       stream: { isTTY: true } as unknown as Writable,
     });
     expect(out).toContain("\x1b[31m\x1b[4m");
@@ -964,12 +964,12 @@ describe("table argument validation", () => {
   });
 
   describe("style names", () => {
-    test.each(["headerStyle", "borderColor"] as const)("%s rejects unknown names", (name) => {
+    test.each(["headerStyle", "borderStyle"] as const)("%s rejects unknown names", (name) => {
       for (const value of ["nope", "red.nope", "", "赤", "toString", "red."]) {
         expectRange(() => table(data, { [name]: value } as never));
       }
     });
-    test.each(["headerStyle", "borderColor"] as const)("%s rejects non-strings", (name) => {
+    test.each(["headerStyle", "borderStyle"] as const)("%s rejects non-strings", (name) => {
       for (const value of [null, 1, true, {}]) {
         expectType(() => table(data, { [name]: value } as never));
       }
@@ -980,7 +980,7 @@ describe("table argument validation", () => {
     });
     it("accepts none for headerStyle only", () => {
       expect(() => table(data, { headerStyle: "none" })).not.toThrow();
-      expectRange(() => table(data, { borderColor: "none" as never }));
+      expectRange(() => table(data, { borderStyle: "none" as never }));
     });
     it("validates before looking at the data", () => {
       expectRange(() => table([], { headerStyle: "nope" as never }));

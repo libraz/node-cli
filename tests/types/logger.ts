@@ -3,7 +3,7 @@ import { createLogger, type Logger, type LoggerOptions, type LogLevel } from "..
 
 declare const stream: Writable;
 
-const options: LoggerOptions = { level: "debug", prefix: "app", timestamp: true, stream };
+const options: LoggerOptions = { level: "debug", prefix: "app", timestamp: true, stderr: stream };
 const log: Logger = createLogger(options);
 const defaults: Logger = createLogger();
 void defaults;
@@ -36,4 +36,4 @@ createLogger({ level: "verbose" });
 // @ts-expect-error unknown option
 createLogger({ colour: true });
 // @ts-expect-error the stream must be a Writable
-createLogger({ stream: "stderr" });
+createLogger({ stderr: "stderr" });

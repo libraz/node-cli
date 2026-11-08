@@ -283,7 +283,7 @@ describe("Shell error and termination handling", () => {
       shell.enterMode({
         prompt: "sql> ",
         action: () => {
-          progress.spinner({ label: "querying", stream: process.stderr });
+          progress.spinner({ label: "querying", stderr: process.stderr });
           throw new Error("query failed");
         },
       });

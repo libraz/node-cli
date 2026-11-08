@@ -1,8 +1,8 @@
 import type {
   Completer,
   CompletionContext,
-  ModeConfig,
   ModeContext,
+  ModeOptions,
   Shell,
 } from "../../src/index.js";
 
@@ -12,7 +12,7 @@ declare const shell: Shell;
 // and returns plain candidates, sync or async.
 const sync: Completer = (ctx) => [ctx.current];
 const async_: Completer = async (ctx) => [ctx.line, String(ctx.iteration)];
-const config: ModeConfig = {
+const config: ModeOptions = {
   prompt: "sql> ",
   banner: "Entering SQL mode",
   completer: sync,
@@ -20,11 +20,11 @@ const config: ModeConfig = {
     ctx.stdout.write("ok\n");
   },
 };
-const asyncConfig: ModeConfig = { prompt: "> ", completer: async_, action: () => {} };
+const asyncConfig: ModeOptions = { prompt: "> ", completer: async_, action: () => {} };
 void [config, asyncConfig];
 
 // @ts-expect-error the completer takes a context, not a line
-const lineCompleter: ModeConfig["completer"] = (line: string) => [line];
+const lineCompleter: ModeOptions["completer"] = (line: string) => [line];
 void lineCompleter;
 
 // @ts-expect-error a completer returns candidates, not the readline tuple
@@ -32,7 +32,7 @@ const tupleCompleter: Completer = () => [["a"], "a"] as [string[], string];
 void tupleCompleter;
 
 // @ts-expect-error `message` was renamed to `banner`
-const oldName: ModeConfig = { prompt: "> ", message: "hi", action: () => {} };
+const oldName: ModeOptions = { prompt: "> ", message: "hi", action: () => {} };
 void oldName;
 
 // A mode action context carries stdout, stderr and signal, and no stdin.

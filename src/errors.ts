@@ -12,9 +12,9 @@ export type CLIErrorCode =
   | "MISSING_OPTION"
   | "INVALID_OPTION"
   | "UNKNOWN_OPTION"
-  | "VALIDATION_ERROR"
-  | "PARSE_ERROR"
-  | "PROMPT_CANCELLED";
+  | "VALIDATION_FAILED"
+  | "PARSE_FAILED"
+  | "CANCELLED";
 
 /**
  * Base error class for all CLI-related errors.
@@ -201,7 +201,7 @@ export class UnknownOptionError extends CLIError {
  * Thrown when a custom validation check fails.
  */
 export class ValidationError extends CLIError {
-  declare readonly code: "VALIDATION_ERROR";
+  declare readonly code: "VALIDATION_FAILED";
   /** The long option name whose custom parser or validator failed, if known. */
   readonly optionName?: string;
 
@@ -211,7 +211,7 @@ export class ValidationError extends CLIError {
    * @param options.cause - The original error that caused the failure, if any.
    */
   constructor(message: string, options: { optionName?: string; cause?: unknown } = {}) {
-    super(message, { code: "VALIDATION_ERROR", cause: options.cause });
+    super(message, { code: "VALIDATION_FAILED", cause: options.cause });
     this.name = "ValidationError";
     this.optionName = options.optionName;
   }
@@ -220,21 +220,21 @@ export class ValidationError extends CLIError {
 /**
  * Thrown when the user cancels an interactive prompt.
  */
-export class PromptCancelError extends CLIError {
-  declare readonly code: "PROMPT_CANCELLED";
+export class CancelledError extends CLIError {
+  declare readonly code: "CANCELLED";
 
   /**
    * @param options.cause - What triggered the cancellation (e.g. an abort reason).
    */
   constructor(options: { cause?: unknown } = {}) {
-    super("Prompt cancelled", { code: "PROMPT_CANCELLED", exitCode: 130, cause: options.cause });
-    this.name = "PromptCancelError";
+    super("Prompt cancelled", { code: "CANCELLED", exitCode: 130, cause: options.cause });
+    this.name = "CancelledError";
   }
 }
 
 /** Thrown when a command line cannot be tokenized or split into pipeline stages. */
 export class ParseError extends CLIError {
-  declare readonly code: "PARSE_ERROR";
+  declare readonly code: "PARSE_FAILED";
   /** Quote left open by the input, when applicable. */
   readonly quote?: "single" | "double";
 
@@ -244,7 +244,7 @@ export class ParseError extends CLIError {
    * @param options.cause - The underlying error.
    */
   constructor(message: string, options: { quote?: "single" | "double"; cause?: unknown } = {}) {
-    super(message, { code: "PARSE_ERROR", cause: options.cause });
+    super(message, { code: "PARSE_FAILED", cause: options.cause });
     this.name = "ParseError";
     this.quote = options.quote;
   }
@@ -263,7 +263,7 @@ export type BuiltinCLIError =
   | UnknownOptionError
   | ValidationError
   | ParseError
-  | PromptCancelError;
+  | CancelledError;
 
 /**
  * Reports whether a value is one of the built-in {@link CLIError} subclasses.
@@ -280,7 +280,7 @@ export function isBuiltinCLIError(e: unknown): e is BuiltinCLIError {
     e instanceof UnknownOptionError ||
     e instanceof ValidationError ||
     e instanceof ParseError ||
-    e instanceof PromptCancelError
+    e instanceof CancelledError
   );
 }
 
@@ -334,13 +334,13 @@ export function isAbortError(value: unknown): boolean {
 
 /**
  * Reports whether an error represents a user-initiated cancellation rather than
- * a genuine failure: a {@link PromptCancelError}, or an `AbortError` associated
+ * a genuine failure: a {@link CancelledError}, or an `AbortError` associated
  * with the command's aborted signal. Used to present a clean "Cancelled"
  * message and the conventional 130 exit code instead of an `Error:` line and
  * exit 1.
  */
 export function isCancellationError(err: unknown, signal: AbortSignal): boolean {
-  if (err instanceof PromptCancelError) return true;
+  if (err instanceof CancelledError) return true;
   return signal.aborted && isAbortError(err);
 }
 
@@ -386,7 +386,7 @@ export function presentError(
   },
 ): number {
   const { stream, interrupted = false, debugStack = false } = options;
-  if (interrupted || err instanceof PromptCancelError) {
+  if (interrupted || err instanceof CancelledError) {
     writeDiagnostic(stream, "Cancelled");
     return 130;
   }

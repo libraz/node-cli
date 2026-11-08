@@ -188,14 +188,14 @@ describe("programmatic exec", () => {
     const cli = createCLI();
     const tty = createMockTTY();
     cli.command("broken").action(() => {
-      progress.spinner({ stream: tty, label: "working" });
+      progress.spinner({ stderr: tty, label: "working" });
       throw new Error("command failed");
     });
 
     await expect(cli.exec("broken")).rejects.toThrow("command failed");
     expect(tty.getOutput()).toContain("\x1b[?25h");
 
-    const replacement = progress.bar({ total: 1, stream: tty });
+    const replacement = progress.bar({ total: 1, stderr: tty });
     expect(() => replacement.update(1)).not.toThrow();
     replacement[Symbol.dispose]();
   });

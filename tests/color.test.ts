@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  c,
   closeAnsiState,
   color,
+  colorTag,
   createColorizer,
-  createTemplateTag,
+  createColorTag,
   isColorEnabled,
   isStyleName,
+  isTTY,
   renderSafe,
   sanitizeTerminalText,
   setColorEnabled,
   splitAnsi,
   splitGraphemes,
-  streamIsTTY,
   stringWidth,
   stripAnsi,
   truncateAnsi,
@@ -179,43 +179,43 @@ describe("c (template tag)", () => {
   });
 
   it("applies inline styles", () => {
-    const result = c`{red error}`;
+    const result = colorTag`{red error}`;
     expect(result).toContain("\x1b[31m");
     expect(stripAnsi(result)).toBe("error");
   });
 
   it("applies chained styles", () => {
-    const result = c`{bold.green success}`;
+    const result = colorTag`{bold.green success}`;
     expect(result).toContain("\x1b[1m");
     expect(result).toContain("\x1b[32m");
   });
 
   it("handles interpolation", () => {
     const name = "world";
-    const result = c`{red hello} ${name}`;
+    const result = colorTag`{red hello} ${name}`;
     expect(stripAnsi(result)).toBe("hello world");
   });
 
   it("restores an outer inline style after an ANSI-colored interpolation", () => {
     const value = color.green("world");
-    const result = c`{red hello ${value} again}`;
+    const result = colorTag`{red hello ${value} again}`;
     expect(result).toBe("\x1b[31mhello \x1b[32mworld\x1b[39m\x1b[31m again\x1b[39m");
   });
 
   it("returns plain text when disabled", () => {
     setColorEnabled(false);
-    expect(c`{red hello}`).toBe("hello");
+    expect(colorTag`{red hello}`).toBe("hello");
 
     // The interpolating branch runs through the same enablement gate, so a
     // regression that only reopens styling around a value has to be covered.
     const value = color.green("world");
-    const interpolated = c`{red hello ${value} tail}`;
+    const interpolated = colorTag`{red hello ${value} tail}`;
     expect(interpolated).not.toContain("\x1b");
     expect(interpolated).toBe("hello world tail");
   });
 
   it("does not support nested style blocks (documented limitation)", () => {
-    const result = c`{yellow a {bold inner} b}`;
+    const result = colorTag`{yellow a {bold inner} b}`;
     const plain = stripAnsi(result);
     expect(plain).toBe("a inner b");
     expect(result).toContain("\x1b[33m");
@@ -223,19 +223,19 @@ describe("c (template tag)", () => {
   });
 
   it("leaves unknown brace patterns as plain text", () => {
-    expect(c`value: {not-a-style text}`).toBe("value: {not-a-style text}");
+    expect(colorTag`value: {not-a-style text}`).toBe("value: {not-a-style text}");
   });
 
   it("treats interpolated markup-looking values as literal text", () => {
     const value = "{red untrusted}";
-    const result = c`value: ${value}`;
+    const result = colorTag`value: ${value}`;
     expect(result).toBe(`value: ${value}`);
     expect(result).not.toContain("\x1b[31m");
   });
 
   it("round-trips interpolation marker code points without parsing their braces", () => {
     const value = "\u{f0000}{red literal}";
-    expect(stripAnsi(c`{green ${value}}`)).toBe(value);
+    expect(stripAnsi(colorTag`{green ${value}}`)).toBe(value);
   });
 
   it("handles a large adversarial run of marker code points promptly and correctly", () => {
@@ -243,7 +243,7 @@ describe("c (template tag)", () => {
     // marker-collision scanning. Assert the value round-trips and completes fast.
     const value = "\u{f0000}".repeat(200_000);
     const start = performance.now();
-    const result = c`prefix ${value} suffix`;
+    const result = colorTag`prefix ${value} suffix`;
     const elapsed = performance.now() - start;
     expect(result).toBe(`prefix ${value} suffix`);
     expect(elapsed).toBeLessThan(1000);
@@ -254,8 +254,8 @@ describe("c (template tag)", () => {
     const strings = Object.assign([deeplyNested], {
       raw: [deeplyNested],
     }) as unknown as TemplateStringsArray;
-    expect(() => c(strings)).toThrow(/nesting exceeds/);
-    expect(catchError(() => c(strings))).toMatchObject({
+    expect(() => colorTag(strings)).toThrow(/nesting exceeds/);
+    expect(catchError(() => colorTag(strings))).toMatchObject({
       name: "RangeError",
       code: "ERR_INVALID_ARG_VALUE",
     });
@@ -264,12 +264,12 @@ describe("c (template tag)", () => {
   it("accepts nesting of exactly 64 levels", () => {
     const nested = `${"{red ".repeat(64)}value${"}".repeat(64)}`;
     const strings = Object.assign([nested], { raw: [nested] }) as unknown as TemplateStringsArray;
-    expect(stripAnsi(c(strings))).toBe("value");
+    expect(stripAnsi(colorTag(strings))).toBe("value");
   });
 
   it("keeps braces that do not start with a known style as literal text", () => {
     setColorEnabled(true);
-    expect(c`{notastyle text} and {red ok}`).toBe(`{notastyle text} and ${color.red("ok")}`);
+    expect(colorTag`{notastyle text} and {red ok}`).toBe(`{notastyle text} and ${color.red("ok")}`);
   });
 });
 
@@ -444,8 +444,8 @@ describe("documented parsing and terminal helpers", () => {
   });
 
   it("reports TTY-ness of a stream", () => {
-    expect(streamIsTTY({ isTTY: true } as NodeJS.WritableStream)).toBe(true);
-    expect(streamIsTTY({} as NodeJS.WritableStream)).toBe(false);
+    expect(isTTY({ isTTY: true } as NodeJS.WritableStream)).toBe(true);
+    expect(isTTY({} as NodeJS.WritableStream)).toBe(false);
   });
 });
 
@@ -540,7 +540,7 @@ describe("closing ANSI state", () => {
   it("closes inner styling without ending an outer color.* style", () => {
     const inner = truncateAnsi(color.green("long text"), 5);
     const viaColor = color.red(`${inner} tail`);
-    expect(viaColor).toBe(c`{red ${inner} tail}`);
+    expect(viaColor).toBe(colorTag`{red ${inner} tail}`);
     expect(viaColor).toBe(`${ESC}[31m${ESC}[32mlong…${ESC}[39m${ESC}[31m tail${ESC}[39m`);
   });
 
@@ -630,18 +630,18 @@ describe("setColorEnabled", () => {
   });
 });
 
-describe("streamIsTTY", () => {
+describe("isTTY", () => {
   it("is true only for objects with isTTY === true", () => {
-    expect(streamIsTTY({ isTTY: true })).toBe(true);
-    expect(streamIsTTY({ isTTY: false })).toBe(false);
-    expect(streamIsTTY({})).toBe(false);
-    expect(streamIsTTY(null)).toBe(false);
-    expect(streamIsTTY(undefined)).toBe(false);
-    expect(streamIsTTY("tty")).toBe(false);
+    expect(isTTY({ isTTY: true })).toBe(true);
+    expect(isTTY({ isTTY: false })).toBe(false);
+    expect(isTTY({})).toBe(false);
+    expect(isTTY(null)).toBe(false);
+    expect(isTTY(undefined)).toBe(false);
+    expect(isTTY("tty")).toBe(false);
   });
 });
 
-describe("createTemplateTag and createColorizer", () => {
+describe("createColorTag and createColorizer", () => {
   const stream = (isTTY: boolean) => ({ isTTY }) as never;
 
   afterEach(() => {
@@ -652,7 +652,7 @@ describe("createTemplateTag and createColorizer", () => {
     delete process.env.NO_COLOR;
     delete process.env.FORCE_COLOR;
     setColorEnabled("auto");
-    const tag = createTemplateTag(stream(false));
+    const tag = createColorTag(stream(false));
     expect(tag`{bold.red Error}: ${"x"}`).toBe("Error: x");
     expect(createColorizer(stream(false)).red("x")).toBe("x");
   });
@@ -661,20 +661,20 @@ describe("createTemplateTag and createColorizer", () => {
     delete process.env.NO_COLOR;
     delete process.env.FORCE_COLOR;
     setColorEnabled("auto");
-    const tag = createTemplateTag(stream(true));
+    const tag = createColorTag(stream(true));
     expect(tag`{red x}`).toBe("\x1b[31mx\x1b[39m");
   });
 
   it("matches c when color is forced on", () => {
     setColorEnabled(true);
-    const tag = createTemplateTag(stream(false));
-    expect(tag`{green OK} {bold.red no}`).toBe(c`{green OK} {bold.red no}`);
+    const tag = createColorTag(stream(false));
+    expect(tag`{green OK} {bold.red no}`).toBe(colorTag`{green OK} {bold.red no}`);
   });
 
   it("applies the nesting limit", () => {
     const nested = `${"{red ".repeat(66)}v${"}".repeat(66)}`;
     const strings = Object.assign([nested], { raw: [nested] }) as unknown as TemplateStringsArray;
-    expect(() => createTemplateTag(stream(true))(strings)).toThrow(RangeError);
+    expect(() => createColorTag(stream(true))(strings)).toThrow(RangeError);
   });
 });
 
@@ -708,9 +708,9 @@ describe("c (template tag) interpolation", () => {
     for (const enabled of [true, false]) {
       setColorEnabled(enabled);
       for (const value of ["$&", "$`", "$'", "$$", "$1", "$<name>"]) {
-        const plain = c`a ${value} b`;
+        const plain = colorTag`a ${value} b`;
         expect(stripAnsi(plain)).toBe(`a ${value} b`);
-        const styled = c`{red x ${value} y}`;
+        const styled = colorTag`{red x ${value} y}`;
         expect(stripAnsi(styled)).toBe(`x ${value} y`);
         expect(styled).not.toContain("\u{f0000}");
       }
