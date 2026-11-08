@@ -9,7 +9,7 @@ describe("option key conformance", () => {
   });
 
   it.each(optionKeyTable)("ctx.options is keyed by $key for $flags", async ({ flags, key }) => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let seen: string[] = [];
     cli
       .command("run")
@@ -23,7 +23,7 @@ describe("option key conformance", () => {
   });
 
   it("does not create a negated key for --no-x", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let options: Record<string, unknown> = {};
     cli
       .command("run")
@@ -36,7 +36,7 @@ describe("option key conformance", () => {
   });
 
   it("does not hand a parent's options to a child command", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let keys: string[] = ["unset"];
     cli
       .command("parent")

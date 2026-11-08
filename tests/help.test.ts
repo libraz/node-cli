@@ -103,11 +103,11 @@ describe("HelpGenerator", () => {
     });
 
     it("lists application commands before the framework help command", async () => {
-      const cli = new CLI();
+      const cli = new CLI({ name: "test" });
       cli.command("deploy").action(() => {});
       const stdout = createMockStdout();
 
-      await cli.exec("help", { stdout });
+      await cli.execLine("help", { stdout });
       const output = stdout.getOutput();
       expect(output.indexOf("deploy")).toBeLessThan(output.indexOf("help [...command]"));
     });

@@ -116,7 +116,7 @@ describe("missing variadic arguments", () => {
 
 describe("direct mode prompt cancellation display", () => {
   it("prints Cancelled instead of a raw CancelledError message", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli.command("ask").action(() => {
       throw new CancelledError();
     });
@@ -132,7 +132,7 @@ describe("direct mode prompt cancellation display", () => {
   });
 
   it("uses a CLIError's custom exit code in direct mode", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli.command("fail").action(() => {
       throw new CLIError("custom failure", { code: "VALIDATION_FAILED", exitCode: 42 });
     });
@@ -147,7 +147,7 @@ describe("direct mode prompt cancellation display", () => {
 
 describe("empty direct argv", () => {
   it.each([[[""]], [["--"]]])("shows help for explicit argv %j", async (argv) => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const stdout = createMockStdout();
     process.stdout.write = stdout.write.bind(stdout) as typeof process.stdout.write;
 
@@ -156,7 +156,7 @@ describe("empty direct argv", () => {
   });
 
   it("passes an empty string through as a positional argument value", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let received: string | undefined;
     cli.command("say <text>").action((ctx) => {
       received = ctx.args.text as string;
@@ -167,7 +167,7 @@ describe("empty direct argv", () => {
   });
 
   it("passes an empty string through as an option value", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let received: string | undefined;
     cli
       .command("greet")
@@ -183,17 +183,17 @@ describe("empty direct argv", () => {
 
 describe("public CLI lifecycle APIs", () => {
   it("removes a CLI event listener with off()", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const handler = vi.fn();
     cli.command("run").action(() => {});
     cli.on("beforeExecute", handler).off("beforeExecute", handler);
 
-    await cli.exec("run");
+    await cli.execLine("run");
     expect(handler).not.toHaveBeenCalled();
   });
 
   it("exposes PluginContext.off and fallback", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const handler = vi.fn();
     const stdout = createMockStdout();
     cli.use((ctx) => {
@@ -202,16 +202,18 @@ describe("public CLI lifecycle APIs", () => {
       ctx.fallback((input, context) => context.stdout.write(`caught:${input}`));
     });
 
-    await cli.exec("unknown", { stdout });
+    await cli.execLine("unknown", { stdout });
     expect(handler).not.toHaveBeenCalled();
     expect(stdout.getOutput()).toBe("caught:unknown");
   });
 
   it("rejects a second start call and errors for unknown help targets", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     await cli.start(["help"]);
     await expect(cli.start(["help"])).rejects.toThrow("already been called");
-    await expect(createCLI().exec("help unknown")).rejects.toThrow('Command not found: "unknown"');
+    await expect(createCLI({ name: "test" }).execLine("help unknown")).rejects.toThrow(
+      'Command not found: "unknown"',
+    );
   });
 });
 
@@ -219,7 +221,7 @@ describe("direct mode stdin", () => {
   it("passes process.stdin to command context", async () => {
     const originalStdin = process.stdin;
     const stdin = new PassThrough();
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const action = vi.fn((ctx) => {
       expect(ctx.stdin).toBe(stdin);
     });
@@ -523,7 +525,7 @@ describe("async plugin rejection", () => {
     });
 
     const stdout = createMockStdout();
-    const run = cli.exec.bind(cli);
+    const run = cli.execLine.bind(cli);
     await expect(run("help", { stdout })).rejects.toThrow("plugin boom");
   });
 });
@@ -672,14 +674,14 @@ describe("usage string is shared between help and errors", () => {
 
 describe("CLI history configuration", () => {
   it("applies historySize from the options", () => {
-    const cli = createCLI({ historySize: 25 });
+    const cli = createCLI({ name: "test", historySize: 25 });
     expect((cli as unknown as { historySizeLimit: number }).historySizeLimit).toBe(25);
   });
 });
 
 describe("fatal error diagnostics", () => {
   it("prints an error stack when NODE_CLI_DEBUG is enabled", () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const error = new Error("broken command");
     error.stack = "Error: broken command\n  at test";
     const writes: string[] = [];
@@ -696,7 +698,7 @@ describe("fatal error diagnostics", () => {
 
 describe("help completion through a shadowed parent", () => {
   it("offers nothing below a command whose arguments consume its subcommands", () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const list = cli.command("task list").action(() => {});
     list.command("x").action(() => {});
     cli.command("task <name>").action(() => {});
@@ -715,12 +717,12 @@ describe("help completion through a shadowed parent", () => {
 
 describe("direct mode error presentation", () => {
   it("strips control sequences from argv-derived messages and closes styling", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli.command("deploy").action(() => {});
     const stderr = createMockStdout();
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
     await cli.start(["deploy", "--\x1b[2Jbogus"]);
-    const cliNotFound = createCLI();
+    const cliNotFound = createCLI({ name: "test" });
     const notFound = createMockStdout();
     process.stderr.write = notFound.write.bind(notFound) as typeof process.stderr.write;
     await cliNotFound.start(["\x1b[31mred"]);

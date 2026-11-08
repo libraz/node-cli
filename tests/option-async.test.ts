@@ -21,7 +21,7 @@ function codeOf(fn: () => unknown): unknown {
 
 describe("async option callbacks", () => {
   it("awaits an async parse before the action runs", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let seen: unknown;
     cli
       .command("serve")
@@ -30,12 +30,12 @@ describe("async option callbacks", () => {
         seen = ctx.options.port;
       });
 
-    await cli.exec("serve --port 21", quiet());
+    await cli.execLine("serve --port 21", quiet());
     expect(seen).toBe(42);
   });
 
   it("awaits an async parse for each element of an array option", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let seen: unknown;
     cli
       .command("tag")
@@ -52,7 +52,7 @@ describe("async option callbacks", () => {
   });
 
   it("reports a rejected async parse as a ValidationError", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli
       .command("serve")
       .option("--port <port>", {
@@ -62,13 +62,13 @@ describe("async option callbacks", () => {
       })
       .action(() => {});
 
-    const failure = cli.exec("serve --port x", quiet());
+    const failure = cli.execLine("serve --port x", quiet());
     await expect(failure).rejects.toBeInstanceOf(ValidationError);
     await expect(failure).rejects.toMatchObject({ code: "VALIDATION_FAILED", optionName: "port" });
   });
 
   it("awaits an async option validate and stops on rejection", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let ran = false;
     cli
       .command("serve")
@@ -82,16 +82,16 @@ describe("async option callbacks", () => {
         ran = true;
       });
 
-    const failure = cli.exec("serve --host bad", quiet());
+    const failure = cli.execLine("serve --host bad", quiet());
     await expect(failure).rejects.toMatchObject({ code: "VALIDATION_FAILED", optionName: "host" });
     expect(ran).toBe(false);
 
-    await cli.exec("serve --host good", quiet());
+    await cli.execLine("serve --host good", quiet());
     expect(ran).toBe(true);
   });
 
   it("awaits an async command validate", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let ran = false;
     cli
       .command("deploy <env>")
@@ -103,7 +103,7 @@ describe("async option callbacks", () => {
         ran = true;
       });
 
-    await expect(cli.exec("deploy prod", quiet())).rejects.toMatchObject({
+    await expect(cli.execLine("deploy prod", quiet())).rejects.toMatchObject({
       code: "VALIDATION_FAILED",
     });
     expect(ran).toBe(false);
@@ -112,7 +112,7 @@ describe("async option callbacks", () => {
 
 describe("onCancel", () => {
   it("routes an async rejection to the error event without awaiting it", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const errors: Error[] = [];
     cli.on("error", (error) => {
       errors.push(error);
@@ -136,7 +136,7 @@ describe("onCancel", () => {
           }),
       );
 
-    const execution = cli.exec("wait", { ...quiet(), signal: controller.signal });
+    const execution = cli.execLine("wait", { ...quiet(), signal: controller.signal });
     await running;
     controller.abort();
     await execution;
@@ -153,7 +153,7 @@ describe("definition errors", () => {
     ["--retry <boolean>", { type: "number" as const }, "number"],
     ["--retry [boolean]", { type: "string" as const }, "string"],
   ])("rejects %s with %j as an invalid definition", (flags, schema, type) => {
-    const thrown = codeOf(() => createCLI().command("serve").option(flags, schema));
+    const thrown = codeOf(() => createCLI({ name: "test" }).command("serve").option(flags, schema));
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown).not.toBeInstanceOf(TypeError);
     expect(thrown).not.toBeInstanceOf(RangeError);
@@ -162,7 +162,9 @@ describe("definition errors", () => {
   });
 
   it("names the option and the placeholder in the conflict message", () => {
-    expect(() => createCLI().command("serve").option("-p, --port <number>")).toThrow(
+    expect(() =>
+      createCLI({ name: "test" }).command("serve").option("-p, --port <number>"),
+    ).toThrow(
       'Option "--port" uses the <number> placeholder but its type is string; set type: "number" or rename the placeholder',
     );
   });
@@ -173,11 +175,11 @@ describe("definition errors", () => {
     ["--retry <boolean>", { type: "boolean" as const }],
     ["--count <n>", {}],
   ])("accepts %s with %j", (flags, schema) => {
-    expect(() => createCLI().command("serve").option(flags, schema)).not.toThrow();
+    expect(() => createCLI({ name: "test" }).command("serve").option(flags, schema)).not.toThrow();
   });
 
   it("codes an invalid option definition", () => {
-    const builder = createCLI().command("serve");
+    const builder = createCLI({ name: "test" }).command("serve");
     for (const define of [
       () => builder.option("--port <n>", { required: true, default: 1 }),
       () => builder.option("--level <l>", { type: "number", default: "x" }),
@@ -193,14 +195,14 @@ describe("definition errors", () => {
   });
 
   it("codes a duplicate option name as a definition conflict", () => {
-    const builder = createCLI().command("serve").option("-p, --port <n>");
+    const builder = createCLI({ name: "test" }).command("serve").option("-p, --port <n>");
     expect(codeOf(() => builder.option("-p, --path <p>"))).toMatchObject({
       code: "ERR_DEFINITION_CONFLICT",
     });
   });
 
   it("codes an invalid command definition string", () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     for (const definition of [
       "",
       "run <a> extra",
@@ -217,7 +219,7 @@ describe("definition errors", () => {
   });
 
   it("codes a command alias collision as a definition conflict", () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli.command("deploy").alias("d");
     cli.command("status");
     for (const define of [
@@ -230,7 +232,7 @@ describe("definition errors", () => {
   });
 
   it("codes configuring a removed command", () => {
-    const builder = createCLI().command("task");
+    const builder = createCLI({ name: "test" }).command("task");
     expect(builder.remove()).toBe(true);
     expect(codeOf(() => builder.description("x"))).toMatchObject({
       code: "ERR_COMMAND_REMOVED",

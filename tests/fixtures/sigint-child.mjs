@@ -1,6 +1,6 @@
 import { createCLI } from "../../dist/index.js";
 
-const cli = createCLI();
+const cli = createCLI({ name: "test" });
 cli
   .command("wait")
   .onCancel((ctx) => {

@@ -58,8 +58,18 @@ const fallback: FallbackHandler = (input, fallbackCtx: FallbackContext) => {
 };
 
 const historyFilter: HistoryFilter = (line) => (line.includes("secret") ? null : line);
-const options: CLIOptions = { historySize: 10, historyFilter, historyFile: "~/.app_history" };
+const options: CLIOptions = {
+  name: "test",
+  historySize: 10,
+  historyFilter,
+  historyFile: "~/.app_history",
+};
 const cli: CLI = createCLI(options);
+
+// @ts-expect-error name is required
+createCLI();
+// @ts-expect-error name is required
+createCLI({});
 
 // Settings are construction-only.
 // @ts-expect-error prompt() was removed
@@ -82,10 +92,10 @@ void chained;
 // start resolves to the exit code; both entry points take readonly argv.
 const exitCode: Promise<number> = cli.start();
 const explicit: Promise<number> = cli.start(["deploy", "prod"] as const);
-const runString: Promise<void> = cli.exec("deploy prod", ctx);
+const runString: Promise<void> = cli.execLine("deploy prod", ctx);
 const runArray: Promise<void> = cli.exec(["deploy", "prod"] as const, { stdin: null });
 // @ts-expect-error input is a string or a string array
-void cli.exec(42);
+void cli.execLine(42);
 void exitCode;
 void explicit;
 void runString;

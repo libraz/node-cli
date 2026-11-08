@@ -35,7 +35,7 @@ cli.command("inner").action(() => {
 });
 
 // Opens a second SIGINT scope inside the first.
-cli.command("outer").action(() => cli.exec("inner"));
+cli.command("outer").action(() => cli.execLine("inner"));
 
 if (scenario === "late") await cli.start(["late"]);
 else await cli.start(["outer"]);

@@ -4,7 +4,7 @@ import { createMockStdout } from "./helpers.js";
 
 describe("documented example patterns", () => {
   it("uses hyphenated long option names exactly as parsed", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const stream = createMockStdout();
 
     cli
@@ -14,13 +14,13 @@ describe("documented example patterns", () => {
         ctx.stdout.write(ctx.options["dry-run"] ? "dry\n" : "real\n");
       });
 
-    await cli.exec("deploy staging --dry-run", { stdout: stream, stderr: stream });
+    await cli.execLine("deploy staging --dry-run", { stdout: stream, stderr: stream });
 
     expect(stream.getOutput()).toBe("dry\n");
   });
 
   it("supports advanced example patterns for parse, hidden, negation, and removal", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const stream = createMockStdout();
     const removed = cli.command("removed").action((ctx) => {
       ctx.stdout.write("removed\n");
@@ -43,13 +43,13 @@ describe("documented example patterns", () => {
 
     removed.remove();
 
-    await cli.exec("config --date 2026-05-09 --no-cache --secret token", {
+    await cli.execLine("config --date 2026-05-09 --no-cache --secret token", {
       stdout: stream,
       stderr: stream,
     });
 
     expect(stream.getOutput()).toBe("2026-05-09:false\n");
-    await expect(cli.exec("removed", { stdout: stream, stderr: stream })).rejects.toThrow(
+    await expect(cli.execLine("removed", { stdout: stream, stderr: stream })).rejects.toThrow(
       "Command not found",
     );
   });

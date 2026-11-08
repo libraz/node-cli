@@ -85,7 +85,7 @@ describe("Banner and Description", () => {
       cli.command("test").description("Test command");
 
       let output = "";
-      await cli.exec("help", {
+      await cli.execLine("help", {
         stdout: {
           write(data: string) {
             output += data;

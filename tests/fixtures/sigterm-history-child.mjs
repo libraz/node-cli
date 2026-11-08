@@ -2,6 +2,7 @@ import { createCLI, progress } from "../../dist/index.js";
 
 const historyFile = process.argv[2];
 const cli = createCLI({
+  name: "sigterm-fixture",
   prompt: "> ",
   historyFile,
 });

@@ -708,13 +708,13 @@ describe("help discoverability", () => {
 
 describe("async plugin failures", () => {
   it("stay a sticky failure even when the plugin rejects with undefined", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli.command("foo").action(() => {});
     cli.use(() => Promise.reject(undefined));
 
-    await expect(cli.exec("foo")).rejects.toBeUndefined();
+    await expect(cli.execLine("foo")).rejects.toBeUndefined();
     // The failure must persist rather than degrade into a silent command-not-found.
-    await expect(cli.exec("foo")).rejects.toBeUndefined();
+    await expect(cli.execLine("foo")).rejects.toBeUndefined();
   });
 });
 
@@ -803,29 +803,29 @@ describe("logging with non-string messages", () => {
 describe("help for the shell's own commands", () => {
   it("describes exit and quit instead of failing as unknown", async () => {
     for (const name of ["exit", "quit"]) {
-      const cli = createCLI();
+      const cli = createCLI({ name: "test" });
       const out = createMockStdout();
-      await cli.exec(`help ${name}`, { stdout: out, stderr: out });
+      await cli.execLine(`help ${name}`, { stdout: out, stderr: out });
       expect(out.getOutput()).toContain(`Usage: ${name}`);
     }
   });
 
   it("offers them when completing the help target", () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const registry = (cli as unknown as { registry: CommandRegistry }).registry;
     const [candidates] = new ShellCompleter(registry).complete("help ex") as [string[], string];
     expect(candidates).toContain("exit");
   });
 
   it("lets an application command of the same name win", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli
       .command("exit <code>")
       .description("Leave with a status")
       .action(() => {});
     const out = createMockStdout();
 
-    await cli.exec("help exit", { stdout: out, stderr: out });
+    await cli.execLine("help exit", { stdout: out, stderr: out });
     expect(out.getOutput()).toContain("Leave with a status");
     expect(out.getOutput()).not.toContain("Exit the interactive shell.");
   });

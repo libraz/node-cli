@@ -64,18 +64,46 @@ function resolveHistoryFile(value: unknown, name: string): string {
 }
 
 /** Rejects argv that is not a string array, before any of it is executed. */
-function checkArgv(name: string, value: unknown, allowString: boolean): void {
-  const valid =
-    (allowString && typeof value === "string") ||
-    (Array.isArray(value) && value.every((item) => typeof item === "string"));
-  if (!valid) {
-    const expected = allowString ? "a string or an array of strings" : "an array of strings";
+function checkArgv(name: string, value: unknown): void {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
     throw usageError(
       "type",
       "ERR_INVALID_ARG_TYPE",
-      `The "${name}" argument must be ${expected}. Received ${describeValue(value)}`,
+      `The "${name}" argument must be an array of strings. Received ${describeValue(value)}`,
     );
   }
+}
+
+/** Rejects a command line that is not a string, before any of it is executed. */
+function checkLine(value: unknown): void {
+  if (typeof value !== "string") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "line" argument must be a string. Received ${describeValue(value)}`,
+    );
+  }
+}
+
+const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Validates the application `name`, which names the help header and the history file. */
+function checkName(value: unknown): string {
+  if (typeof value !== "string") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "name" option must be a string. Received ${describeValue(value)}`,
+    );
+  }
+  if (!NAME_PATTERN.test(value)) {
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      `The "name" option must match ${NAME_PATTERN}. Received ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
 }
 
 /** Renders a rejected value for an error message. */
@@ -123,13 +151,15 @@ export class CLI {
    * Creates a new CLI instance. Use {@link createCLI}; the class is exported as
    * a type only.
    * @param options - Configuration options for the CLI application.
-   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a non-number `historySize`,
-   *   a non-function `historyFilter`, or an empty or non-string `historyFile`.
-   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `historySize` is not a
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a non-string `name`, a
+   *   non-number `historySize`, a non-function `historyFilter`, or an empty or
+   *   non-string `historyFile`.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `name` is empty or does
+   *   not match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`, or `historySize` is not a
    *   non-negative safe integer.
    */
-  constructor(options: CLIOptions = {}) {
-    this.name = options.name ?? "cli";
+  constructor(options: CLIOptions) {
+    this.name = checkName(options?.name);
     this.version = options.version;
     this.promptStr = options.prompt ?? "> ";
     this.bannerStr = options.banner;
@@ -278,16 +308,46 @@ export class CLI {
   }
 
   /**
-   * Programmatically executes a command as if typed by the user. A string is
-   * tokenized and split at pipes; an array is used as argv as is. `""` and `[]`
-   * resolve without doing anything. A failure rejects the returned promise.
-   * @param input - The command string, or argv elements.
+   * Programmatically executes a command from argv, as if typed by the user. The
+   * elements are used as is: nothing is tokenized and `|` is an ordinary
+   * character, so untrusted data belongs here rather than in a command line
+   * for {@link CLI.execLine}. `[]` resolves without doing anything. A failure
+   * rejects the returned promise.
+   * @param argv - The argv elements: the command path, then its arguments.
    * @param options - Optional input/output streams and cancellation signal.
-   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `input` is neither a string
-   *   nor an array of strings.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `argv` is not an array of
+   *   strings (a command line string goes to `execLine`).
+   * @example
+   * ```ts
+   * await cli.exec(["deploy", userInput, "--force"]);
+   * ```
    */
-  async exec(input: string | readonly string[], options: StdioOptions = {}): Promise<void> {
-    checkArgv("input", input, true);
+  async exec(argv: readonly string[], options: StdioOptions = {}): Promise<void> {
+    checkArgv("argv", argv);
+    await this.run(argv, options);
+  }
+
+  /**
+   * Programmatically executes a shell-language command line, as if typed at
+   * the prompt: the line is tokenized (single quotes, double quotes and
+   * backslashes) and split at `|` into a pipeline. `""` resolves without doing
+   * anything. A failure rejects the returned promise. Untrusted data must not
+   * be interpolated into the line (a `|` in it starts another command); pass
+   * it through `exec([...])` instead.
+   * @param line - The command line.
+   * @param options - Optional input/output streams and cancellation signal.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `line` is not a string.
+   * @example
+   * ```ts
+   * await cli.execLine('greet "Ada Lovelace" | upper');
+   * ```
+   */
+  async execLine(line: string, options: StdioOptions = {}): Promise<void> {
+    checkLine(line);
+    await this.run(line, options);
+  }
+
+  private async run(input: string | readonly string[], options: StdioOptions): Promise<void> {
     await this.drainPendingPlugins();
     const { stdin = null, stdout = process.stdout, stderr = process.stderr, signal } = options;
     await this.router.runWithSigintCancel(async () => {
@@ -307,7 +367,7 @@ export class CLI {
    * @throws {Error} `ERR_ALREADY_STARTED` when called a second time.
    */
   async start(argv?: readonly string[]): Promise<number> {
-    if (argv !== undefined) checkArgv("argv", argv, false);
+    if (argv !== undefined) checkArgv("argv", argv);
     if (this.started) {
       throw usageError(
         "state",
@@ -463,9 +523,16 @@ export class CLI {
 
 /**
  * Factory function that creates and returns a new CLI instance.
- * @param options - Optional configuration options for the CLI application.
+ * @param options - Configuration options for the CLI application; `name` is required.
  * @returns A new CLI instance.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `name` is not a string.
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `name` is empty or does not
+ *   match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`.
+ * @example
+ * ```ts
+ * const cli = createCLI({ name: "mytool", version: "1.0.0" });
+ * ```
  */
-export function createCLI(options?: CLIOptions): CLI {
+export function createCLI(options: CLIOptions): CLI {
   return new CLI(options);
 }

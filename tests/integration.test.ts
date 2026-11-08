@@ -16,7 +16,7 @@ describe("CLI (integration)", () => {
   });
 
   it("executes direct CLI mode", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const action = vi.fn();
     cli.command("greet <name>").action(action);
 
@@ -29,7 +29,7 @@ describe("CLI (integration)", () => {
   });
 
   it("emits exit once for direct and non-interactive start paths", async () => {
-    const direct = createCLI();
+    const direct = createCLI({ name: "test" });
     const directExit = vi.fn();
     direct.on("exit", directExit);
     direct.command("run").action(() => {});
@@ -38,7 +38,7 @@ describe("CLI (integration)", () => {
 
     const originalIsTTY = process.stdin.isTTY;
     Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
-    const help = createCLI();
+    const help = createCLI({ name: "test" });
     const helpExit = vi.fn();
     help.on("exit", helpExit);
     try {
@@ -50,7 +50,7 @@ describe("CLI (integration)", () => {
   });
 
   it("uses exit status 130 after a cooperative SIGINT cancellation", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let started: () => void = () => {};
     const running = new Promise<void>((resolve) => {
       started = resolve;
@@ -71,7 +71,7 @@ describe("CLI (integration)", () => {
   });
 
   it("uses exit status 130 when a SIGINT-aborted action rejects", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let started: () => void = () => {};
     const running = new Promise<void>((resolve) => {
       started = resolve;
@@ -101,7 +101,7 @@ describe("CLI (integration)", () => {
   });
 
   it("handles command not found in direct mode", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const stderr = createMockStdout();
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
@@ -111,7 +111,7 @@ describe("CLI (integration)", () => {
   });
 
   it("built-in help command works", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli.command("deploy <env>").description("Deploy app");
 
     const stdout = createMockStdout();
@@ -123,7 +123,7 @@ describe("CLI (integration)", () => {
   });
 
   it("built-in help for specific command", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli
       .command("deploy <env>")
       .description("Deploy to environment")
@@ -138,7 +138,7 @@ describe("CLI (integration)", () => {
   });
 
   it("subcommands work end-to-end", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const action = vi.fn();
     cli
       .command("user create <name>")
@@ -153,7 +153,7 @@ describe("CLI (integration)", () => {
   });
 
   it("nested command builder style works", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const action = vi.fn();
     const user = cli.command("config").description("Config management");
     user.command("set <key> <value>").action(action);
@@ -165,7 +165,7 @@ describe("CLI (integration)", () => {
   });
 
   it("option validation works", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli
       .command("login")
       .option("--token <token>", {
@@ -196,6 +196,7 @@ describe("CLI (integration)", () => {
     const stdout = createMockTTY();
     const stderr = createMockTTY();
     const cli = createCLI({
+      name: "test",
       historyFile,
       historyFilter: (line) => line.replace(/secret/g, "[redacted]"),
     });
@@ -229,35 +230,35 @@ describe("createCLI option validation", () => {
   it.each([0, -0, 1, 2 ** 31, 2 ** 32, Number.MAX_SAFE_INTEGER])(
     "accepts historySize %s",
     (historySize) => {
-      expect(() => createCLI({ historySize })).not.toThrow();
+      expect(() => createCLI({ name: "test", historySize })).not.toThrow();
     },
   );
 
   it.each([Number.NaN, Infinity, -Infinity, -1, Number.MAX_SAFE_INTEGER + 1, 1.5])(
     "rejects historySize %s with ERR_INVALID_ARG_VALUE",
     (historySize) => {
-      const error = captureThrow(() => createCLI({ historySize }));
+      const error = captureThrow(() => createCLI({ name: "test", historySize }));
       expect(error).toBeInstanceOf(RangeError);
       expect(error).toHaveProperty("code", "ERR_INVALID_ARG_VALUE");
     },
   );
 
   it.each([null, true, "10"])("rejects historySize %s with ERR_INVALID_ARG_TYPE", (value) => {
-    const error = captureThrow(() => createCLI({ historySize: value as number }));
+    const error = captureThrow(() => createCLI({ name: "test", historySize: value as number }));
     expect(error).toBeInstanceOf(TypeError);
     expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
   });
 
   it.each([null, "redact", 1])("rejects historyFilter %s with ERR_INVALID_ARG_TYPE", (value) => {
     const error = captureThrow(() =>
-      createCLI({ historyFilter: value as unknown as (line: string) => string }),
+      createCLI({ name: "test", historyFilter: value as unknown as (line: string) => string }),
     );
     expect(error).toBeInstanceOf(TypeError);
     expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
   });
 
   it.each(["", null, 42])("rejects historyFile %s with ERR_INVALID_ARG_TYPE", (value) => {
-    const error = captureThrow(() => createCLI({ historyFile: value as string }));
+    const error = captureThrow(() => createCLI({ name: "test", historyFile: value as string }));
     expect(error).toBeInstanceOf(TypeError);
     expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
   });
@@ -268,7 +269,7 @@ describe("createCLI option validation", () => {
     ["~other/history", "~other/history"],
     ["/var/tmp/~/history", "/var/tmp/~/history"],
   ])("resolves historyFile %s to %s", (historyFile, expected) => {
-    expect(historyFileOf(createCLI({ historyFile }))).toBe(expected);
+    expect(historyFileOf(createCLI({ name: "test", historyFile }))).toBe(expected);
   });
 
   it("defaults historyFile to the name in the home directory", () => {
@@ -285,14 +286,14 @@ describe("start() argument checks", () => {
     ["an array with a number", ["help", 1]],
     ["an array with undefined", ["help", undefined]],
   ])("rejects %s as argv with ERR_INVALID_ARG_TYPE", async (_label, argv) => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const error = await cli.start(argv as string[]).catch((err: unknown) => err);
     expect(error).toBeInstanceOf(TypeError);
     expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
   });
 
   it("rejects a second start with ERR_ALREADY_STARTED", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     cli.command("run").action(() => {});
     await cli.start(["run"]);
     const error = await cli.start(["run"]).catch((err: unknown) => err);

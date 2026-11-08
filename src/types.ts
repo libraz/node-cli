@@ -363,12 +363,12 @@ export interface CommandStreams {
 }
 
 /**
- * Streams and cancellation accepted by `CLI.exec()`. Omitted members fall back
+ * Streams and cancellation accepted by `CLI.exec()` and `CLI.execLine()`. Omitted members fall back
  * to no stdin, `process.stdout`, `process.stderr`, and no external signal. A
  * {@link CommandContext} is assignable, so an action can run a nested command
  * on its own streams.
  */
-export type StdioOptions = Partial<CommandStreams>;
+export type StdioOptions = { [K in keyof CommandStreams]?: CommandStreams[K] | undefined };
 
 /**
  * Context passed to a command's action handler at execution time. `A` types
@@ -479,35 +479,40 @@ export interface CompletionContext {
  * `ctx.shell?.setPrompt()` to change the prompt of a running shell).
  */
 export interface CLIOptions {
-  /** The name of the CLI application. */
-  name?: string;
+  /**
+   * The name of the CLI application. Required; it titles the help output and
+   * names the default history file. Must match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`:
+   * a non-string throws a `TypeError` (`ERR_INVALID_ARG_TYPE`), an empty or
+   * non-matching string a `RangeError` (`ERR_INVALID_ARG_VALUE`).
+   */
+  name: string;
   /** The version string displayed by --version. */
-  version?: string;
+  version?: string | undefined;
   /** The interactive prompt string (e.g. "> "). */
-  prompt?: string;
+  prompt?: string | undefined;
   /** A short description shown in the help header. */
-  description?: string;
+  description?: string | undefined;
   /** Banner text displayed when the interactive shell starts. Set to "" to suppress. */
-  banner?: string;
+  banner?: string | undefined;
   /**
    * File path used to persist command history. A lone `~` and a leading `~/`
    * expand to the home directory. Defaults to `~/.<name>_history`. An empty
    * string or a non-string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
    */
-  historyFile?: string;
+  historyFile?: string | undefined;
   /**
    * Maximum number of history entries to retain. Defaults to 1000. A
    * non-number throws a `TypeError`
    * (`ERR_INVALID_ARG_TYPE`); a value that is not a non-negative safe integer
    * throws a `RangeError` (`ERR_INVALID_ARG_VALUE`).
    */
-  historySize?: number;
+  historySize?: number | undefined;
   /**
    * Redacts or rejects a line before it is persisted to shell history. Return
    * `null` to omit sensitive commands entirely. A non-function throws a
    * `TypeError` with code `ERR_INVALID_ARG_TYPE`.
    */
-  historyFilter?: HistoryFilter;
+  historyFilter?: HistoryFilter | undefined;
 }
 
 // ── Parse Result ──

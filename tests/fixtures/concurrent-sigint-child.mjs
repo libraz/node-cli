@@ -13,7 +13,7 @@ for (const name of ["first", "second"]) {
   });
 }
 
-const run = cli.exec.bind(cli);
+const run = cli.execLine.bind(cli);
 const both = Promise.all([run("first"), run("second")]);
 
 // Nothing else keeps the loop alive while both actions wait on their signal.

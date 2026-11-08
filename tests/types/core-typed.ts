@@ -16,7 +16,7 @@ type ContextOf<B> = B extends { action(fn: (ctx: infer C) => void): unknown } ? 
 type OptionsOf<B> = ContextOf<B> extends { options: infer O } ? Flat<O> : never;
 type ArgsOf<B> = ContextOf<B> extends { args: infer A } ? A : never;
 
-const cli = createCLI();
+const cli = createCLI({ name: "test" });
 
 // Arguments are inferred from a literal definition string; path words are skipped.
 const deploy = cli.command("remote deploy <env> [region] [...rest]");

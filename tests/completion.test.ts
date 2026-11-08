@@ -28,7 +28,7 @@ describe("ShellCompleter", () => {
   });
 
   it("completes command paths for the built-in help command", () => {
-    const cli = new CLI();
+    const cli = new CLI({ name: "test" });
     cli
       .command("user create")
       .alias("new")

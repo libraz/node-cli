@@ -16,5 +16,5 @@ cli.command("hang").action(() => {
 
 // Programmatic execution must reach the same force-quit path as the direct
 // argv path, so a Ctrl-C during it still notifies every `exit` listener.
-const run = cli.exec.bind(cli);
+const run = cli.execLine.bind(cli);
 await run("hang");

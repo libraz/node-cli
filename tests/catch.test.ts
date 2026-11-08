@@ -73,7 +73,7 @@ describe("catch/fallback command", () => {
   });
 
   it("CLI.fallback() sets the handler and returns the CLI", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const stream = createMockStdout();
     const caught: string[] = [];
 
@@ -82,12 +82,12 @@ describe("catch/fallback command", () => {
     });
 
     expect(result).toBe(cli);
-    await cli.exec("unknowncmd", { stdout: stream, stderr: stream });
+    await cli.execLine("unknowncmd", { stdout: stream, stderr: stream });
     expect(caught).toEqual(["unknowncmd"]);
   });
 
   it("hands the execution's streams and signal to the fallback", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     const stdin = Readable.from([]);
     const stdout = createMockStdout();
     const stderr = createMockStdout();
@@ -97,18 +97,18 @@ describe("catch/fallback command", () => {
       received = ctx;
     });
 
-    await cli.exec("unknowncmd", { stdin, stdout, stderr, signal: controller.signal });
+    await cli.execLine("unknowncmd", { stdin, stdout, stderr, signal: controller.signal });
     expect(received).toEqual({ stdin, stdout, stderr, signal: controller.signal });
   });
 
   it("gives the fallback a live signal when exec supplies none", async () => {
-    const cli = createCLI();
+    const cli = createCLI({ name: "test" });
     let received: FallbackContext | undefined;
     cli.fallback((_input, ctx) => {
       received = ctx;
     });
 
-    await cli.exec("unknowncmd", { stdout: createMockStdout() });
+    await cli.execLine("unknowncmd", { stdout: createMockStdout() });
     expect(received?.stdin).toBeNull();
     expect(received?.signal).toBeInstanceOf(AbortSignal);
     expect(received?.signal.aborted).toBe(false);

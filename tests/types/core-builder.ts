@@ -6,7 +6,7 @@ import {
   type OptionSchema,
 } from "../../src/index.js";
 
-const cli = createCLI();
+const cli = createCLI({ name: "test" });
 const builder: CommandBuilder = cli.command("deploy <env>");
 
 // The completer receives a context and may return a readonly array, sync or async.
