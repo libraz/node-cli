@@ -3,9 +3,9 @@ export type {
   ConfirmOptions,
   MultiselectOptions,
   PasswordOptions,
-  PromptBaseOptions,
+  PromptOptions,
   SelectChoice,
   SelectOptions,
   TextOptions,
 } from "../output/prompt.js";
-export { maskInput, prompt } from "../output/prompt.js";
+export { prompt } from "../output/prompt.js";

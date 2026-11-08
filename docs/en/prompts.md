@@ -16,32 +16,48 @@ const env = await prompt.select("Environment:", ["dev", "staging", "prod"]);
 console.log(name, sure, env);
 ```
 
-Each call reads one answer, re-asking until the input is acceptable. Questions are written to `process.stdout` and read from `process.stdin` by default.
+Each call reads one answer, re-asking until the input is acceptable. Questions are written to `process.stderr` and answers are read from `process.stdin` by default.
+
+Writing the question to stderr keeps `mycli init | jq` from receiving prompt text. To send questions to stdout as 1.x did, pass `{ stderr: process.stdout }`. If stderr is redirected (`2>log`), the question is not visible on the terminal.
+
+### Inside a command
+
+A command context carries `stdin`, `stderr` and `signal`, which are exactly the stream options a prompt takes, so pass it straight through:
+
+```ts
+cli.command("init").action(async (ctx) => {
+  const name = await prompt.text("Name?", ctx);
+  ctx.stdout.write(`${name}\n`);
+});
+```
+
+In tests, `exec()` runs with no stdin unless one is supplied, so give it one when the command prompts: `exec(input, { stdin })`.
+
+### Finish indicators before prompting
+
+A [spinner or bar](progress.md) draws on stderr, the same stream a prompt now uses. End it (`stop()`, `succeed()` and so on) before asking, or the question line is interleaved with the animation frames.
 
 ## What the object contains
 
-`prompt` has five members: `text`, `confirm`, `select`, `multiselect`, and `password`. `maskInput` is a separate top-level export.
-
-```ts
-import { maskInput, prompt } from "@libraz/node-cli";
-```
+`prompt` has five members: `text`, `confirm`, `select`, `multiselect`, and `password`.
 
 ## Shared options
 
-Every method accepts these, through `PromptBaseOptions<T>`:
+Every method accepts these, through `PromptOptions<T>`:
 
 | Field | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `validate` | `(value: T) => void` | — | Throw inside it to reject the value. |
-| `required` | `boolean` | see each method | Whether an empty submission is rejected. |
-| `prefix` | `string` | `"?"` | Symbol before the question. |
-| `stdout` | `Writable` | `process.stdout` | Where the question is written. |
-| `stdin` | `Readable` | `process.stdin` | Where the answer is read from. |
+| `validate` | `(value: T) => void \| Promise<void>` | — | Throw or reject inside it to refuse the value. |
+| `marker` | `string` | `"?"` | Symbol before the question. |
+| `stderr` | `Writable` | `process.stderr` | Where the question is written. |
+| `stdin` | `Readable \| null` | `process.stdin` | Where the answer is read from; `null` or omitted means `process.stdin`. |
 | `signal` | `AbortSignal` | — | Cancels a pending prompt when aborted. |
+
+`required` is not shared: it exists only on `text` and `password`.
 
 ### `validate` does not reject the promise
 
-Throwing inside `validate` prints the error message below the question and asks again. The returned promise stays pending until an accepted value arrives. Only cancellation escapes the loop.
+Throwing inside `validate` — or returning a promise that rejects — prints the error message below the question and asks again. An async validator is awaited. The returned promise stays pending until an accepted value arrives. Only cancellation escapes the loop.
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -63,7 +79,7 @@ Returns `Promise<string>`.
 | Field | Default | Behavior |
 | --- | --- | --- |
 | `default` | — | Value used when the submission is empty. |
-| `placeholder` | — | Hint text, shown only when there is no `default`. |
+| `placeholder` | — | Example text shown as ` (e.g. …)` after the question, only when there is no `default`. |
 | `trim` | `true` | Strips leading and trailing whitespace from the answer. |
 | `required` | `true` | An empty submission is rejected and the question repeats. |
 
@@ -93,7 +109,7 @@ if (await prompt.confirm("Delete all local branches?", { default: false })) {
 
 ## `prompt.select(message, choices, options?)`
 
-Returns `Promise<T>`. An empty `choices` array throws.
+Returns `Promise<T>`. An empty `choices` array throws `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 The choices are printed as a numbered list. Input is either a **1-based number** or a case-insensitive match on a choice label; pressing Enter with no input picks the default, when one is configured. Duplicate labels print a warning and resolve to the first occurrence, so number entry is the way to reach a later one.
 
@@ -115,7 +131,7 @@ Returns `Promise<T[]>`.
 | `min` | Minimum number of items. |
 | `max` | Maximum number of items. |
 
-`min` and `max` must be non-negative safe integers, `min` must not exceed `max`, and `min` must not exceed the number of choices; any violation throws `RangeError` before the question is asked.
+`min` and `max` must be non-negative safe integers, `min` must not exceed `max`, and `min` must not exceed the number of choices; any violation throws `RangeError` (code `ERR_INVALID_ARG_VALUE`) before the question is asked.
 
 Input is comma-separated 1-based numbers. Repeated numbers are **deduplicated before** `min` and `max` are counted, so `1,1,2` counts as two selections. An empty submission uses the defaults.
 
@@ -136,11 +152,10 @@ Returns `Promise<string>`. Typed characters are echoed as asterisks.
 | --- | --- | --- |
 | `trim` | `false` | Unlike `text`, whitespace is kept — it may be part of the secret. |
 | `required` | `true` | An empty submission is rejected. |
-| `stderr` | `process.stderr` | Where the question goes when input is a terminal but `stdout` is redirected. |
 
 There is **no `default` field** on a password prompt.
 
-When input is a terminal but output has been redirected, the question and the masked echo are written to stderr instead of stdout, so a captured stdout never receives any part of the interaction.
+The question and the masked echo go to `stderr`, like every other prompt, so a captured stdout never receives any part of the interaction.
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -166,9 +181,11 @@ const region = await prompt.select("Region:", [
 ]);
 ```
 
-An object that has a `label` but no `value` throws `TypeError`, so an ordinary domain object is never silently turned into `undefined`.
+An object that has a `label` but no `value` throws `TypeError` (code `ERR_INVALID_ARG_TYPE`), so an ordinary domain object is never silently turned into `undefined`.
 
-`hint` is rendered by `select` only. `multiselect` ignores it.
+`hint` is rendered next to the label by both `select` and `multiselect`.
+
+`choices` may be a `readonly` array, so an `as const` list is accepted.
 
 Default matching uses `Object.is` against either the choice's `value` or the choice object itself. It is **not** structural equality: a default written as a fresh object literal will not match an equal-looking choice. Match on a primitive value, or pass the same object reference.
 
@@ -180,7 +197,7 @@ Prompts throw `PromptCancelError` — code `PROMPT_CANCELLED`, exit code `130` �
 - Ctrl+D is pressed, or input otherwise reaches its end;
 - the input stream had already ended before the prompt started;
 - the input stream is destroyed or fails with an error, before or during the prompt;
-- a supplied `signal` aborts, including a signal that was already aborted.
+- a supplied `signal` aborts, including a signal that was already aborted. The error's `cause` is the signal's `reason`.
 
 Detect it with `isCancellationError`:
 
@@ -212,16 +229,6 @@ const answer = await prompt.text("Quick — a word:", {
 
 See [Errors](errors.md) for how a CLI handles the error when it is not caught.
 
-## `maskInput(chunk)`
-
-Transforms a chunk of terminal output the way the password prompt does: ANSI escape sequences and line breaks pass through unchanged, and every other run of visible text is replaced with **one `*` per grapheme** — per user-perceived character, not per code unit. A wide emoji therefore leaks neither its display width nor the number of code points it is built from.
-
-```ts
-import { maskInput } from "@libraz/node-cli";
-
-maskInput("secret"); // "******"
-```
-
 ## Behavior without a terminal
 
 Terminal mode is decided from **stdin alone**. A real terminal keeps line editing and Ctrl+C handling even when stdout is redirected, so `mycli init | tee log.txt` still behaves like an interactive session.
@@ -233,11 +240,11 @@ With piped input the situation changes:
 - lines are read from the pipe as answers, one per question in order; lines a question did not use stay with the stream for the next prompt, so a whole script of answers can arrive at once;
 - reaching the end of the input becomes a `PromptCancelError`.
 
-Color is decided per stream, so a redirected stdout receives no color codes. It still receives the questions, and when stdin is a terminal it also receives what readline echoes: the typed answer and the cursor sequences of line editing. Only `password` sends its question and masked entry to stderr in that case.
+Color is decided per stream, so a redirected stderr receives no color codes. It still receives the questions, and when stdin is a terminal it also receives what readline echoes: the typed answer and the cursor sequences of line editing. `password` masks that echo; the other prompts do not.
 
 ## Concurrency
 
-Two prompts reading the same input stream at once throw `Another prompt is already reading from this input stream`. Await each prompt before starting the next.
+Two prompts reading the same input stream at once throw an `Error` with code `ERR_INPUT_BUSY`. Await each prompt before starting the next.
 
 ## Inside the interactive shell
 
@@ -250,7 +257,8 @@ In the [interactive shell](interactive-shell.md), `ctx.stdin` is `null` for a co
 - **`text` is required by default.** Pass `default: ""` to accept an empty answer.
 - **`password` has no `default`.**
 - **Default matching is reference-based.** `Object.is`, not deep equality.
-- **`hint` shows in `select` only.**
+- **Questions go to stderr.** Pass `{ stderr: process.stdout }` for the 1.x behavior.
+- **`required` exists on `text` and `password` only.**
 - **Selection numbers are 1-based**, and duplicates in a `multiselect` answer are collapsed before `min` and `max` are checked.
 - **Cancellation is an exception, not a `null` result.** Every prompt path that cannot produce an answer throws `PromptCancelError`.
 

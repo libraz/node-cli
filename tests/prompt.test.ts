@@ -2,18 +2,18 @@ import type { Readable, Writable } from "node:stream";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { PromptCancelError } from "../src/errors.js";
-import type { Choice, PromptBaseOptions, SelectChoice, TextOptions } from "../src/index.js";
+import type { Choice, PromptOptions, SelectChoice, TextOptions } from "../src/index.js";
 import { resetColorEnabled } from "../src/output/color.js";
 import { createMockStdin, createMockStdout, restoreProcessStateAfterEach } from "./helpers.js";
 
 function createPromptStreams() {
   const stdin = new PassThrough();
-  const stdout = new PassThrough();
+  const stderr = new PassThrough();
   let output = "";
-  stdout.on("data", (chunk) => {
+  stderr.on("data", (chunk) => {
     output += chunk.toString();
   });
-  return { stdin, stdout, getOutput: () => output };
+  return { stdin, stderr, getOutput: () => output };
 }
 
 /** Delivers every line in one chunk followed by EOF, the way a pipe does. */
@@ -41,8 +41,8 @@ describe("prompt", () => {
   });
 
   it("exports prompt option and choice types", () => {
-    const base: PromptBaseOptions = { required: false };
-    const text: TextOptions = { ...base, placeholder: "name" };
+    const base: PromptOptions = { marker: ">" };
+    const text: TextOptions = { ...base, required: false, placeholder: "name" };
     const choice: SelectChoice<string> = { label: "One", value: "one" };
     const choices: Choice<string>[] = [choice, "two"];
 
@@ -56,7 +56,7 @@ describe("prompt", () => {
 
     const promise = prompt.text("Name", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       required: false,
       placeholder: "Jane",
     });
@@ -66,7 +66,7 @@ describe("prompt", () => {
     expect(streams.getOutput()).toContain("Jane");
   });
 
-  it("does not emit ANSI color when a custom stdout is non-TTY", async () => {
+  it("does not emit ANSI color when a custom stderr is non-TTY", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
     resetColorEnabled();
@@ -76,7 +76,7 @@ describe("prompt", () => {
     try {
       const promise = prompt.text("Name", {
         stdin: streams.stdin,
-        stdout: streams.stdout,
+        stderr: streams.stderr,
         required: false,
       });
       streams.stdin.end("\n");
@@ -95,7 +95,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const promise = prompt.text("Name", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.end("Alice\n");
 
@@ -110,7 +110,7 @@ describe("prompt", () => {
     const controller = new AbortController();
     const pending = prompt.text("Name", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       signal: controller.signal,
     });
     controller.abort();
@@ -124,12 +124,12 @@ describe("prompt", () => {
     const controller = new AbortController();
     const first = prompt.text("First", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       signal: controller.signal,
     });
     await expect(
-      prompt.text("Second", { stdin: streams.stdin, stdout: streams.stdout }),
-    ).rejects.toThrow("already reading");
+      prompt.text("Second", { stdin: streams.stdin, stderr: streams.stderr }),
+    ).rejects.toMatchObject({ code: "ERR_INPUT_BUSY" });
     controller.abort();
     await expect(first).rejects.toBeInstanceOf(PromptCancelError);
   });
@@ -140,7 +140,7 @@ describe("prompt", () => {
 
     const promise = prompt.text("Token", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       validate(value) {
         if (value !== "valid") throw new Error("bad token");
       },
@@ -158,14 +158,14 @@ describe("prompt", () => {
 
     const defaulted = prompt.confirm("Continue?", {
       stdin: first.stdin,
-      stdout: first.stdout,
+      stderr: first.stderr,
       default: true,
     });
     first.stdin.end("\n");
 
     const explicitNo = prompt.confirm("Continue?", {
       stdin: second.stdin,
-      stdout: second.stdout,
+      stderr: second.stderr,
       default: true,
     });
     second.stdin.end("no\n");
@@ -179,7 +179,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const confirmation = prompt.confirm("Continue?", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       default: true,
     });
     feedLines(streams.stdin, ["perhaps", ""]);
@@ -193,7 +193,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const promise = prompt.confirm("Continue?", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       validate(value) {
         if (!value) throw new Error("confirmation required");
       },
@@ -213,7 +213,7 @@ describe("prompt", () => {
         { label: "Production", value: "prod", hint: "live" },
         { label: "Staging", value: "staging" },
       ],
-      { stdin: streams.stdin, stdout: streams.stdout },
+      { stdin: streams.stdin, stderr: streams.stderr },
     );
     feedLines(streams.stdin, ["9", "staging"]);
 
@@ -226,7 +226,7 @@ describe("prompt", () => {
 
     await expect(
       prompt.select<{ label: string }>("Pick", [{ label: "Not a descriptor" }]),
-    ).rejects.toThrow(/both label and value/);
+    ).rejects.toMatchObject({ name: "TypeError", code: "ERR_INVALID_ARG_TYPE" });
   });
 
   it("returns a descriptor's value when both label and value are present", async () => {
@@ -234,7 +234,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const promise = prompt.select("Pick", [{ label: "One", value: 1 }], {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.end("1\n");
 
@@ -246,7 +246,7 @@ describe("prompt", () => {
     const selectStreams = createPromptStreams();
     const selected = prompt.select("Pick", ["a", "b"], {
       stdin: selectStreams.stdin,
-      stdout: selectStreams.stdout,
+      stderr: selectStreams.stderr,
       validate(value) {
         if (value !== "b") throw new Error("pick b");
       },
@@ -258,7 +258,7 @@ describe("prompt", () => {
     const multiStreams = createPromptStreams();
     const selectedMany = prompt.multiselect("Pick", ["a", "b"], {
       stdin: multiStreams.stdin,
-      stdout: multiStreams.stdout,
+      stderr: multiStreams.stderr,
       validate(values) {
         if ((values as string[]).length !== 2) throw new Error("pick both");
       },
@@ -274,7 +274,7 @@ describe("prompt", () => {
 
     const promise = prompt.multiselect("Pick", ["a", "b", "c"], {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       min: 2,
       max: 2,
     });
@@ -293,7 +293,9 @@ describe("prompt", () => {
     { min: Number.POSITIVE_INFINITY },
   ])("multiselect rejects impossible bounds before reading input: %j", async (bounds) => {
     const { prompt } = await import("../src/output/prompt.js");
-    await expect(prompt.multiselect("Pick", ["a", "b"], bounds)).rejects.toBeInstanceOf(RangeError);
+    await expect(prompt.multiselect("Pick", ["a", "b"], bounds)).rejects.toMatchObject({
+      code: "ERR_INVALID_ARG_VALUE",
+    });
   });
 
   it("sanitizes terminal controls in choice labels and hints", async () => {
@@ -302,7 +304,7 @@ describe("prompt", () => {
     const promise = prompt.select(
       "Pick",
       [{ label: "safe\x1b[2J", hint: "hint\x1b]2;title\x07", value: "ok" }],
-      { stdin: streams.stdin, stdout: streams.stdout },
+      { stdin: streams.stdin, stderr: streams.stderr },
     );
     streams.stdin.end("1\n");
 
@@ -317,7 +319,7 @@ describe("prompt", () => {
 
     const promise = prompt.multiselect("Pick", ["a", "b", "c"], {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     feedLines(streams.stdin, ["1,2x", "1,2"]);
 
@@ -330,7 +332,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const promise = prompt.multiselect("Pick", ["a", "b"], {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       default: [],
     });
     streams.stdin.end("\n");
@@ -343,7 +345,7 @@ describe("prompt", () => {
 
     const promise = prompt.password("Password", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.end("secret\n");
 
@@ -351,16 +353,11 @@ describe("prompt", () => {
     expect(streams.getOutput()).not.toContain("secret");
   });
 
-  it("masks password input from a TTY even when stdout is redirected", async () => {
+  it("masks password input from a TTY on the stderr stream", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const stdin = new PassThrough();
-    const stdout = new PassThrough();
     const stderr = new PassThrough();
-    let stdoutText = "";
     let stderrText = "";
-    stdout.on("data", (chunk) => {
-      stdoutText += chunk.toString();
-    });
     stderr.on("data", (chunk) => {
       stderrText += chunk.toString();
     });
@@ -369,12 +366,10 @@ describe("prompt", () => {
     (stderr as unknown as { columns: number }).columns = 80;
     (stderr as unknown as { rows: number }).rows = 24;
 
-    const result = prompt.password("Password", { stdin, stdout, stderr });
+    const result = prompt.password("Password", { stdin, stderr });
     stdin.end("secret\n");
 
     await expect(result).resolves.toBe("secret");
-    expect(stdoutText).not.toContain("Password");
-    expect(stdoutText).not.toContain("secret");
     expect(stderrText).toContain("Password");
     expect(stderrText).not.toContain("secret");
   });
@@ -383,11 +378,11 @@ describe("prompt", () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
     (streams.stdin as unknown as { isTTY: boolean }).isTTY = true;
-    (streams.stdout as unknown as { isTTY: boolean; columns: number }).isTTY = true;
-    (streams.stdout as unknown as { columns: number }).columns = 80;
+    (streams.stderr as unknown as { isTTY: boolean; columns: number }).isTTY = true;
+    (streams.stderr as unknown as { columns: number }).columns = 80;
     const promise = prompt.password("Password", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     await vi.waitFor(() => expect(streams.getOutput()).toContain("Password"));
     streams.stdin.write("abc? Password xyz");
@@ -402,7 +397,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const promise = prompt.password("Password", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.end("  secret  \n");
     await expect(promise).resolves.toBe("  secret  ");
@@ -413,7 +408,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const password = prompt.password("Password", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       validate(value) {
         if (value !== "secret") throw new Error("invalid password");
       },
@@ -431,7 +426,7 @@ describe("prompt", () => {
 
     const promise = prompt.password("Password", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.end("s\n");
 
@@ -451,34 +446,34 @@ describe("prompt", () => {
   it("password does not replace the output stream's write reference", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
-    const originalWrite = streams.stdout.write;
+    const originalWrite = streams.stderr.write;
 
     const promise = prompt.password("Password", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.end("secret\n");
 
     await expect(promise).resolves.toBe("secret");
-    expect(streams.stdout.write).toBe(originalWrite);
+    expect(streams.stderr.write).toBe(originalWrite);
   });
 
   it("two sequential password prompts work and leave the stream write intact", async () => {
     const { prompt } = await import("../src/output/prompt.js");
 
     const first = createPromptStreams();
-    const originalWrite = first.stdout.write;
-    const p1 = prompt.password("First", { stdin: first.stdin, stdout: first.stdout });
+    const originalWrite = first.stderr.write;
+    const p1 = prompt.password("First", { stdin: first.stdin, stderr: first.stderr });
     first.stdin.end("alpha\n");
     await expect(p1).resolves.toBe("alpha");
-    expect(first.stdout.write).toBe(originalWrite);
+    expect(first.stderr.write).toBe(originalWrite);
 
     const second = createPromptStreams();
-    const secondOriginalWrite = second.stdout.write;
-    const p2 = prompt.password("Second", { stdin: second.stdin, stdout: second.stdout });
+    const secondOriginalWrite = second.stderr.write;
+    const p2 = prompt.password("Second", { stdin: second.stdin, stderr: second.stderr });
     second.stdin.end("beta\n");
     await expect(p2).resolves.toBe("beta");
-    expect(second.stdout.write).toBe(secondOriginalWrite);
+    expect(second.stderr.write).toBe(secondOriginalWrite);
     expect(first.getOutput()).not.toContain("alpha");
     expect(second.getOutput()).not.toContain("beta");
   });
@@ -486,7 +481,7 @@ describe("prompt", () => {
   it("answers sequential prompts from lines that arrived in one chunk", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
-    const io = { stdin: streams.stdin, stdout: streams.stdout };
+    const io = { stdin: streams.stdin, stderr: streams.stderr };
     streams.stdin.end("a\ny\n1\nsecret\n1,2\n");
 
     const answers = [
@@ -504,7 +499,7 @@ describe("prompt", () => {
   it("keeps unanswered lines for the next prompt after the input ends", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
-    const io = { stdin: streams.stdin, stdout: streams.stdout };
+    const io = { stdin: streams.stdin, stderr: streams.stderr };
     const first = prompt.text("First", io);
     streams.stdin.write("one\ntwo\n");
     await expect(first).resolves.toBe("one");
@@ -521,7 +516,7 @@ describe("prompt", () => {
     const withDefault = createPromptStreams();
     const a = prompt.text("Name", {
       stdin: withDefault.stdin,
-      stdout: withDefault.stdout,
+      stderr: withDefault.stderr,
       default: "x\x1b[2J\x1b]0;title\x07",
     });
     withDefault.stdin.end("\n");
@@ -532,7 +527,7 @@ describe("prompt", () => {
     const withPlaceholder = createPromptStreams();
     const b = prompt.text("Name", {
       stdin: withPlaceholder.stdin,
-      stdout: withPlaceholder.stdout,
+      stderr: withPlaceholder.stderr,
       required: false,
       placeholder: "p\x1b]0;title\x07\x1b[H",
     });
@@ -548,7 +543,7 @@ describe("prompt", () => {
         { label: "\x1b[31mRed", hint: "\x1b[4mhint", value: "red" },
         { label: "Blue", value: "blue" },
       ],
-      { stdin: styled.stdin, stdout: styled.stdout },
+      { stdin: styled.stdin, stderr: styled.stderr },
     );
     styled.stdin.end("red\n");
     await expect(c).resolves.toBe("red");
@@ -563,7 +558,7 @@ describe("prompt", () => {
     const { setRegionOwner } = await import("../src/output/region.js");
     const streams = createPromptStreams();
     let redraws = 0;
-    setRegionOwner(streams.stdout, {
+    setRegionOwner(streams.stderr, {
       clear: () => "<clear>",
       redraw: () => {
         redraws++;
@@ -572,12 +567,12 @@ describe("prompt", () => {
     try {
       const chosen = prompt.select("Env", ["prod", "dev"], {
         stdin: streams.stdin,
-        stdout: streams.stdout,
+        stderr: streams.stderr,
       });
       feedLines(streams.stdin, ["9", "2"]);
       await expect(chosen).resolves.toBe("dev");
     } finally {
-      setRegionOwner(streams.stdout, null);
+      setRegionOwner(streams.stderr, null);
     }
     const output = streams.getOutput();
     expect(output).toContain("<clear>? Env");
@@ -591,7 +586,7 @@ describe("prompt", () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
-    const promise = prompt.text("Name", { stdin: streams.stdin, stdout: streams.stdout });
+    const promise = prompt.text("Name", { stdin: streams.stdin, stderr: streams.stderr });
     streams.stdin.push(null);
 
     await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
@@ -601,7 +596,7 @@ describe("prompt", () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
-    const promise = prompt.confirm("Continue?", { stdin: streams.stdin, stdout: streams.stdout });
+    const promise = prompt.confirm("Continue?", { stdin: streams.stdin, stderr: streams.stderr });
     streams.stdin.push(null);
 
     await expect(promise).rejects.toBeInstanceOf(PromptCancelError);
@@ -613,7 +608,7 @@ describe("prompt", () => {
 
     const promise = prompt.select("Env", ["a", "b"], {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.push(null);
 
@@ -626,7 +621,7 @@ describe("prompt", () => {
 
     const promise = prompt.multiselect("Pick", ["a", "b"], {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.push(null);
 
@@ -639,7 +634,7 @@ describe("prompt", () => {
 
     const promise = prompt.password("Password", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     streams.stdin.push(null);
 
@@ -652,7 +647,7 @@ describe("prompt", () => {
 
     const promise = prompt.text("Name", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       default: "",
     });
     streams.stdin.end("\n");
@@ -665,7 +660,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const value = prompt.text("Name", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       trim: false,
     });
     streams.stdin.end("  Ada  \n");
@@ -678,7 +673,7 @@ describe("prompt", () => {
     const streams = createPromptStreams();
     const value = prompt.password("Password", {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
       trim: true,
     });
     streams.stdin.end("  secret  \n");
@@ -692,7 +687,7 @@ describe("prompt", () => {
 
     const promise = prompt.select("Pick", ["10", "20"], {
       stdin: streams.stdin,
-      stdout: streams.stdout,
+      stderr: streams.stderr,
     });
     feedLines(streams.stdin, ["2"]);
 
@@ -711,7 +706,7 @@ describe("prompt", () => {
         { label: "A", value: optA },
         { label: "B", value: optB },
       ],
-      { stdin: streams.stdin, stdout: streams.stdout, default: optB },
+      { stdin: streams.stdin, stderr: streams.stderr, default: optB },
     );
     streams.stdin.end("\n");
 
@@ -741,19 +736,188 @@ describe("prompt", () => {
   });
 });
 
+describe("prompt options shared with the command context", () => {
+  it("writes the question to the default process.stderr, not stdout", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const stdin = new PassThrough();
+    const outWrite = vi.spyOn(process.stdout, "write");
+    const errWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const promise = prompt.text("Name", { stdin });
+      stdin.end("Ada\n");
+      await expect(promise).resolves.toBe("Ada");
+      expect(errWrite.mock.calls.join("")).toContain("Name");
+      expect(outWrite.mock.calls.join("")).not.toContain("Name");
+    } finally {
+      outWrite.mockRestore();
+      errWrite.mockRestore();
+    }
+  });
+
+  it("accepts a context-shaped object with extra members", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const ctx = { stdin: streams.stdin, stdout: new PassThrough(), stderr: streams.stderr };
+    const promise = prompt.text("Name", ctx);
+    streams.stdin.end("Ada\n");
+    await expect(promise).resolves.toBe("Ada");
+    expect(streams.getOutput()).toContain("Name");
+    expect(ctx.stdout.readableLength).toBe(0);
+  });
+
+  it("treats a null stdin as process.stdin", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const pending = prompt.text("Name", {
+      stdin: null,
+      stderr: streams.stderr,
+      signal: AbortSignal.abort(),
+    });
+    await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
+  });
+
+  it("renders the marker in place of the default symbol", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.text("Name", {
+      stdin: streams.stdin,
+      stderr: streams.stderr,
+      marker: "»",
+    });
+    streams.stdin.end("a\n");
+    await promise;
+    expect(streams.getOutput()).toContain("» Name");
+  });
+
+  it("carries the abort reason as the cancellation cause", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const controller = new AbortController();
+    const reason = new Error("deadline");
+    const pending = prompt.text("Name", {
+      stdin: streams.stdin,
+      stderr: streams.stderr,
+      signal: controller.signal,
+    });
+    controller.abort(reason);
+    const error = await pending.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PromptCancelError);
+    expect((error as PromptCancelError).code).toBe("PROMPT_CANCELLED");
+    expect((error as PromptCancelError).cause).toBe(reason);
+  });
+
+  it("awaits an async validate and re-asks when it rejects", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.text("Token", {
+      stdin: streams.stdin,
+      stderr: streams.stderr,
+      async validate(value) {
+        await Promise.resolve();
+        if (value !== "ok") throw new Error("not ok");
+      },
+    });
+    feedLines(streams.stdin, ["no", "ok"]);
+    await expect(promise).resolves.toBe("ok");
+    expect(streams.getOutput()).toContain("not ok");
+  });
+
+  it.each([
+    ["select", "1"],
+    ["multiselect", "1"],
+    ["confirm", "y"],
+    ["password", "pw"],
+  ] as const)("awaits an async validate for %s", async (kind, answer) => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    let calls = 0;
+    const validate = async () => {
+      await Promise.resolve();
+      if (calls++ === 0) throw new Error("later");
+    };
+    const io = { stdin: streams.stdin, stderr: streams.stderr, validate };
+    const result =
+      kind === "select"
+        ? prompt.select("P", ["a"], io)
+        : kind === "multiselect"
+          ? prompt.multiselect("P", ["a"], io)
+          : kind === "confirm"
+            ? prompt.confirm("P", io)
+            : prompt.password("P", io);
+    feedLines(streams.stdin, [answer, answer]);
+    await expect(result).resolves.toBeDefined();
+    expect(calls).toBe(2);
+    expect(streams.getOutput()).toContain("later");
+  });
+
+  it("renders a multiselect choice hint", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.multiselect("Pick", [{ label: "A", value: "a", hint: "first" }, "b"], {
+      stdin: streams.stdin,
+      stderr: streams.stderr,
+    });
+    streams.stdin.end("1\n");
+    await promise;
+    expect(streams.getOutput()).toContain("A (first)");
+  });
+
+  it("renders the text placeholder as an example", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const promise = prompt.text("Name", {
+      stdin: streams.stdin,
+      stderr: streams.stderr,
+      placeholder: "Jane",
+    });
+    streams.stdin.end("x\n");
+    await promise;
+    expect(streams.getOutput()).toContain("(e.g. Jane)");
+  });
+
+  it("accepts readonly choices", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const choices = ["a", "b"] as const;
+    const promise = prompt.select("Pick", choices, {
+      stdin: streams.stdin,
+      stderr: streams.stderr,
+    });
+    streams.stdin.end("2\n");
+    await expect(promise).resolves.toBe("b");
+  });
+
+  it("reports misuse with usage error codes", async () => {
+    const { prompt } = await import("../src/output/prompt.js");
+    const streams = createPromptStreams();
+    const io = { stdin: streams.stdin, stderr: streams.stderr };
+    await expect(prompt.select("P", [], io)).rejects.toMatchObject({
+      name: "RangeError",
+      code: "ERR_INVALID_ARG_VALUE",
+    });
+    await expect(prompt.multiselect("P", ["a"], { ...io, min: 2 })).rejects.toMatchObject({
+      name: "RangeError",
+      code: "ERR_INVALID_ARG_VALUE",
+    });
+    await expect(prompt.select<{ label: string }>("P", [{ label: "x" }], io)).rejects.toMatchObject(
+      { name: "TypeError", code: "ERR_INVALID_ARG_TYPE" },
+    );
+  });
+});
+
 describe("terminal state is handled the same way by every prompt kind", () => {
-  type Start = (stdin: Readable, stdout: Writable, signal?: AbortSignal) => Promise<unknown>;
+  type Start = (stdin: Readable, stderr: Writable, signal?: AbortSignal) => Promise<unknown>;
 
   const kinds: Record<string, Start> = {
-    text: async (stdin, stdout, signal) => (await load()).text("name", { stdin, stdout, signal }),
-    confirm: async (stdin, stdout, signal) =>
-      (await load()).confirm("ok?", { stdin, stdout, signal }),
-    select: async (stdin, stdout, signal) =>
-      (await load()).select("pick", ["a", "b"], { stdin, stdout, signal }),
-    multiselect: async (stdin, stdout, signal) =>
-      (await load()).multiselect("pick", ["a", "b"], { stdin, stdout, signal }),
-    password: async (stdin, stdout, signal) =>
-      (await load()).password("secret", { stdin, stdout, signal }),
+    text: async (stdin, stderr, signal) => (await load()).text("name", { stdin, stderr, signal }),
+    confirm: async (stdin, stderr, signal) =>
+      (await load()).confirm("ok?", { stdin, stderr, signal }),
+    select: async (stdin, stderr, signal) =>
+      (await load()).select("pick", ["a", "b"], { stdin, stderr, signal }),
+    multiselect: async (stdin, stderr, signal) =>
+      (await load()).multiselect("pick", ["a", "b"], { stdin, stderr, signal }),
+    password: async (stdin, stderr, signal) =>
+      (await load()).password("secret", { stdin, stderr, signal }),
   };
 
   async function load() {
@@ -763,15 +927,15 @@ describe("terminal state is handled the same way by every prompt kind", () => {
   it.each(Object.keys(kinds))("releases the input lock after an abort: %s", async (name) => {
     const start = kinds[name];
     const stdin = createMockStdin();
-    const stdout = createMockStdout();
+    const stderr = createMockStdout();
     const controller = new AbortController();
 
-    const aborted = start(stdin, stdout, controller.signal);
+    const aborted = start(stdin, stderr, controller.signal);
     controller.abort();
     await expect(aborted).rejects.toBeInstanceOf(PromptCancelError);
 
     // The lock is per call, so the same stream must be usable immediately.
-    const second = start(stdin, stdout);
+    const second = start(stdin, stderr);
     // Input each kind accepts: a bare word for text/password, a yes for
     // confirm, an index for the two list prompts.
     stdin.feed(name === "confirm" ? "y\n" : name === "text" || name === "password" ? "a\n" : "1\n");
@@ -787,9 +951,9 @@ describe("terminal state is handled the same way by every prompt kind", () => {
 
   it.each(Object.keys(kinds))("rejects when input is destroyed while pending: %s", async (name) => {
     const stdin = createMockStdin();
-    const stdout = createMockStdout();
-    const pending = kinds[name](stdin, stdout);
-    await vi.waitFor(() => expect(stdout.getOutput()).not.toBe(""));
+    const stderr = createMockStdout();
+    const pending = kinds[name](stdin, stderr);
+    await vi.waitFor(() => expect(stderr.getOutput()).not.toBe(""));
     stdin.destroy();
 
     await expect(pending).rejects.toBeInstanceOf(PromptCancelError);
@@ -797,9 +961,9 @@ describe("terminal state is handled the same way by every prompt kind", () => {
 
   it.each(Object.keys(kinds))("rejects when input errors while pending: %s", async (name) => {
     const stdin = createMockStdin();
-    const stdout = createMockStdout();
-    const pending = kinds[name](stdin, stdout);
-    await vi.waitFor(() => expect(stdout.getOutput()).not.toBe(""));
+    const stderr = createMockStdout();
+    const pending = kinds[name](stdin, stderr);
+    await vi.waitFor(() => expect(stderr.getOutput()).not.toBe(""));
     stdin.destroy(new Error("EIO"));
 
     await expect(pending).rejects.toBeInstanceOf(PromptCancelError);

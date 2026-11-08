@@ -1,5 +1,6 @@
 import { type Completer, createInterface, type Interface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
+import { usageError } from "../errors.js";
 
 /** Options for {@link openLineReader}. */
 export interface LineReaderOptions {
@@ -81,13 +82,17 @@ export function inputExhausted(input: Readable): boolean {
  * read when the stream ends, is destroyed or errors, and holds no listener on
  * the stream once closed.
  *
- * @throws Error when another reader is already open on the same input.
+ * @throws Error (ERR_INPUT_BUSY) when another reader is already open on the same input.
  */
 export function openLineReader(options: LineReaderOptions): LineReader {
   const { input, terminal } = options;
   const state = stateOf(input);
   if (state.open) {
-    throw new Error("Another prompt is already reading from this input stream");
+    throw usageError(
+      "state",
+      "ERR_INPUT_BUSY",
+      "Another prompt is already reading from this input stream",
+    );
   }
   state.open = true;
 
@@ -173,7 +178,10 @@ export function openLineReader(options: LineReaderOptions): LineReader {
     if (input.errored) return Promise.reject(input.errored);
     if (closed || inputDone || streamFinished(input)) return Promise.resolve(null);
     if (signal?.aborted) return Promise.reject(abortError(signal));
-    if (pending) return Promise.reject(new Error("A read is already pending on this line reader"));
+    if (pending)
+      return Promise.reject(
+        usageError("state", "ERR_INPUT_BUSY", "A read is already pending on this line reader"),
+      );
     return new Promise<string | null>((resolve, reject) => {
       const onAbort = () => {
         pending = undefined;

@@ -1,5 +1,6 @@
 import { type Readable, Writable } from "node:stream";
-import { PromptCancelError } from "../errors.js";
+import { PromptCancelError, usageError } from "../errors.js";
+import type { StdioOptions } from "../types.js";
 import {
   type color as c,
   createColorizer,
@@ -16,39 +17,35 @@ import { writeThrough } from "./region.js";
 // ── Types ──
 
 /**
- * Base options shared by all prompt types.
+ * Options shared by all prompt types. Questions are written to `stderr` so a
+ * prompt never pollutes piped stdout; the members match {@link StdioOptions},
+ * so a command context can be passed as the options object.
  */
-export interface PromptBaseOptions<T = unknown> {
-  /** Validation function; throw an Error to reject the value. */
-  validate?: (value: T) => void;
-  /** Whether a non-empty value is required. Defaults to true for text/password prompts. */
-  required?: boolean;
-  /** Prefix symbol displayed before the prompt message. Defaults to "?". */
-  prefix?: string;
-  /** Writable stream for output. Defaults to process.stdout. */
-  stdout?: Writable;
-  /** Readable stream for input. Defaults to process.stdin. */
-  stdin?: Readable;
-  /** Cancels the pending prompt when aborted. */
-  signal?: AbortSignal;
-}
+export type PromptOptions<T = unknown> = Pick<StdioOptions, "stdin" | "stderr" | "signal"> & {
+  /** Validation function; throw (or reject) to refuse the value and ask again. */
+  validate?: (value: T) => void | Promise<void>;
+  /** Symbol displayed before the question. Defaults to "?". */
+  marker?: string;
+};
 
 /**
  * Options for a text input prompt.
  */
-export interface TextOptions extends PromptBaseOptions<string> {
+export interface TextOptions extends PromptOptions<string> {
   /** Default text value. */
   default?: string;
-  /** Placeholder text displayed as a hint. */
+  /** Example text shown after the question as `(e.g. …)`; ignored when `default` is set. */
   placeholder?: string;
   /** Whether to trim leading/trailing whitespace. Defaults to true. */
   trim?: boolean;
+  /** Whether a non-empty value is required. Defaults to true. */
+  required?: boolean;
 }
 
 /**
  * Options for a yes/no confirmation prompt.
  */
-export interface ConfirmOptions extends PromptBaseOptions<boolean> {
+export interface ConfirmOptions extends PromptOptions<boolean> {
   /** Default boolean value. Defaults to false. */
   default?: boolean;
 }
@@ -68,7 +65,7 @@ export interface SelectChoice<T> {
 /**
  * Options for a single-select prompt.
  */
-export interface SelectOptions<T> extends PromptBaseOptions<T> {
+export interface SelectOptions<T> extends PromptOptions<T> {
   /** Default selected value, returned when the user presses Enter with no input. */
   default?: T;
 }
@@ -76,9 +73,9 @@ export interface SelectOptions<T> extends PromptBaseOptions<T> {
 /**
  * Options for a multiselect prompt.
  */
-export interface MultiselectOptions<T> extends PromptBaseOptions<T[]> {
+export interface MultiselectOptions<T> extends PromptOptions<T[]> {
   /** Pre-selected default values. */
-  default?: T[];
+  default?: readonly T[];
   /** Minimum number of items that must be selected. */
   min?: number;
   /** Maximum number of items that may be selected. */
@@ -86,15 +83,11 @@ export interface MultiselectOptions<T> extends PromptBaseOptions<T[]> {
 }
 
 /** Options for a password prompt. Passwords intentionally have no default value. */
-export interface PasswordOptions extends PromptBaseOptions<string> {
+export interface PasswordOptions extends PromptOptions<string> {
   /** Whether to trim leading/trailing whitespace. Defaults to false. */
   trim?: boolean;
-  /**
-   * Where the question and the masked entry go when input is a terminal but
-   * `stdout` is redirected, so a captured stdout never receives the secret.
-   * Defaults to process.stderr. Only the password prompt redirects this way.
-   */
-  stderr?: Writable;
+  /** Whether a non-empty value is required. Defaults to true. */
+  required?: boolean;
 }
 
 /**
@@ -112,11 +105,15 @@ export type Choice<T> = T | SelectChoice<T>;
  * @param choices - Array of choices to normalize.
  * @returns Normalized array of SelectChoice objects.
  */
-function normalizeChoices<T>(choices: Choice<T>[]): SelectChoice<T>[] {
+function normalizeChoices<T>(choices: readonly Choice<T>[]): SelectChoice<T>[] {
   return choices.map((ch) => {
     if (typeof ch === "object" && ch !== null && "label" in (ch as Record<string, unknown>)) {
       if (!("value" in (ch as Record<string, unknown>))) {
-        throw new TypeError("Choice descriptors must include both label and value");
+        throw usageError(
+          "type",
+          "ERR_INVALID_ARG_TYPE",
+          "Choice descriptors must include both label and value",
+        );
       }
       const choice = ch as SelectChoice<T>;
       return {
@@ -154,11 +151,11 @@ function findDefaultIndex<T>(normalized: SelectChoice<T>[], defaultValue: unknow
  * displayed numbers to disambiguate.
  *
  * @param normalized - Normalized choices to inspect.
- * @param stdout - Stream the warning is written to.
+ * @param stderr - Stream the warning is written to.
  */
 function warnDuplicateLabels<T>(
   normalized: SelectChoice<T>[],
-  stdout: Writable,
+  stderr: Writable,
   col: typeof c,
 ): void {
   const seen = new Set<string>();
@@ -169,7 +166,7 @@ function warnDuplicateLabels<T>(
   }
   for (const label of duplicates) {
     writeThrough(
-      stdout,
+      stderr,
       `${col.yellow("!")} Duplicate label "${label}"; select it by its number\n`,
     );
   }
@@ -182,20 +179,22 @@ function warnDuplicateLabels<T>(
 interface CancelableReader {
   reader: LineReader;
   signal: AbortSignal;
+  /** Builds the cancellation error, carrying the caller's abort reason when there is one. */
+  cancelError: () => PromptCancelError;
   dispose: () => void;
 }
 
 /**
- * Builds the question line every prompt kind shows. Caller-supplied prefix and
+ * Builds the question line every prompt kind shows. Caller-supplied marker and
  * message pass through the rendered-region boundary here, so a control sequence
  * in either cannot move the cursor or leave styling open around the answer.
  */
 function promptHeading(
   col: ReturnType<typeof createColorizer>,
-  prefix: string,
+  marker: string,
   message: string,
 ): string {
-  return `${col.green(renderSafe(prefix))} ${col.bold(renderSafe(message))}`;
+  return `${col.green(renderSafe(marker))} ${col.bold(renderSafe(message))}`;
 }
 
 /** Renders a validation failure below the question, without trusting its text. */
@@ -208,18 +207,18 @@ function validationLine(col: ReturnType<typeof createColorizer>, err: unknown): 
  * presses Ctrl+C (SIGINT) or `externalSignal` aborts. Unanswered lines stay with
  * the input for the next prompt when the session is disposed.
  *
- * @param stdin - Input stream. Defaults to process.stdin.
- * @param stdout - Output stream. Defaults to process.stdout.
+ * @param stdin - Input stream. Defaults to process.stdin when null or undefined.
+ * @param stderr - Output stream. Defaults to process.stderr.
  * @returns The reader, an abort signal, and teardown.
  */
 function createCancelableReader(
-  stdin?: Readable,
-  stdout?: Writable,
+  stdin?: Readable | null,
+  stderr?: Writable,
   terminalOverride?: boolean,
   externalSignal?: AbortSignal,
 ): CancelableReader {
   const input = stdin ?? process.stdin;
-  const output = stdout ?? process.stdout;
+  const output = stderr ?? process.stderr;
   // Terminal mode follows the input alone. Readline's own SIGINT hook and
   // character-level editing exist only in that mode, so deciding it from the
   // output too meant `mycli init | tee log` silently downgraded a prompt on a
@@ -240,23 +239,27 @@ function createCancelableReader(
     reader.close();
   };
 
-  return { reader, signal: controller.signal, dispose };
+  const cancelError = () =>
+    new PromptCancelError(externalSignal?.aborted ? { cause: externalSignal.reason } : {});
+
+  return { reader, signal: controller.signal, cancelError, dispose };
 }
 
 /**
  * Asks a single question, translating a Ctrl+C abort, the end of input (Ctrl+D,
  * EOF, a destroyed stream) or an input error into a {@link PromptCancelError}.
  */
-async function ask(reader: LineReader, query: string, signal: AbortSignal): Promise<string> {
-  if (signal.aborted) throw new PromptCancelError();
+async function ask(session: CancelableReader, query: string): Promise<string> {
+  const { reader, signal } = session;
+  if (signal.aborted) throw session.cancelError();
   reader.prompt(query);
   let line: string | null;
   try {
     line = await reader.read(signal);
   } catch {
-    throw new PromptCancelError();
+    throw session.cancelError();
   }
-  if (line === null) throw new PromptCancelError();
+  if (line === null) throw session.cancelError();
   return line;
 }
 
@@ -271,26 +274,21 @@ async function ask(reader: LineReader, query: string, signal: AbortSignal): Prom
  * @throws PromptCancelError if the user cancels (e.g., Ctrl+C).
  */
 async function text(message: string, options: TextOptions = {}): Promise<string> {
-  const { default: defaultValue, validate, required = true, prefix = "?", trim = true } = options;
-  const stdout = options.stdout ?? process.stdout;
-  const col = createColorizer(stdout);
+  const { default: defaultValue, validate, required = true, marker = "?", trim = true } = options;
+  const stderr = options.stderr ?? process.stderr;
+  const col = createColorizer(stderr);
 
-  const { reader, signal, dispose } = createCancelableReader(
-    options.stdin,
-    stdout,
-    undefined,
-    options.signal,
-  );
+  const session = createCancelableReader(options.stdin, stderr, undefined, options.signal);
   const hint =
     defaultValue !== undefined
       ? col.dim(` (${renderSafe(String(defaultValue))})`)
       : options.placeholder
-        ? col.dim(` (${renderSafe(options.placeholder)})`)
+        ? col.dim(` (e.g. ${renderSafe(options.placeholder)})`)
         : "";
 
   try {
     while (true) {
-      const answer = await ask(reader, `${promptHeading(col, prefix, message)}${hint} `, signal);
+      const answer = await ask(session, `${promptHeading(col, marker, message)}${hint} `);
 
       let value = trim ? answer.trim() : answer;
       // An explicit default (including an empty string) fills an empty
@@ -301,15 +299,15 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
       }
 
       if (!usedDefault && required && value === "") {
-        writeThrough(stdout, `${col.red("✖")} Value is required\n`);
+        writeThrough(stderr, `${col.red("✖")} Value is required\n`);
         continue;
       }
 
       if (validate) {
         try {
-          validate(value);
+          await validate(value);
         } catch (err) {
-          writeThrough(stdout, validationLine(col, err));
+          writeThrough(stderr, validationLine(col, err));
           continue;
         }
       }
@@ -317,7 +315,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
       return value;
     }
   } finally {
-    dispose();
+    session.dispose();
   }
 }
 
@@ -332,39 +330,34 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
  * @throws PromptCancelError if the user cancels.
  */
 async function confirm(message: string, options: ConfirmOptions = {}): Promise<boolean> {
-  const { default: defaultValue = false, prefix = "?" } = options;
-  const stdout = options.stdout ?? process.stdout;
-  const col = createColorizer(stdout);
+  const { default: defaultValue = false, marker = "?" } = options;
+  const stderr = options.stderr ?? process.stderr;
+  const col = createColorizer(stderr);
 
-  const { reader, signal, dispose } = createCancelableReader(
-    options.stdin,
-    stdout,
-    undefined,
-    options.signal,
-  );
+  const session = createCancelableReader(options.stdin, stderr, undefined, options.signal);
   const hint = defaultValue ? col.dim(" (Y/n)") : col.dim(" (y/N)");
 
   try {
     while (true) {
-      const answer = await ask(reader, `${promptHeading(col, prefix, message)}${hint} `, signal);
+      const answer = await ask(session, `${promptHeading(col, marker, message)}${hint} `);
       const trimmed = answer.trim().toLowerCase();
       if (trimmed !== "" && !["y", "yes", "n", "no"].includes(trimmed)) {
-        writeThrough(stdout, `${col.red("✖")} Please enter yes or no\n`);
+        writeThrough(stderr, `${col.red("✖")} Please enter yes or no\n`);
         continue;
       }
       const value = trimmed === "" ? defaultValue : trimmed === "y" || trimmed === "yes";
       if (options.validate) {
         try {
-          options.validate(value);
+          await options.validate(value);
         } catch (err) {
-          writeThrough(stdout, validationLine(col, err));
+          writeThrough(stderr, validationLine(col, err));
           continue;
         }
       }
       return value;
     }
   } finally {
-    dispose();
+    session.dispose();
   }
 }
 
@@ -384,42 +377,37 @@ async function confirm(message: string, options: ConfirmOptions = {}): Promise<b
  */
 async function select<T = string>(
   message: string,
-  choices: Choice<T>[],
+  choices: readonly Choice<T>[],
   options: SelectOptions<T> = {},
 ): Promise<T> {
-  const { prefix = "?", default: defaultValue, validate } = options;
-  const stdout = options.stdout ?? process.stdout;
-  const col = createColorizer(stdout);
+  const { marker = "?", default: defaultValue, validate } = options;
+  const stderr = options.stderr ?? process.stderr;
+  const col = createColorizer(stderr);
 
   const normalized = normalizeChoices(choices);
   if (normalized.length === 0) {
-    throw new Error("select() requires at least one choice");
+    throw usageError("range", "ERR_INVALID_ARG_VALUE", "select() requires at least one choice");
   }
   const defaultIndex = findDefaultIndex(normalized, defaultValue);
 
-  const { reader, signal, dispose } = createCancelableReader(
-    options.stdin,
-    stdout,
-    undefined,
-    options.signal,
-  );
+  const session = createCancelableReader(options.stdin, stderr, undefined, options.signal);
 
   try {
-    writeThrough(stdout, `${promptHeading(col, prefix, message)}\n`);
+    writeThrough(stderr, `${promptHeading(col, marker, message)}\n`);
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
       const isDefault = i === defaultIndex;
       const hint = ch.hint ? col.dim(` (${ch.hint})`) : "";
-      const marker = isDefault ? col.dim(" [default]") : "";
-      writeThrough(stdout, `  ${col.cyan(`${i + 1})`)} ${ch.label}${hint}${marker}\n`);
+      const tag = isDefault ? col.dim(" [default]") : "";
+      writeThrough(stderr, `  ${col.cyan(`${i + 1})`)} ${ch.label}${hint}${tag}\n`);
     }
-    warnDuplicateLabels(normalized, stdout, col);
+    warnDuplicateLabels(normalized, stderr, col);
 
     const promptLabel =
       defaultIndex >= 0 ? `Enter number (default ${defaultIndex + 1}):` : "Enter number:";
 
     while (true) {
-      const answer = await ask(reader, `${col.dim(promptLabel)} `, signal);
+      const answer = await ask(session, `${col.dim(promptLabel)} `);
       const trimmed = answer.trim();
 
       let chosen: SelectChoice<T> | undefined;
@@ -443,7 +431,7 @@ async function select<T = string>(
 
       if (!chosen) {
         writeThrough(
-          stdout,
+          stderr,
           `${col.red("✖")} Please enter a number between 1 and ${normalized.length}\n`,
         );
         continue;
@@ -451,9 +439,9 @@ async function select<T = string>(
 
       if (validate) {
         try {
-          validate(chosen.value);
+          await validate(chosen.value);
         } catch (err) {
-          writeThrough(stdout, validationLine(col, err));
+          writeThrough(stderr, validationLine(col, err));
           continue;
         }
       }
@@ -461,7 +449,7 @@ async function select<T = string>(
       return chosen.value;
     }
   } finally {
-    dispose();
+    session.dispose();
   }
 }
 
@@ -481,56 +469,64 @@ async function select<T = string>(
  */
 async function multiselect<T = string>(
   message: string,
-  choices: Choice<T>[],
+  choices: readonly Choice<T>[],
   options: MultiselectOptions<T> = {},
 ): Promise<T[]> {
-  const { prefix = "?", min, max, default: defaults, validate } = options;
-  const stdout = options.stdout ?? process.stdout;
-  const col = createColorizer(stdout);
+  const { marker = "?", min, max, default: defaults, validate } = options;
+  const stderr = options.stderr ?? process.stderr;
+  const col = createColorizer(stderr);
 
   const normalized = normalizeChoices(choices);
   if (normalized.length === 0) {
-    throw new Error("multiselect() requires at least one choice");
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      "multiselect() requires at least one choice",
+    );
   }
   for (const [name, value] of [
     ["min", min],
     ["max", max],
   ] as const) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
-      throw new RangeError(`multiselect() ${name} must be a non-negative safe integer`);
+      throw usageError(
+        "range",
+        "ERR_INVALID_ARG_VALUE",
+        `multiselect() ${name} must be a non-negative safe integer`,
+      );
     }
   }
   if (min !== undefined && max !== undefined && min > max) {
-    throw new RangeError("multiselect() min cannot exceed max");
+    throw usageError("range", "ERR_INVALID_ARG_VALUE", "multiselect() min cannot exceed max");
   }
   if (min !== undefined && min > normalized.length) {
-    throw new RangeError("multiselect() min cannot exceed the number of choices");
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      "multiselect() min cannot exceed the number of choices",
+    );
   }
   const defaultIndexes = new Set(
     (defaults ?? []).map((d) => findDefaultIndex(normalized, d)).filter((i) => i >= 0),
   );
 
-  const { reader, signal, dispose } = createCancelableReader(
-    options.stdin,
-    stdout,
-    undefined,
-    options.signal,
-  );
+  const session = createCancelableReader(options.stdin, stderr, undefined, options.signal);
 
   try {
     writeThrough(
-      stdout,
-      `${promptHeading(col, prefix, message)} ${col.dim("(comma-separated numbers)")}\n`,
+      stderr,
+      `${promptHeading(col, marker, message)} ${col.dim("(comma-separated numbers)")}\n`,
     );
     for (let i = 0; i < normalized.length; i++) {
       const ch = normalized[i];
-      const marker = defaultIndexes.has(i) ? col.dim(" [default]") : "";
-      writeThrough(stdout, `  ${col.cyan(`${i + 1})`)} ${ch.label}${marker}\n`);
+      const hint = ch.hint ? col.dim(` (${ch.hint})`) : "";
+      const tag = defaultIndexes.has(i) ? col.dim(" [default]") : "";
+      writeThrough(stderr, `  ${col.cyan(`${i + 1})`)} ${ch.label}${hint}${tag}\n`);
     }
-    warnDuplicateLabels(normalized, stdout, col);
+    warnDuplicateLabels(normalized, stderr, col);
 
     while (true) {
-      const answer = await ask(reader, `${col.dim("Enter numbers:")} `, signal);
+      const answer = await ask(session, `${col.dim("Enter numbers:")} `);
       const trimmed = answer.trim();
 
       // Deduplicate selected indices so min/max count distinct items.
@@ -548,19 +544,19 @@ async function multiselect<T = string>(
       const valid = numericInputValid && indices.every((i) => i >= 0 && i < normalized.length);
       if (!valid) {
         writeThrough(
-          stdout,
+          stderr,
           `${col.red("✖")} Please enter valid numbers between 1 and ${normalized.length}\n`,
         );
         continue;
       }
 
       if (min !== undefined && indices.length < min) {
-        writeThrough(stdout, `${col.red("✖")} Select at least ${min} items\n`);
+        writeThrough(stderr, `${col.red("✖")} Select at least ${min} items\n`);
         continue;
       }
 
       if (max !== undefined && indices.length > max) {
-        writeThrough(stdout, `${col.red("✖")} Select at most ${max} items\n`);
+        writeThrough(stderr, `${col.red("✖")} Select at most ${max} items\n`);
         continue;
       }
 
@@ -568,9 +564,9 @@ async function multiselect<T = string>(
 
       if (validate) {
         try {
-          validate(values);
+          await validate(values);
         } catch (err) {
-          writeThrough(stdout, validationLine(col, err));
+          writeThrough(stderr, validationLine(col, err));
           continue;
         }
       }
@@ -578,7 +574,7 @@ async function multiselect<T = string>(
       return values;
     }
   } finally {
-    dispose();
+    session.dispose();
   }
 }
 
@@ -640,20 +636,15 @@ export function maskInput(chunk: string): string {
  * @throws PromptCancelError if the user cancels.
  */
 async function password(message: string, options: PasswordOptions = {}): Promise<string> {
-  const { validate, required = true, prefix = "?", trim = false } = options;
-  const stdout = options.stdout ?? process.stdout;
+  const { validate, required = true, marker = "?", trim = false } = options;
   const stdin = options.stdin ?? process.stdin;
   const stdinIsTTY = streamIsTTY(stdin);
-  const stdoutIsTTY = streamIsTTY(stdout);
-  // A password prompt must keep using raw mode when its input is a terminal,
-  // even when command output is redirected. Send the prompt to stderr in that
-  // case so stdout remains suitable for machine-readable output and logs.
-  const promptOutput = stdinIsTTY && !stdoutIsTTY ? (options.stderr ?? process.stderr) : stdout;
+  const promptOutput = options.stderr ?? process.stderr;
   const col = createColorizer(promptOutput);
 
   // Masking is scoped to this prompt: readline echoes to a private wrapper
   // stream that masks visible characters and forwards everything to the real
-  // stdout. The shared stdout's own `write` is never replaced, so concurrent
+  // stderr. The shared stream's own `write` is never replaced, so concurrent
   // spinner/logger output is untouched and re-entrant prompts cannot corrupt it.
   let masking = false;
   // The exact (colored) prompt string readline echoes. Kept for the whole prompt
@@ -723,23 +714,18 @@ async function password(message: string, options: PasswordOptions = {}): Promise
   (maskingOutput as unknown as Record<string, unknown>).columns = ttyPromptOutput.columns ?? 80;
   (maskingOutput as unknown as Record<string, unknown>).rows = ttyPromptOutput.rows ?? 24;
 
-  const { reader, signal, dispose } = createCancelableReader(
-    stdin,
-    maskingOutput,
-    stdinIsTTY,
-    options.signal,
-  );
+  const session = createCancelableReader(stdin, maskingOutput, stdinIsTTY, options.signal);
 
   try {
     while (true) {
-      const query = `${promptHeading(col, prefix, message)} `;
+      const query = `${promptHeading(col, marker, message)} `;
       masking = true;
       promptQuery = query;
       promptRendered = false;
 
       let answer: string;
       try {
-        answer = await ask(reader, query, signal);
+        answer = await ask(session, query);
       } finally {
         masking = false;
         promptQuery = "";
@@ -755,7 +741,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
 
       if (validate) {
         try {
-          validate(value);
+          await validate(value);
         } catch (err) {
           writeThrough(promptOutput, validationLine(col, err));
           continue;
@@ -766,7 +752,7 @@ async function password(message: string, options: PasswordOptions = {}): Promise
     }
   } finally {
     masking = false;
-    dispose();
+    session.dispose();
   }
 }
 
