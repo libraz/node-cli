@@ -139,7 +139,7 @@ describe("direct mode prompt cancellation display", () => {
   it("uses a CLIError's custom exit code in direct mode", async () => {
     const cli = createCLI();
     cli.command("fail").action(() => {
-      throw new CLIError("custom failure", "VALIDATION_ERROR", 42);
+      throw new CLIError("custom failure", { code: "VALIDATION_ERROR", exitCode: 42 });
     });
     const stderr = createMockStdout();
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
@@ -197,14 +197,14 @@ describe("public CLI lifecycle APIs", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it("exposes PluginContext.off and catch", async () => {
+  it("exposes PluginContext.off and fallback", async () => {
     const cli = createCLI();
     const handler = vi.fn();
     const stdout = createMockStdout();
     cli.use((ctx) => {
       ctx.on("beforeExecute", handler);
       ctx.off("beforeExecute", handler);
-      ctx.catch((input, context) => context.stdout.write(`caught:${input}`));
+      ctx.fallback((input, context) => context.stdout.write(`caught:${input}`));
     });
 
     await cli.exec("unknown", { stdout });
@@ -284,10 +284,10 @@ describe("cancellation across concurrent commands", () => {
     let release2: () => void = () => {};
 
     CommandBuilder.create(registry, "slow1")
-      .cancel(() => cancelled.push("slow1"))
+      .onCancel(() => cancelled.push("slow1"))
       .action(() => new Promise<void>((r) => (release1 = r)));
     CommandBuilder.create(registry, "slow2")
-      .cancel(() => cancelled.push("slow2"))
+      .onCancel(() => cancelled.push("slow2"))
       .action(() => new Promise<void>((r) => (release2 = r)));
 
     const p1 = router.execute("slow1");
@@ -463,7 +463,7 @@ describe("short option inline value completion", () => {
   it("completes a value after -o=", () => {
     const { registry } = setup();
     CommandBuilder.create(registry, "serve")
-      .option("-m, --mode <mode>", { type: "string", autocomplete: ["dev", "prod"] })
+      .option("-m, --mode <mode>", { type: "string", completer: ["dev", "prod"] })
       .action(() => {});
     const completer = new ShellCompleter(registry);
 
@@ -478,7 +478,7 @@ describe("canonical command path in custom completer", () => {
     const completer = vi.fn(() => ["x"]);
     CommandBuilder.create(registry, "deploy <env>")
       .alias("d")
-      .complete(completer)
+      .completer(completer)
       .action(() => {});
     const sc = new ShellCompleter(registry);
 
@@ -676,9 +676,8 @@ describe("usage string is shared between help and errors", () => {
 });
 
 describe("CLI history configuration", () => {
-  it("sets historySize through a chainable setter", () => {
-    const cli = createCLI();
-    expect(cli.historySize(25)).toBe(cli);
+  it("applies historySize from the options", () => {
+    const cli = createCLI({ historySize: 25 });
     expect((cli as unknown as { historySizeLimit: number }).historySizeLimit).toBe(25);
   });
 });

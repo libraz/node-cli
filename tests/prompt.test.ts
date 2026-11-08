@@ -3,7 +3,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { PromptCancelError } from "../src/errors.js";
 import type { Choice, PromptOptions, SelectChoice, TextOptions } from "../src/index.js";
-import { resetColorEnabled } from "../src/output/color.js";
+import { setColorEnabled } from "../src/output/color.js";
 import { createMockStdin, createMockStdout, restoreProcessStateAfterEach } from "./helpers.js";
 
 function createPromptStreams() {
@@ -69,7 +69,7 @@ describe("prompt", () => {
   it("does not emit ANSI color when a custom stderr is non-TTY", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
-    resetColorEnabled();
+    setColorEnabled("auto");
     delete process.env.NO_COLOR;
     delete process.env.FORCE_COLOR;
 
@@ -86,7 +86,7 @@ describe("prompt", () => {
       expect(streams.getOutput()).not.toContain("\x1b[1m");
       expect(streams.getOutput()).not.toContain("\x1b[");
     } finally {
-      resetColorEnabled();
+      setColorEnabled("auto");
     }
   });
 

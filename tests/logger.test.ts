@@ -2,7 +2,7 @@ import { createWriteStream } from "node:fs";
 import { Writable } from "node:stream";
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderSafe, resetColorEnabled, setColorEnabled } from "../src/output/color.js";
+import { renderSafe, setColorEnabled } from "../src/output/color.js";
 import { createLogger } from "../src/output/logger.js";
 import { progress, restoreCursor } from "../src/output/progress.js";
 import { setRegionOwner } from "../src/output/region.js";
@@ -10,7 +10,7 @@ import { createMockStdout, createMockTTY } from "./helpers.js";
 
 describe("logger", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("logs info messages", () => {
     const stream = createMockStdout();
@@ -306,7 +306,7 @@ describe("logging beside an active progress renderer", () => {
   beforeEach(() => setColorEnabled(false));
   afterEach(() => {
     restoreCursor();
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("emits the log line on a cleared row and lets the renderer redraw", () => {
@@ -365,7 +365,7 @@ describe("child level inheritance", () => {
 
 describe("logger stream failure", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("rejects flush instead of crashing when the file cannot be opened", async () => {
     const stream = createWriteStream("/nonexistent-logger-dir/x.log");
@@ -407,7 +407,7 @@ describe("logger stream failure", () => {
 
 describe("logger tree sharing one stream", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("delivers parent and child lines in call order on a slow stream", async () => {
     const received: string[] = [];
@@ -466,7 +466,7 @@ describe("logger tree sharing one stream", () => {
 
 describe("logger input handling", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("does not throw when formatting an argument runs throwing caller code", () => {
     const stream = createMockStdout();
@@ -545,7 +545,7 @@ describe("logger input handling", () => {
 
 describe("default output stream", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("writes every level to stderr and nothing to stdout", () => {
     const stderrWrites: string[] = [];

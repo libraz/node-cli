@@ -8,7 +8,6 @@ import {
   isColorEnabled,
   isStyleName,
   renderSafe,
-  resetColorEnabled,
   sanitizeTerminalText,
   setColorEnabled,
   splitAnsi,
@@ -37,7 +36,7 @@ describe("color", () => {
   });
 
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("applies red style", () => {
@@ -119,14 +118,14 @@ describe("color environment detection", () => {
   const stream = { isTTY: true } as NodeJS.WritableStream;
 
   beforeEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
     delete process.env.NO_COLOR;
     delete process.env.FORCE_COLOR;
     delete process.env.TERM;
   });
 
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("disables color for NO_COLOR and TERM=dumb", () => {
@@ -176,7 +175,7 @@ describe("c (template tag)", () => {
   });
 
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("applies inline styles", () => {
@@ -318,7 +317,7 @@ describe("stringWidth", () => {
   it("ignores ANSI codes", () => {
     setColorEnabled(true);
     expect(stringWidth(color.red("hello"))).toBe(5);
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("handles CJK characters as width 2", () => {
@@ -384,11 +383,11 @@ describe("truncateAnsi", () => {
 
 describe("color detection precedence", () => {
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("honors FORCE_COLOR over TERM=dumb", async () => {
-    resetColorEnabled();
+    setColorEnabled("auto");
     delete process.env.NO_COLOR;
     process.env.FORCE_COLOR = "1";
     process.env.TERM = "dumb";
@@ -535,7 +534,7 @@ describe("closing ANSI state", () => {
   });
 
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("closes inner styling without ending an outer color.* style", () => {
@@ -612,7 +611,7 @@ describe("truncateAnsi width argument", () => {
 
 describe("setColorEnabled", () => {
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it('restores detection with "auto"', () => {
@@ -646,7 +645,7 @@ describe("createTemplateTag and createColorizer", () => {
   const stream = (isTTY: boolean) => ({ isTTY }) as never;
 
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("emits no escapes for a non-TTY stream", () => {
@@ -702,7 +701,7 @@ describe("stringWidth Unicode properties", () => {
 
 describe("c (template tag) interpolation", () => {
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("inserts values containing replacement patterns verbatim", () => {

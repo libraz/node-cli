@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLogger, progress } from "../src/index.js";
-import { resetColorEnabled, setColorEnabled, stripAnsi } from "../src/output/color.js";
+import { setColorEnabled, stripAnsi } from "../src/output/color.js";
 import { restoreCursor } from "../src/output/progress.js";
 import { createMockStdout, createMockTTY } from "./helpers.js";
 
@@ -22,7 +22,7 @@ const busy = (fn: () => unknown) => expectUsageError(fn, Error, "ERR_OUTPUT_BUSY
 
 describe("progress.bar", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("draws 0% as soon as it is created on a TTY", () => {
     const stream = createMockTTY();
@@ -303,7 +303,7 @@ describe("progress.bar", () => {
 // multiBar is one Bar inside a group; group is the MultiBar's own verb.
 describe("terminal verbs across handles", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   type Handle = "bar" | "spinner" | "multiBar" | "group";
   type Verb = "succeed" | "fail" | "warn" | "stop";
@@ -410,7 +410,7 @@ describe("progress.spinner", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("starts drawing as soon as it is created and keeps animating", () => {
@@ -549,7 +549,7 @@ describe("progress.spinner signal ownership", () => {
   });
 
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("installs a temporary SIGINT cursor-restoration handler", () => {
@@ -620,7 +620,7 @@ describe("progress process cleanup", () => {
 
 describe("progress.multi", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("creates and updates multiple bars on TTY", () => {
     const stream = createMockTTY();
@@ -1034,7 +1034,7 @@ describe("spinner line wrapping", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("keeps one copy of a label wider than the terminal across frames and logs", () => {
@@ -1069,7 +1069,7 @@ describe("throwing multi-bar formatter", () => {
     restoreCursor();
     setColorEnabled(false);
   });
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("releases the terminal so later log lines and spinners work", () => {
     const stream = createMockTTY();
@@ -1113,7 +1113,7 @@ describe("throwing multi-bar formatter", () => {
 
 describe("bar width", () => {
   beforeEach(() => setColorEnabled(false));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   const cells = (output: string) => stripAnsi(output).match(/\[([^\]]*)\]/)?.[1].length;
 
@@ -1168,7 +1168,7 @@ describe("default output stream", () => {
   afterEach(() => {
     restoreCursor();
     for (const undo of restore) undo();
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("draws bars, spinners and multi bars on stderr only", () => {

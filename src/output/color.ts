@@ -125,15 +125,6 @@ export function setColorEnabled(value: boolean | "auto"): void {
   _enabled = value === "auto" ? null : value;
 }
 
-/**
- * Reset color output to automatic detection mode.
- *
- * @internal Equivalent to `setColorEnabled("auto")`; kept for the test suite.
- */
-export function resetColorEnabled(): void {
-  _enabled = null;
-}
-
 // ── Core apply ──
 
 /**

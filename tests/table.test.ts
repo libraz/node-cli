@@ -1,12 +1,6 @@
 import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
-import {
-  color,
-  resetColorEnabled,
-  setColorEnabled,
-  stringWidth,
-  stripAnsi,
-} from "../src/output/color.js";
+import { color, setColorEnabled, stringWidth, stripAnsi } from "../src/output/color.js";
 import { type ColumnSpec, table } from "../src/output/table.js";
 
 describe("table", () => {
@@ -15,7 +9,7 @@ describe("table", () => {
   });
 
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("renders array data", () => {
@@ -537,7 +531,7 @@ describe("per-column settings from untrusted keys", () => {
 
 describe("table input hardening", () => {
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("renders a missing key as an empty cell without widening the column", () => {
@@ -603,7 +597,7 @@ describe("table input hardening", () => {
 
 describe("borderless and simple modes honour every table option", () => {
   afterEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("renders the padding that explicit column widths were charged for", () => {
@@ -857,7 +851,7 @@ describe("table colour follows the stream", () => {
   const bold = "\x1b[1m";
 
   beforeEach(() => {
-    resetColorEnabled();
+    setColorEnabled("auto");
     vi.stubEnv("NO_COLOR", "");
     vi.stubEnv("FORCE_COLOR", "");
     vi.stubEnv("TERM", "xterm");
@@ -865,7 +859,7 @@ describe("table colour follows the stream", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    resetColorEnabled();
+    setColorEnabled("auto");
   });
 
   it("colours the header when the stream is a TTY", () => {

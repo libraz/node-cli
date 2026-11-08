@@ -22,12 +22,11 @@ import { resolveOptions } from "../src/option/resolver.js";
 import {
   color,
   createColorizer,
-  resetColorEnabled,
   setColorEnabled,
   stringWidth,
   stripAnsi,
 } from "../src/output/color.js";
-import { logger } from "../src/output/logger.js";
+import { createLogger } from "../src/output/logger.js";
 import { progress } from "../src/output/progress.js";
 import { maskInput, prompt } from "../src/output/prompt.js";
 import { table } from "../src/output/table.js";
@@ -60,8 +59,8 @@ function ctxStub(): CommandContext {
 describe("structured errors", () => {
   it("carry machine-readable fields", () => {
     expect(new CommandNotFoundError("foo").input).toBe("foo");
-    expect(new MissingArgumentError("name", "use x").argName).toBe("name");
-    expect(new ExtraArgumentError("extra").extra).toBe("extra");
+    expect(new MissingArgumentError("name", { usage: "use x" }).argName).toBe("name");
+    expect(new ExtraArgumentError(["extra"]).extras).toEqual(["extra"]);
     expect(new MissingOptionError("port").optionName).toBe("port");
     expect(new UnknownOptionError("--x").flag).toBe("--x");
     expect(new InvalidOptionError("bad", { optionName: "p", value: "x" }).optionName).toBe("p");
@@ -78,7 +77,7 @@ describe("structured errors", () => {
 
   it("ValidationError preserves the wrapped cause without replacing its own stack", () => {
     const original = new Error("nope");
-    const wrapped = new ValidationError("nope", original);
+    const wrapped = new ValidationError("nope", { cause: original });
     expect(wrapped.cause).toBe(original);
     expect(wrapped.stack).toContain("ValidationError: nope");
     expect(wrapped.stack).not.toBe(original.stack);
@@ -296,7 +295,7 @@ describe("command cancellation", () => {
     const registry = new CommandRegistry();
     const cancel = vi.fn();
     CommandBuilder.create(registry, "work")
-      .cancel(cancel)
+      .onCancel(cancel)
       .action(async () => {
         // The handler should be reachable while the action is in flight.
         expect(r.triggerCancel()).toBe(true);
@@ -345,7 +344,7 @@ describe("tokenize and splitPipes", () => {
 describe("color and width", () => {
   restoreProcessStateAfterEach(["NO_COLOR", "FORCE_COLOR", "TERM"]);
   beforeEach(() => setColorEnabled(true));
-  afterEach(() => resetColorEnabled());
+  afterEach(() => setColorEnabled("auto"));
 
   it("re-opens the outer color after a nested reset (no bleed)", () => {
     const nested = color.red(`a ${color.green("b")} c`);
@@ -366,7 +365,7 @@ describe("color and width", () => {
   });
 
   it("createColorizer disables color for a non-TTY stream", () => {
-    resetColorEnabled();
+    setColorEnabled("auto");
     delete process.env.NO_COLOR;
     delete process.env.FORCE_COLOR;
     process.env.TERM = "xterm";
@@ -412,7 +411,6 @@ describe("progress hygiene", () => {
     try {
       const stream = createMockTTY();
       const sp = progress.spinner({ stream, label: "x" });
-      sp.start();
       expect(vi.getTimerCount()).toBe(1);
       sp.succeed("done");
       expect(vi.getTimerCount()).toBe(0);
@@ -474,7 +472,7 @@ describe("prompt fixes", () => {
 describe("logger child level", () => {
   it("propagates setLevel to existing children", () => {
     const stream = createMockStdout();
-    const log = logger({ level: "info", stream });
+    const log = createLogger({ level: "info", stream });
     const child = log.child("db");
     log.setLevel("debug");
     child.debug("hello");
@@ -531,7 +529,7 @@ describe("custom completer context", () => {
     let received: { options: Record<string, unknown> } | null = null;
     CommandBuilder.create(registry, "run")
       .option("--env <e>", { type: "string" })
-      .complete((c) => {
+      .completer((c) => {
         received = c;
         return ["alpha", "beta"];
       })
@@ -728,11 +726,11 @@ describe("cancellation classification", () => {
       name: "AbortError",
     });
     const controller = new AbortController();
-    expect(isCancellationError(abortError)).toBe(false);
+    expect(isCancellationError(abortError, controller.signal)).toBe(false);
     controller.abort();
     expect(isCancellationError(abortError, controller.signal)).toBe(true);
-    expect(formatErrorMessage(abortError, controller.signal)).toBe("Cancelled");
-    expect(isCancellationError(new Error("boom"))).toBe(false);
+    expect(formatErrorMessage(abortError)).toBe("This operation was aborted");
+    expect(isCancellationError(new Error("boom"), controller.signal)).toBe(false);
   });
 });
 
@@ -742,7 +740,7 @@ describe("cancel handler failures", () => {
   it("routes a rejected async cancel handler to the error event", async () => {
     const registry = new CommandRegistry();
     CommandBuilder.create(registry, "hang")
-      .cancel(async () => {
+      .onCancel(async () => {
         throw new Error("cleanup failed");
       })
       .action(
@@ -775,7 +773,7 @@ describe("prompting after end of input", () => {
     stdin.push(null);
     await new Promise((resolve) => stdin.once("end", resolve).resume());
 
-    await expect(prompt.text("name", { stdin, stdout: createMockStdout() })).rejects.toBeInstanceOf(
+    await expect(prompt.text("name", { stdin, stderr: createMockStdout() })).rejects.toBeInstanceOf(
       PromptCancelError,
     );
   });
@@ -786,7 +784,7 @@ describe("prompting after end of input", () => {
 describe("logging with non-string messages", () => {
   it("renders an object or an Error instead of throwing", () => {
     const out = createMockStdout();
-    const log = logger({ stream: out });
+    const log = createLogger({ stream: out });
 
     // Reachable from plain JavaScript, where the `string` type is not enforced.
     const info = log.info as unknown as (value: unknown) => void;
