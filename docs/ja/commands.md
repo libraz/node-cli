@@ -42,7 +42,7 @@ await cli.start();
 | `command(spec)` | このコマンドの下にサブコマンドを宣言します | サブコマンドのビルダー | 同じ名前なら既存のサブコマンドに統合します |
 | `remove()` | コマンドの登録を解除します | 削除したら `true` | `false` を返します |
 
-completer は `CompletionContext` を受け取り、`ctx.current` に対する候補を配列か、配列の Promise で返します。
+completer は `CompletionContext` を受け取り、`ctx.current` に対する候補を読み取り専用の配列か、その Promise で返します。
 
 ```typescript
 cli
@@ -75,9 +75,11 @@ cli.command("deploy <env> [region]");
 | トークン | 意味 | `ctx.args` での値 |
 |---|---|---|
 | `<name>` | 必須、値はちょうど 1 つ | `string` |
-| `[name]` | 任意、値は最大 1 つ | `string`、またはキー自体が存在しない |
-| `<...name>` | 必須の可変長 — 値は 1 つ以上 | `string[]`、空にはならない |
-| `[...name]` | 任意の可変長 — 値は 0 個以上 | `string[]`、空の場合もある |
+| `[name]` | 任意、値は最大 1 つ | `string \| undefined`。省略するとキー自体が存在しない |
+| `<...name>` | 必須の可変長 — 値は 1 つ以上 | `readonly string[]`、空にはならない |
+| `[...name]` | 任意の可変長 — 値は 0 個以上 | `readonly string[]`、空の場合もある |
+
+仕様が文字列リテラルのとき、`ctx.args` はその文字列から型付けされるので、キャストは不要です。仕様を `string` 型の変数で渡すと、`ctx.args` は `Record<string, unknown>` のままです。
 
 *可変長*とは、値をちょうど 1 つ取るのではなく、残りの値をすべて配列へ集めることを指します。[用語集](glossary.md)を参照してください。
 
@@ -85,8 +87,8 @@ cli.command("deploy <env> [region]");
 
 ```typescript
 cli.command("copy <source> [dest]").action((ctx) => {
-  const source = ctx.args.source as string;
-  const dest = (ctx.args.dest as string | undefined) ?? ".";
+  const source = ctx.args.source;
+  const dest = ctx.args.dest ?? ".";
   ctx.stdout.write(`${source} -> ${dest}\n`);
 });
 ```
@@ -102,7 +104,7 @@ cli.command("copy <source> [dest]").action((ctx) => {
 
 ```typescript
 cli.command("copy <...files>").action((ctx) => {
-  const files = ctx.args.files as string[];
+  const files = ctx.args.files;
   ctx.stdout.write(`${files.length} file(s)\n`);
 });
 ```
@@ -138,13 +140,13 @@ cli.command("copy <...files>").action((ctx) => {
 
 ## 実行時の位置引数
 
-`ctx.args` は、仕様文字列に書いた名前をキーとして位置引数を保持します。保持されうる値は次の 4 つの規則で説明できます。
+`ctx.args` は、仕様文字列に書いた名前をキーとして位置引数を保持します。メンバーは読み取り専用です。保持されうる値は次の 4 つの規則で説明できます。
 
-**値は常に文字列です。** 可変長でない引数は `string`、可変長引数は `string[]` です。変換は一切行われないので、数値の引数はアクションの中で変換します。
+**値は常に文字列です。** 可変長でない引数は `string`、可変長引数は `readonly string[]` です。変換は一切行われないので、数値の引数はアクションの中で変換します。
 
 ```typescript
 cli.command("wait <seconds>").action((ctx) => {
-  const seconds = Number(ctx.args.seconds as string);
+  const seconds = Number(ctx.args.seconds);
   if (!Number.isFinite(seconds)) throw new Error("seconds must be a number");
   ctx.stdout.write(`waiting ${seconds}s\n`);
 });
@@ -189,7 +191,7 @@ db.command("seed").action(seedDatabase);
 グループはアクションを持たないため実行できません。挙動は次のとおりです。
 
 - 追加の入力がない場合（`myapp db`）は自身のヘルプページを表示し、サブコマンドを一覧します。
-- 追加の入力がある場合（`myapp db bogus`）は未知のコマンドとして報告します。`cli.catch()` でフォールバックハンドラが登録されていれば、代わりにそのハンドラが入力を受け取ります。登録されていなければ、利用可能なサブコマンドの一覧を伴う `CommandNotFoundError` が送出されます。
+- 追加の入力がある場合（`myapp db bogus`）は未知のコマンドとして報告します。`cli.fallback()` でフォールバックハンドラが登録されていれば、代わりにそのハンドラが入力を受け取ります。登録されていなければ、利用可能なサブコマンドの一覧を伴う `CommandNotFoundError` が送出されます。
 
 ### 同じパスを再登録する
 
@@ -286,7 +288,7 @@ cli
 
 ```typescript
 cli.command("deploy <env>").validate(async (ctx) => {
-  const exists = await environmentExists(ctx.args.env as string);
+  const exists = await environmentExists(ctx.args.env);
   if (!exists) throw new Error("Environment not found");
 });
 ```
@@ -313,14 +315,16 @@ cli
 
 ```typescript
 cli.command("fetch <url>").action(async (ctx) => {
-  const res = await fetch(ctx.args.url as string, { signal: ctx.signal });
+  const res = await fetch(ctx.args.url, { signal: ctx.signal });
   ctx.stdout.write(await res.text());
 });
 ```
 
+エラーを捕捉するアクションは、`isCancellationError(err, ctx.signal)` でキャンセルと通常の失敗を区別できます。[エラー](errors.md)を参照してください。
+
 キャンセルは協調的です。シグナルの abort とキャンセルハンドラの呼び出しは停止の要請であり、コマンドは自力で止まることを期待されます。実行中のアクションが強制的に巻き戻されることはありません。
 
-端末では、要請を無視するコマンドに対する逃げ道が用意されています。2 回目の Ctrl+C はプロセスを終了ステータス 130 で終了させます。この段階的な強制は割り込み経路にだけ存在します。`cli.exec()` に渡した `ExecOptions.signal` から来たシグナルの場合、2 回目の押下も強制終了もなく、abort を無視するコマンドは最後まで走ります。
+端末では、要請を無視するコマンドに対する逃げ道が用意されています。2 回目の Ctrl+C はプロセスを終了ステータス 130 で終了させます。この段階的な強制は割り込み経路にだけ存在します。`cli.exec()` に渡した `signal` から来たシグナルの場合、2 回目の押下も強制終了もなく、abort を無視するコマンドは最後まで走ります。
 
 ## コマンドを削除する
 
@@ -353,15 +357,15 @@ temp.remove(); // true
 
 ### コマンドコンテキスト
 
-すべてのアクション、バリデータ、キャンセルハンドラは同じコンテキストオブジェクトを受け取ります。
+すべてのアクション、バリデータ、キャンセルハンドラは同じコンテキストオブジェクトを受け取ります。`args` と `options` は、コマンドの定義文字列と、ハンドラより前の `.option()` 呼び出しから型付けされます（[型付きオプション](options.md#型付きのオプション)を参照）。
 
 | プロパティ | 型 | 説明 |
 |---|---|---|
-| `args` | `Record<string, unknown>` | 名前をキーとする位置引数。null プロトタイプ |
-| `options` | `Record<string, unknown>` | 正規のロング名をキーとする解決済みオプション。null プロトタイプ |
+| `args` | 定義文字列から型付け | 名前をキーとする位置引数。読み取り専用、null プロトタイプ |
+| `options` | オプションのスキーマから型付け | 正規のロング名をキーとする解決済みオプション。読み取り専用、null プロトタイプ |
 | `rawInput` | `string` | 入力を 1 つの文字列にまとめたもの |
-| `rawArgv` | `string[] \| undefined` | 入力が配列だった場合の、入力要素そのもの |
-| `commandPath` | `string[]` | 正規のパス。例えば `["db", "migrate"]` |
+| `rawArgv` | `readonly string[] \| null` | 入力が配列だった場合の入力要素そのもの。それ以外は `null` |
+| `commandPath` | `readonly string[]` | 正規のパス。例えば `["db", "migrate"]` |
 | `shell` | `Shell \| null` | 対話シェル、または `null` |
 | `signal` | `AbortSignal` | コマンドがキャンセルされると abort されます |
 | `stdin` | `Readable \| null` | 入力ストリーム。利用できない場合は `null` |
@@ -370,7 +374,7 @@ temp.remove(); // true
 
 このうち 3 つは注意が必要です。
 
-- **`rawInput` は情報が落ちます。** CLI を argv — オペレーティングシステムがプログラムへ渡すコマンドライン語の配列 — から起動した場合、`rawInput` はその要素を半角スペース 1 つでつないだものになるため、引用符や埋め込まれたスペースは区別できなくなります。正確な値が必要なときは `rawArgv` を使ってください。`rawArgv` は配列入力のときだけ存在し、`cli.exec()` と対話シェルが使う文字列入力では `undefined` です。
+- **`rawInput` は情報が落ちます。** CLI を argv — オペレーティングシステムがプログラムへ渡すコマンドライン語の配列 — から起動した場合、`rawInput` はその要素を半角スペース 1 つでつないだものになるため、引用符や埋め込まれたスペースは区別できなくなります。正確な値が必要なときは `rawArgv` を使ってください。`rawArgv` は配列入力のときだけ設定され、`cli.exec()` と対話シェルが使う文字列入力では `null` です。
 - **`shell` が非 null になるのは対話シェルの中だけです。** 直接実行モードと `cli.exec()` の下では `null` です。
 - **`stdin` は実行面によって変わります。** 直接実行モードでは `process.stdin`、パイプラインの一段としては上流の段の出力、対話シェルでパイプラインに属さないコマンドでは `null` です。
 
@@ -407,6 +411,6 @@ const cli = createCLI({ name: "myapp", version: "1.0.0" });
 
 - [オプション](options.md) — フラグ、型、既定値、受け付ける入力形式
 - [エラー](errors.md) — ディスパッチと検証が送出するエラークラス
-- [イベントとプラグイン](events-and-plugins.md) — ライフサイクルイベント、`cli.catch()`、プラグイン
+- [イベントとプラグイン](events-and-plugins.md) — ライフサイクルイベント、`cli.fallback()`、プラグイン
 - [対話シェル](interactive-shell.md) — REPL、パイプ、タブ補完
 - [API リファレンス](api-reference.md) — 全シグネチャ

@@ -166,14 +166,14 @@ type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
 ```typescript
 interface PluginContext {
-  command(definition: string): CommandBuilder;
+  command<D extends string>(definition: D): CommandBuilderFor<D>;
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   fallback(handler: FallbackHandler): this;
 }
 ```
 
-`on`, `off` and `fallback` return the context, so registrations chain. `command` returns the new command's builder instead.
+`on`, `off` and `fallback` return the context, so registrations chain. `command` returns the new command's builder instead, typed from a literal definition the same way as `cli.command()`.
 
 There is no `use` (a plugin cannot register another plugin), no access to the command registry, and no logger or configuration object. A plugin that needs those takes them as its own parameters.
 
@@ -317,7 +317,7 @@ cli
   .command("greet <name>")
   .option("--loud", { description: "Shout the greeting" })
   .action((ctx) => {
-    const message = `Hello, ${String(ctx.args.name)}!`;
+    const message = `Hello, ${ctx.args.name}!`;
     ctx.stdout.write(`${ctx.options.loud ? message.toUpperCase() : message}\n`);
   });
 

@@ -6,14 +6,14 @@ The shell adds four things on top of plain command execution: persistent command
 
 ## When the shell starts
 
-`cli.start()` chooses between two modes.
+`cli.start()` chooses between two modes. It resolves to the exit code, which is also set on `process.exitCode`.
 
 - **Direct mode** — one or more command-line arguments were supplied. The arguments are executed as a single command and the process ends.
 - **Interactive shell** — there are **no** arguments **and** both the standard input stream and the standard output stream are terminals.
 
 A terminal (a "TTY") is a real interactive console. When a program is launched from a shell window, both its input and its output are terminals. When either one is connected to a file or to another program, it is not.
 
-If there are no arguments and either stream is not a terminal, the shell is not started: the help index is printed and `start()` returns. This is the case that surprises people first:
+If there are no arguments and either stream is not a terminal, the shell is not started: the help index is printed and `cli.start()` resolves. This is the case that surprises people first:
 
 ```
 mycli            # both streams are terminals -> interactive shell
@@ -39,13 +39,13 @@ cli
 await cli.start();
 ```
 
-`start()` may be called only once per `CLI` instance. A second call throws.
+`cli.start()` may be called only once per `CLI` instance. A second call throws an `Error` with code `ERR_ALREADY_STARTED`.
 
 ## The banner and the prompt
 
-The banner is a line printed once, when the shell starts. Set it with the `banner` option or the `banner()` method. When it is not set, the banner is the application name, followed by `v` and the version when a version was configured. Pass an empty string to suppress it.
+The banner is a line printed once, when the shell starts. Set it with the `banner` option of `createCLI`. When it is not set, the banner is the application name, followed by `v` and the version when a version was configured. Pass an empty string to suppress it.
 
-The prompt is the text printed before each input line. Set it with the `prompt` option or the `prompt()` method; it defaults to `"> "`.
+The prompt is the text printed before each input line. Set it with the `prompt` option of `createCLI`; it defaults to `"> "`.
 
 ```typescript
 const cli = createCLI({
@@ -177,7 +177,7 @@ Completion operates on the active pipe segment, so in `ls | gre<Tab>` the shell 
 
 ### Completing option values
 
-Candidates for an option's value come from its `autocomplete` setting — an array, or a function that may be synchronous or asynchronous. When `autocomplete` is absent, the option's `choices` are used, converted to strings.
+Candidates for an option's value come from its `completer` setting: an array, or a `Completer` that may be synchronous or asynchronous and receives the same `CompletionContext` as a command completer. When `completer` is absent, the option's `choices` are used, converted to strings.
 
 ```typescript
 async function loadProfileNames(): Promise<string[]> {
@@ -187,10 +187,10 @@ async function loadProfileNames(): Promise<string[]> {
 cli
   .command("deploy <env>")
   .option("--region <region>", {
-    autocomplete: ["us-east-1", "us-west-2", "eu-west-1"],
+    completer: ["us-east-1", "us-west-2", "eu-west-1"],
   })
   .option("--profile <profile>", {
-    autocomplete: async (current) => {
+    completer: async ({ current }) => {
       const names = await loadProfileNames();
       return names.filter((name) => name.startsWith(current));
     },
@@ -372,7 +372,7 @@ Leaving a mode with `exit`, `quit`, or Ctrl+D restores the main prompt. A comman
 
 Ctrl+C sends an interrupt to the running command. The framework handles it in two steps.
 
-**First press.** `ctx.signal` is aborted, any handler registered with `.cancel()` runs, and this line is written to the standard error stream:
+**First press.** `ctx.signal` is aborted, any handler registered with `.onCancel()` runs, and this line is written to the standard error stream:
 
 ```
 Interrupted. Press Ctrl-C again to force quit.
@@ -387,7 +387,7 @@ A Ctrl+C that arrives when there is nothing to cancel force-quits immediately.
 ```typescript
 cli
   .command("sync")
-  .cancel((ctx) => {
+  .onCancel((ctx) => {
     ctx.stderr.write("\nRolling back...\n");
   })
   .action(async (ctx) => {
@@ -435,7 +435,7 @@ cli
 ## Related pages
 
 - [Commands](commands.md) — defining commands, arguments, subcommands, and cancel handlers
-- [Options](options.md) — option flags, types, choices, and `autocomplete`
+- [Options](options.md) — option flags, types, choices, and `completer`
 - [Prompts](prompts.md) — asking the user a question from inside an action
 - [Events and plugins](events-and-plugins.md) — lifecycle events, plugins, and `cli.exec()`
 - [Errors](errors.md) — error classes and exit codes

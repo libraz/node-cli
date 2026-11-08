@@ -40,7 +40,7 @@ cli
   .description("Greet someone")
   .option("-u, --uppercase", { type: "boolean" })
   .action((ctx) => {
-    const name = ctx.args.name as string;
+    const { name } = ctx.args;
     ctx.stdout.write(`Hello, ${ctx.options.uppercase ? name.toUpperCase() : name}!\n`);
   });
 
@@ -63,7 +63,7 @@ Hello, World!
 Each of these is a plain function and works in any Node script, with or without a `CLI` instance.
 
 ```typescript
-import { color, c, table, progress, prompt, logger } from "@libraz/node-cli";
+import { color, c, table, progress, prompt, createLogger } from "@libraz/node-cli";
 
 console.log(color.bold.green("Success!"));
 console.log(c`{red Error}: failed`);
@@ -71,17 +71,16 @@ console.log(table([{ name: "Alice", role: "Admin" }], { border: "rounded" }));
 
 const bar = progress.bar({ total: 100, label: "Download" });
 bar.update(50);
-bar.finish();
+bar.succeed("Downloaded");
 
 const spinner = progress.spinner({ label: "Loading..." });
-spinner.start();
 await new Promise((resolve) => setTimeout(resolve, 500));
 spinner.succeed("Loaded");
 
-const name = await prompt.text("Name:");
+const name = await prompt.text("Name?");
 const ok = await prompt.confirm("Continue?");
 
-logger({ prefix: "app", timestamp: true }).info("Started");
+createLogger({ prefix: "app", timestamp: true }).info("Started");
 ```
 
 ## Documentation

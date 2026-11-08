@@ -100,7 +100,7 @@ cli
 
     ctx.shell.enterMode({
       prompt: c`{cyan calc}> `,
-      message: c`{bold Calculator Mode} — Type math expressions. 'exit' to return.`,
+      banner: c`{bold Calculator Mode} — Type math expressions. 'exit' to return.`,
       action: (input, { stdout, stderr }) => {
         const out = createColorizer(stdout);
         const err = createColorizer(stderr);
@@ -134,7 +134,7 @@ cli
 
     ctx.shell.enterMode({
       prompt: c`{yellow note}> `,
-      message: c`{bold Notes Mode} — Type notes to save. 'list' to view. 'exit' to return.`,
+      banner: c`{bold Notes Mode} — Type notes to save. 'list' to view. 'exit' to return.`,
       action: (input, { stdout }) => {
         const col = createColorizer(stdout);
         if (input === "list") {

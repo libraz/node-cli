@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 480" width="960" height="480" role="img" aria-labelledby="ttl dsc">
   <title id="ttl">Lifecycle events and plugin registration</title>
-  <desc id="dsc">The left panel is a vertical timeline of one command run: resolve and parse, command.validate(ctx), beforeExecute(ctx), action(ctx), afterExecute(ctx). A rail beside the timeline marks that any stage can fail, and two arrows leave the same failure point — one to commandError(err, ctx) and one to error(err) — because both fire. Below, the exit event fires once when cli.start ends but not on the normal programmatic path. The right panel shows two cli.use calls handing a PluginContext to each plugin, which can call command(), on(), off() and catch(), all writing into one shared command registry and event listener list; plugin bodies run in a single serial queue and a plugin that throws is fatal.</desc>
+  <desc id="dsc">The left panel is a vertical timeline of one command run: resolve and parse, command.validate(ctx), beforeExecute(ctx), action(ctx), afterExecute(ctx). A rail beside the timeline marks that any stage can fail, and two arrows leave the same failure point — one to commandError(err, ctx) and one to error(err) — because both fire. Below, the exit event fires once when cli.start ends but not on the normal programmatic path. The right panel shows two cli.use calls handing a PluginContext to each plugin, which can call command(), on(), off() and fallback(), all writing into one shared command registry and event listener list; plugin bodies run in a single serial queue and a plugin that throws is fatal.</desc>
 
   <style>
     .bg    { fill:#f6f8fa }
@@ -136,7 +136,7 @@
   <rect class="chip" x="750" y="180" width="80" height="28" rx="6"/>
   <text class="monod" x="790" y="199" text-anchor="middle">off()</text>
   <rect class="chip" x="839" y="180" width="81" height="28" rx="6"/>
-  <text class="monod" x="879" y="199" text-anchor="middle">catch()</text>
+  <text class="monod" x="879" y="199" text-anchor="middle">fallback()</text>
 
   <path class="ln" d="M 612 208 V 216"/>
   <path class="ln" d="M 701 208 V 216"/>

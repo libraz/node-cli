@@ -12,11 +12,11 @@ The library targets anyone writing a tool that is invoked from a terminal: a bui
 
 The figure shows three parts.
 
-**The `CLI` entry object.** `createCLI()` returns a `CLI` instance. It holds the application's name, version, description, prompt string, and history settings, and it owns the registry every command is registered into. `cli.start()` is the single point where control is handed to the library.
+**The application object.** `createCLI()` returns the application object. Its name, version, description, prompt string, banner, and history settings are all passed to `createCLI()` and are fixed from then on, and the object owns the registry every command is registered into. `cli.start()` is the single point where control is handed to the library.
 
 **The command layer.** Each `cli.command(...)` call defines one command: its name, its positional arguments, its options, and the function that runs when it is invoked. Commands can nest into subcommands, so `myapp db migrate` is a `migrate` command under a `db` group. Help text for every command and subcommand is generated from these definitions, so there is no separate usage string to keep in sync. See [Commands](commands.md) and [Options](options.md).
 
-**The output toolkit.** `color`, `c`, `table`, `progress`, `prompt`, and `logger` are ordinary exported functions. They do not read from a `CLI` instance and do not need one to exist. A script that only wants to print an aligned table can import `table` alone:
+**The output toolkit.** `color`, `c`, `table`, `progress`, `prompt`, and `createLogger` are ordinary exports. They do not read from a CLI object and do not need one to exist. A script that only wants to print an aligned table can import `table` alone:
 
 ```typescript
 import { table } from "@libraz/node-cli";
@@ -75,7 +75,7 @@ The first form is called *direct mode*; the second is the *interactive shell*. `
 | Capability | Summary |
 | --- | --- |
 | Commands and subcommands | Nested command trees with aliases, hidden commands, and per-command validation. |
-| Positional arguments | Required, optional, and variadic (multi-value) arguments declared in the command string. |
+| Positional arguments | Required, optional, and variadic (multi-value) arguments declared in the command string. `ctx.args` and `ctx.options` are typed from the definition. |
 | Options | Long and short forms, type coercion to number or boolean, defaults, required options, restricted choices, custom parsing and validation. |
 | Generated help | A command index and a per-command page, built from the definitions. |
 | Interactive shell | A prompt inside the tool, with persistent history, a history filter for secrets, and tab completion. |

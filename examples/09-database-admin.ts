@@ -10,6 +10,7 @@
  *   npx tsx examples/09-database-admin.ts db query "SELECT * FROM users"
  *   npx tsx examples/09-database-admin.ts      # interactive shell with sql mode
  */
+import type { Writable } from "node:stream";
 import { c, createCLI, createColorizer, PromptCancelError, prompt, table } from "../src/index.js";
 
 // Simulated database
@@ -61,7 +62,7 @@ db.command("status")
       table(tableData, {
         border: "rounded",
         headerStyle: "bold",
-        align: { rows: "right", columns: "right" },
+        columns: ["table", { key: "rows", align: "right" }, { key: "columns", align: "right" }],
       }),
     );
     ctx.stdout.write("\n");
@@ -158,7 +159,7 @@ db.command("drop <name>")
     try {
       const confirm = await prompt.confirm(
         `${col.red.bold("WARNING")}: This will permanently delete table "${name}". Continue?`,
-        { stdout: ctx.stdout },
+        ctx,
       );
       if (confirm) {
         delete mockDb.tables[name];
@@ -188,14 +189,14 @@ cli
 
     ctx.shell.enterMode({
       prompt: c`{magenta sql}> `,
-      message: c`{bold SQL Mode} — Enter queries. Type 'exit' to return.`,
+      banner: c`{bold SQL Mode} — Enter queries. Type 'exit' to return.`,
       action: (input, { stdout }) => {
         executeQuery(input, stdout);
       },
     });
   });
 
-function executeQuery(sql: string, stdout: NodeJS.WritableStream) {
+function executeQuery(sql: string, stdout: Writable) {
   const col = createColorizer(stdout);
   // Very basic SQL simulation
   const match = sql.match(/SELECT\s+\*\s+FROM\s+(\w+)/i);

@@ -40,7 +40,7 @@ All of these are exported from the package and all extend `CLIError`.
 | Class | `code` | `exitCode` | Extra fields | Thrown when |
 |---|---|---|---|---|
 | `CLIError(message, { code, exitCode?, cause? })` | as given | `1` | `code`, `exitCode`, `cause?` | The base class. Safe to subclass |
-| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | Unrecognized input with no `catch` handler; an unknown child of a command group; `help <unknown>` |
+| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | Unrecognized input with no `fallback` handler; an unknown child of a command group; `help <unknown>` |
 | `MissingArgumentError(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `1` | `argName`, `usage?` | A required positional argument is absent. A required variadic argument with no values reports `...name` |
 | `ExtraArgumentError(extras, { cause? })` | `EXTRA_ARGUMENT` | `1` | `extras`, `extra` (the first) | Positional values are left over after the command's arguments are filled |
 | `MissingOptionError(optionName, { cause? })` | `MISSING_OPTION` | `1` | `optionName` | An option declared `required: true` is absent |
@@ -160,7 +160,7 @@ Error: Deploying to prod requires --force
 
 ### A custom `CLIError` subclass
 
-Subclass `CLIError` when a failure needs its own exit code — for instance so a wrapper script can distinguish a configuration problem from a network problem. The `code` may be any string (the nine `CLIErrorCode` values autocomplete); the exit code is free. Pass `{ cause }` to keep the original error attached.
+Subclass `CLIError` when a failure needs its own exit code — for instance so a wrapper script can distinguish a configuration problem from a network problem. The `code` may be any string (the nine `CLIErrorCode` values are offered by editor completion); the exit code is free. Pass `{ cause }` to keep the original error attached.
 
 ```typescript
 import { access } from "node:fs/promises";

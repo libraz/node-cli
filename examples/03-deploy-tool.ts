@@ -35,9 +35,9 @@ cli.on("commandError", (error, ctx) => {
   ctx.stderr.write(`${col.red.bold(`Error in ${ctx.commandPath.join(" ")}`)}: ${error.message}\n`);
 });
 
-// ── Catch unknown commands ──
+// ── Fallback for unknown commands ──
 
-cli.catch((input, { stderr }) => {
+cli.fallback((input, { stderr }) => {
   const col = createColorizer(stderr);
   stderr.write(`${col.yellow("Unknown command")}: "${input}"\n`);
   stderr.write('Run "help" for available commands.\n');

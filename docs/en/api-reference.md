@@ -3,7 +3,7 @@
 Every public code symbol is exported from the package root. The only subpath export is `./package.json`, for reading package metadata.
 
 ```typescript
-import { createCLI, table, progress, prompt, logger } from "@libraz/node-cli";
+import { createCLI, table, progress, prompt, createLogger } from "@libraz/node-cli";
 ```
 
 The package is ESM only and requires Node 22 or newer.
@@ -13,6 +13,7 @@ The package is ESM only and requires Node 22 or newer.
 - [Type-only exports](#type-only-exports)
 - [Creating a CLI](#creating-a-cli)
 - [Defining commands](#defining-commands)
+- [Chaining and repeated calls](#chaining-and-repeated-calls)
 - [Execution context](#execution-context)
 - [Options](#options)
 - [Events and plugins](#events-and-plugins)
@@ -23,24 +24,26 @@ The package is ESM only and requires Node 22 or newer.
 - [Prompts](#prompts)
 - [Logging](#logging)
 - [Errors](#errors)
-- [Low-level parsing and terminal helpers](#low-level-parsing-and-terminal-helpers)
+- [Low-level parsing helper](#low-level-parsing-helper)
 - [Environment variables](#environment-variables)
 - [Export index](#export-index)
 
 ## Type-only exports
 
-Some exports are TypeScript types, not values. They exist for annotating variables and are erased at runtime: `import { Shell } from "@libraz/node-cli"` fails, and `new Shell(...)` is not possible.
+Some exports are TypeScript types, not values. They exist for annotating variables and are erased at runtime: `import { Shell } from "@libraz/node-cli"` fails, and a `Shell` cannot be constructed. `createCLI` is the only way to obtain a CLI, and `CLI` and `CommandBuilder` are types for annotating what it returns.
 
-The type-only exports are `ExecOptions`, `PluginContext`, `CLIErrorCode`, `AnsiSegment`, `ColorFn`, `Logger`, `LoggerOptions`, `LogLevel`, `Bar`, `BarOptions`, `BarState`, `MultiBar`, `Spinner`, `SpinnerOptions`, `Choice`, `ConfirmOptions`, `MultiselectOptions`, `PasswordOptions`, `PromptBaseOptions`, `SelectChoice`, `SelectOptions`, `TextOptions`, `TableChars`, `TableOptions`, `TableStyle`, `CompletionResult`, `ModeConfig`, `Shell`, `Action`, `CatchContext`, `CLIEventHandler`, `CLIEventMap`, `CLIOptions`, `CommandContext`, `Completer`, `CompletionContext` and `OptionSchema`.
+The type-only exports are `CLI`, `CommandBuilder`, `Shell`, `ModeConfig`, `ModeContext`, `Action`, `CancelHandler`, `CommandValidator`, `Completer`, `CompletionContext`, `FallbackHandler`, `FallbackContext`, `HistoryFilter`, `CLIEventHandler`, `CLIEventMap`, `CLIOptions`, `CommandContext`, `CommandStreams`, `StdioOptions`, `OptionSchema`, `Plugin`, `PluginContext`, `CLIErrorCode`, `BuiltinCLIError`, `UsageErrorCode`, `StyleName`, `StyleSpec`, `ColorFn`, `ColorProxy`, `AnsiSegment`, `SanitizeTerminalTextOptions`, `ColumnSpec`, `TableChars`, `TableOptions`, `Bar`, `BarOptions`, `BarState`, `MultiBar`, `MultiBarOptions`, `Spinner`, `SpinnerOptions`, `PromptOptions`, `TextOptions`, `ConfirmOptions`, `SelectOptions`, `MultiselectOptions`, `PasswordOptions`, `Choice`, `SelectChoice`, `Logger`, `LoggerOptions` and `LogLevel`.
 
-In particular `Shell`, `ModeConfig`, `CompletionResult` and every options or result interface are type-only. A `Shell` is never constructed by application code; the running instance is reached through `ctx.shell` inside a command action.
+The running `Shell` is reached through `ctx.shell` inside a command action.
 
 ```typescript
-import type { CommandContext, Shell } from "@libraz/node-cli";
+import type { CLI, CommandContext, Shell } from "@libraz/node-cli";
 
-function useShell(ctx: CommandContext): void {
-  const shell: Shell | null = ctx.shell;
-  shell?.setPrompt("app> ");
+function register(cli: CLI): void {
+  cli.command("repl").action((ctx: CommandContext) => {
+    const shell: Shell | null = ctx.shell;
+    shell?.setPrompt("app> ");
+  });
 }
 ```
 
@@ -52,17 +55,34 @@ function useShell(ctx: CommandContext): void {
 function createCLI(options?: CLIOptions): CLI
 ```
 
-Constructs a `CLI`. Equivalent to `new CLI(options)`.
+Constructs a `CLI`. It is the only entry point; the class itself is not exported as a value.
 
 ### `CLI`
 
 ```typescript
-class CLI {
-  constructor(options?: CLIOptions);
+interface CLI {
+  command(definition: string): CommandBuilder; // A and O are inferred from a literal definition
+  on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  fallback(handler: FallbackHandler): this;
+  use(plugin: Plugin): this;
+  exec(input: string | readonly string[], options?: StdioOptions): Promise<void>;
+  start(argv?: readonly string[]): Promise<number>;
 }
 ```
 
+| Method | Description |
+| --- | --- |
+| `command` | Registers a command from a definition string and returns a [`CommandBuilder`](#commandbuilder). |
+| `on` / `off` | Adds or removes a lifecycle listener. See [`CLIEventMap`](#clieventmap). |
+| `fallback` | Sets the handler invoked when no command matches the input. Only one handler is held; a later call replaces it. |
+| `use` | Registers a plugin. Plugin bodies run in registration order. A synchronous plugin runs inside the call, and a synchronous throw propagates to the caller. An asynchronous plugin is awaited before the first command runs, and its failure makes every later `start`, `exec` and `use` fail. |
+| `exec` | Runs input programmatically. See [Programmatic execution](#programmatic-execution). |
+| `start` | Runs the CLI and resolves to the exit code. See [start](#start). |
+
 #### `CLIOptions`
+
+Every field is read once, when `createCLI` is called. There is no setter; `ctx.shell?.setPrompt(...)` changes the prompt of a running shell.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -71,47 +91,24 @@ class CLI {
 | `prompt` | `string` | `"> "` | Prompt string for the interactive shell. |
 | `description` | `string` | — | One-line description shown in the help header. |
 | `banner` | `string` | `"<name> v<version>"`, or `"<name>"` when no version | Text printed when the interactive shell starts. Set to `""` to suppress it. |
-| `historyFile` | `string` | `~/.<name>_history` | Path the interactive shell persists its history to. |
+| `historyFile` | `string` | `~/.<name>_history` | Path the interactive shell persists its history to. A lone `~` and a leading `~/` expand to the home directory. |
 | `historySize` | `number` | `1000` | Maximum retained history entries. |
-| `historyFilter` | `(line: string) => string \| null` | — | Rewrites a line before it is persisted. Return `null` to omit the line entirely. |
+| `historyFilter` | [`HistoryFilter`](#historyfilter) | — | Rewrites a line before it is persisted. Return `null` to omit the line entirely. |
 
-#### Methods
+An empty or non-string `historyFile`, a non-number `historySize` and a non-function `historyFilter` throw a `TypeError` with code `ERR_INVALID_ARG_TYPE`. A `historySize` that is not a non-negative safe integer throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+
+##### `HistoryFilter`
 
 ```typescript
-command(definition: string): CommandBuilder
-prompt(text: string): this
-description(text: string): this
-banner(text: string): this
-history(filePath: string): this
-historySize(size: number): this
-historyFilter(filter: (line: string) => string | null): this
-on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this
-off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this
-catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): this
-use(plugin: (ctx: PluginContext) => void | Promise<void>): this
-start(argv?: string[]): Promise<void>
+type HistoryFilter = (line: string) => string | null
 ```
 
-`exec` completes the list and has its own entry below.
-
-| Method | Description |
-| --- | --- |
-| `command` | Registers a command from a definition string and returns a [`CommandBuilder`](#commandbuilder). |
-| `prompt` | Sets the interactive-shell prompt string. |
-| `description` | Sets the help-header description. |
-| `banner` | Sets the interactive-shell banner. `""` suppresses it. |
-| `history` | Sets the history file path. |
-| `historySize` | Sets the maximum number of retained history entries. |
-| `historyFilter` | Sets the redaction filter applied before a line is written to history. |
-| `on` / `off` | Adds or removes a lifecycle listener. See [`CLIEventMap`](#clieventmap). |
-| `catch` | Sets the fallback handler invoked when no command matches the input. Only one handler is held; a later call replaces it. |
-| `use` | Registers a plugin. Plugin bodies run in registration order, and an asynchronous plugin is awaited before any command runs. |
-| `start` | Runs the CLI. Throws if called twice on the same instance. |
+Redacts or rejects a line before it is written to the history file. It is synchronous because history is written with synchronous I/O.
 
 #### start
 
 ```typescript
-start(argv?: string[]): Promise<void>
+start(argv?: readonly string[]): Promise<number>
 ```
 
 `argv` defaults to `process.argv.slice(2)`. The mode is chosen from what it contains.
@@ -123,51 +120,84 @@ start(argv?: string[]): Promise<void>
 | No arguments, and both stdin and stdout are terminals | The interactive shell starts. `exit` is emitted when the shell ends. |
 | No arguments, and either stream is not a terminal | The help index is printed, then `exit` is emitted. |
 
-In direct mode the arguments arrive as an array, so they are never re-tokenized and a `|` character is an ordinary argument value. Pipelines exist only for string input — see the next section and [Interactive shell](interactive-shell.md).
+The promise resolves to the exit code, which is also set on `process.exitCode`. After an interactive session it resolves to the value `process.exitCode` holds at that point, or `0` when unset. A failure is written to stderr and reflected in the exit code rather than rejected. See [Errors](errors.md).
 
-A failure in direct mode is written to stderr and sets `process.exitCode` to the code the error implies. See [Errors](errors.md).
+A second call on the same instance throws an error with code `ERR_ALREADY_STARTED`. An `argv` that is not an array of strings throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
+
+In direct mode the arguments arrive as an array, so they are never re-tokenized and a `|` character is an ordinary argument value. Pipelines exist only for string input — see the next section and [Interactive shell](interactive-shell.md).
 
 #### Programmatic execution
 
 ```typescript
-exec(input: string, options?: ExecOptions): Promise<void>
+exec(input: string | readonly string[], options?: StdioOptions): Promise<void>
 ```
 
-Runs `input` as if it had been typed at the interactive prompt: the string is tokenized, and a top-level `|` splits it into a pipeline whose stages run concurrently.
+Runs `input` as if it had been typed at the interactive prompt. A string is tokenized, and a top-level `|` splits it into a pipeline whose stages run concurrently. An array is used as argv as is, so it is never tokenized or split. `""` and `[]` resolve without doing anything. Input that is neither a string nor an array of strings throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
-This method does **not** emit the `exit` event on the normal path. Only `start()` does, plus the force-quit path that terminates the process. A rejection propagates the error to the caller after the `commandError` and `error` events have fired.
+This method does **not** emit the `exit` event on the normal path. Only `start` does, plus the force-quit path that terminates the process. A rejection propagates the error to the caller after the `commandError` and `error` events have fired.
 
 `ctx.shell` is always `null` here, so a command that reaches for `ctx.shell.enterMode(...)` must guard for it.
 
-##### `ExecOptions`
+##### `StdioOptions`
+
+```typescript
+type StdioOptions = Partial<CommandStreams>
+```
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `stdin` | `Readable \| null` | `null` | Stream exposed as `ctx.stdin` to the first pipeline stage. |
 | `stdout` | `Writable` | `process.stdout` | Stream exposed as `ctx.stdout` to the last stage. |
 | `stderr` | `Writable` | `process.stderr` | Stream exposed as `ctx.stderr` to every stage. |
-| `signal` | `AbortSignal` | — | External cancellation. Aborting it aborts `ctx.signal` and invokes the command's `cancel()` handler. See [AbortSignal](glossary.md#abortsignal). |
+| `signal` | `AbortSignal` | — | External cancellation. Aborting it aborts `ctx.signal` and invokes the command's `onCancel` handler. See [AbortSignal](glossary.md#abortsignal). |
+
+A [`CommandContext`](#commandcontext) is assignable to `StdioOptions`, so an action can run a nested command on its own streams and signal:
+
+```typescript
+cli.command("release").action(async (ctx) => {
+  await cli.exec(["build", "--production"], ctx);
+});
+```
 
 A worked in-memory example is in [Examples](examples.md).
+
+### `FallbackHandler`
+
+```typescript
+type FallbackHandler = (input: string, ctx: FallbackContext) => void | Promise<void>
+```
+
+Receives the raw input when no command matches it. Input that cannot be tokenized, such as an unclosed quote, reaches the handler as well instead of throwing.
+
+### `FallbackContext`
+
+```typescript
+interface FallbackContext extends CommandStreams {}
+```
+
+No command was resolved, so the context carries only the execution's streams and signal.
 
 ## Defining commands
 
 ### `CommandBuilder`
 
-Returned by `cli.command(...)`, `builder.command(...)` and a plugin context's `command(...)`. Every method returns the builder, so calls chain.
+Returned by `cli.command(...)`, `builder.command(...)` and a plugin context's `command(...)`. `A` and `O` are the types of `ctx.args` and `ctx.options` that the handlers receive.
 
 ```typescript
-class CommandBuilder {
+class CommandBuilder<
+  A extends object = Record<string, unknown>,
+  O extends object = Record<string, unknown>,
+> {
   description(text: string): this;
   hidden(hidden?: boolean): this;
-  option(flags: string, schema?: OptionSchema): this;
-  action(fn: Action): this;
-  complete(fn: Completer): this;
-  alias(...names: string[]): this;
-  validate(fn: (ctx: CommandContext) => void | Promise<void>): this;
-  cancel(fn: (ctx: CommandContext) => void): this;
+  option(flags: string, schema?: OptionSchema): CommandBuilder<A, O>; // O gains the option's key
+  action(fn: Action<A, O>): this;
+  completer(fn: Completer): this;
+  alias(...names: readonly string[]): this;
+  validate(fn: CommandValidator<A, O>): this;
+  onCancel(fn: CancelHandler<A, O>): this;
   remove(): boolean;
-  command(definition: string): CommandBuilder;
+  command(definition: string): CommandBuilder; // the child builder
 }
 ```
 
@@ -177,50 +207,104 @@ class CommandBuilder {
 | `hidden` | Omits the command from generated help and from tab completion. Defaults to `true` when called with no argument. A hidden command is still dispatched normally when its name is typed. |
 | `option` | Declares an option. See [Options](#options). |
 | `action` | Sets the handler run when the command is invoked. |
-| `complete` | Sets a custom tab-completion provider for this command. |
-| `alias` | Adds alternative names. An alias never shadows a real command at the same level. |
+| `completer` | Sets the tab-completion provider for this command's arguments. |
+| `alias` | Adds alternative names. A name that belongs to another command or alias at the same level throws an error with code `ERR_DEFINITION_CONFLICT`. |
 | `validate` | Sets a pre-action check. Throwing rejects the invocation before the action runs. |
-| `cancel` | Sets a handler invoked when the command is cancelled (Ctrl-C, or an aborted external signal). |
+| `onCancel` | Sets a handler invoked when the running command is cancelled. |
 | `remove` | Unregisters the command. Returns `true` when it was found and removed. |
-| `command` | Registers a subcommand and returns a new builder for it. |
+| `command` | Registers a subcommand and returns the builder of the subcommand. |
 
-The definition string names the command and its positional arguments: `"deploy <env> [region]"`, `"db migrate"`, `"run <...tasks>"`. `<name>` is required, `[name]` is optional, and a leading `...` makes the argument variadic. Positional arguments are always strings — there is no type, default, coercion or `choices` for them. A variadic argument yields `string[]`. See [Commands](commands.md).
+The definition string names the command and its positional arguments: `"deploy <env> [region]"`, `"db migrate"`, `"run <...tasks>"`. `<name>` is required, `[name]` is optional, and a leading `...` makes the argument variadic. Positional arguments are always strings — there is no type, default, coercion or `choices` for them. A variadic argument yields `string[]`. A malformed definition throws an error with code `ERR_INVALID_DEFINITION`. See [Commands](commands.md).
+
+A configuration call on a removed command throws an error with code `ERR_COMMAND_REMOVED`, so the builder of a removed command is unusable.
+
+#### Typed arguments and options
+
+For a literal definition string, the builder derives the types of `ctx.args` and `ctx.options` from the definition and from each `option` call.
+
+| Source | Type in `ctx.args` |
+| --- | --- |
+| `<name>` | `string` |
+| `[name]` | `string \| undefined` |
+| `<...names>` and `[...names]` | `readonly string[]` |
+
+Leading path words, as in `"db migrate <target>"`, add no key.
+
+An option contributes one key to `ctx.options`: the last `--name` in its flags, or the first short name when the flags have no long form. Its value type is chosen by precedence:
+
+1. The awaited return type of `parse`, per element for an array type.
+2. The schema `type`.
+3. `string` when the flags carry a value placeholder, `boolean` when they do not.
+
+When `choices` is present, the type narrows to the union of its elements. The key is optional unless the option is `required`, has a `default`, or is boolean. A definition or flags string that is not a literal widens the type to `Record<string, unknown>`.
+
+```typescript
+cli
+  .command("deploy <env> [region]")
+  .option("-p, --port <port>", { type: "number", default: 8080 })
+  .option("--tag <tag>")
+  .option("--force")
+  .action((ctx) => {
+    ctx.args.env; // string
+    ctx.args.region; // string | undefined
+    ctx.options.port; // number
+    ctx.options.tag; // string | undefined
+    ctx.options.force; // boolean
+  });
+```
+
+A subcommand builder is typed from its own definition and does not inherit the options of its parent.
 
 #### Unreachable subcommands
 
-A command that has both positional arguments and an action consumes every following token as an argument value, so its subcommands can never be dispatched. Calling `action()` on such a command emits a process warning with the code `NODE_CLI_UNREACHABLE_SUBCOMMAND`, and registering a subcommand under one emits the same warning. Help output and tab completion omit subcommands in this state rather than advertising a path that would not dispatch.
+A command that has both positional arguments and an action consumes every following token as an argument value, so its subcommands can never be dispatched. Calling `action` on such a command emits a process warning with the code `NODE_CLI_UNREACHABLE_SUBCOMMAND`, and registering a subcommand under one emits the same warning. Help output and tab completion omit subcommands in this state rather than advertising a path that would not dispatch.
 
 #### validate
 
 ```typescript
-validate(fn: (ctx: CommandContext) => void | Promise<void>): this
+validate(fn: CommandValidator<A, O>): this
 ```
 
 Runs after options are resolved and before `beforeExecute`. An error thrown here propagates unchanged — it is not wrapped in `ValidationError`, which is reserved for an option's own `parse` or `validate`.
 
-#### cancel
+#### onCancel
 
 ```typescript
-cancel(fn: (ctx: CommandContext) => void): this
+onCancel(fn: CancelHandler<A, O>): this
 ```
 
-Invoked when the command is cancelled. `ctx.signal` is already aborted by the time the handler runs, so a handler and a signal listener are two views of the same event and either or both may be used.
+Invoked when the running command is interrupted: Ctrl-C, an aborted `exec` signal, or SIGTERM in the shell. The handler is not awaited, and a rejection is reported through the `error` event. `ctx.signal` is already aborted by the time the handler runs, so a handler and a signal listener are two views of the same event and either or both may be used.
 
 ### `Action`
 
 ```typescript
-type Action = (ctx: CommandContext) => void | Promise<void>
+type Action<A extends object = Record<string, unknown>, O extends object = Record<string, unknown>> =
+  (ctx: CommandContext<A, O>) => void | Promise<void>
+```
+
+### `CommandValidator`
+
+```typescript
+type CommandValidator<A extends object = Record<string, unknown>, O extends object = Record<string, unknown>> =
+  (ctx: CommandContext<A, O>) => void | Promise<void>
+```
+
+### `CancelHandler`
+
+```typescript
+type CancelHandler<A extends object = Record<string, unknown>, O extends object = Record<string, unknown>> =
+  (ctx: CommandContext<A, O>) => void
 ```
 
 ### `Completer`
 
 ```typescript
-type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>
+type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonly string[]>
 ```
 
-Candidates are filtered against `ctx.current` before being offered, so a provider may return its full list.
+One shape serves every completion hook: `builder.completer`, `OptionSchema.completer` and `ModeConfig.completer`. Candidates are filtered against `ctx.current` before being offered, so a provider may return its full list.
 
-A custom completer is capped at 1000 ms. A synchronous throw, a rejection or a timeout yields an empty candidate list and never leaves the prompt paused.
+A completer is cut off when `ctx.signal` aborts at a 1000 ms deadline. A synchronous throw, a rejection or a timeout yields an empty candidate list and never leaves the prompt paused.
 
 #### `CompletionContext`
 
@@ -228,40 +312,62 @@ A custom completer is capped at 1000 ms. A synchronous throw, a rejection or a t
 | --- | --- | --- |
 | `line` | `string` | The active pipeline segment — the command the cursor is inside. |
 | `fullLine` | `string` | The whole input line, earlier pipeline segments included. |
-| `current` | `string` | The word under the cursor. |
-| `commandPath` | `string[]` | Canonical command path, with aliases resolved. |
-| `args` | `Record<string, unknown>` | Positional arguments parsed so far. |
+| `current` | `string` | The word under the cursor; `""` at a word boundary. |
+| `commandPath` | `readonly string[]` | Canonical command path, with aliases resolved. |
+| `args` | `Record<string, unknown>` | Positional arguments parsed so far, as raw strings. |
 | `options` | `Record<string, unknown>` | Raw option values parsed so far. Coercion, defaults and validation are not applied during completion. |
 | `iteration` | `number` | Count of consecutive Tab presses, starting at 1. Resets on any other input. |
-| `signal` | `AbortSignal` | Aborted when the 1000 ms completion deadline expires. |
+| `signal` | `AbortSignal` | Aborted when the completion deadline expires. |
 
-### `CatchContext`
+In a shell mode, `line` and `fullLine` are the whole input line, `commandPath` is empty, and `args` and `options` are empty.
 
-```typescript
-interface CatchContext {
-  stdout: Writable;
-  stderr: Writable;
-}
-```
+## Chaining and repeated calls
 
-Passed to the `cli.catch(...)` fallback handler. No command was resolved, so only the output streams are available.
+Configuration methods return `this`, so calls chain. The exceptions:
+
+| Method | Returns |
+| --- | --- |
+| `CommandBuilder.option()` | The same builder with the option added to the type of `ctx.options`. |
+| `CommandBuilder.command()` | The builder of the subcommand, so the chain continues on the child. |
+| `CommandBuilder.remove()` | A boolean, so the chain ends. |
+| `CLI.command()`, `PluginContext.command()` | A `CommandBuilder`. |
+| `CLI.exec()`, `CLI.start()` | A promise. |
+| Methods of `Bar`, `Spinner` and `MultiBar` | `void`. |
+
+What a second call does with the same target depends on the method.
+
+| Method | Repeated call |
+| --- | --- |
+| `CommandBuilder.description()` | Replaces the description. |
+| `CommandBuilder.hidden()` | Replaces the setting. |
+| `CommandBuilder.option()` | The same option name replaces the previous definition in place; a new name adds an option. |
+| `CommandBuilder.action()` | Replaces the action. |
+| `CommandBuilder.completer()` | Replaces the completer. |
+| `CommandBuilder.alias()` | Adds to the existing aliases; duplicates are ignored. |
+| `CommandBuilder.validate()` | Replaces the validator. |
+| `CommandBuilder.onCancel()` | Replaces the handler. |
+| `CommandBuilder.command()` | The same name merges into the existing subcommand. |
+| `CommandBuilder.remove()` | Returns `false`. |
+| `CLI.fallback()`, `PluginContext.fallback()` | Replaces the handler. |
+| `CLI.on()`, `PluginContext.on()` | Adds another listener. |
+| `CLI.start()` | Throws an error with code `ERR_ALREADY_STARTED`. |
 
 ## Execution context
 
 ### `CommandContext`
 
 ```typescript
-interface CommandContext {
-  args: Record<string, unknown>;
-  options: Record<string, unknown>;
-  rawInput: string;
-  rawArgv?: string[];
-  commandPath: string[];
-  shell: Shell | null;
-  signal: AbortSignal;
-  stdin: Readable | null;
-  stdout: Writable;
-  stderr: Writable;
+interface CommandContext<
+  A extends object = Record<string, unknown>,
+  O extends object = Record<string, unknown>,
+> extends CommandStreams {
+  readonly args: A;
+  readonly options: O;
+  readonly rawInput: string;
+  readonly rawArgv: readonly string[] | null;
+  readonly commandPath: readonly string[];
+  readonly shell: Shell | null;
+  readonly signal: AbortSignal;
 }
 ```
 
@@ -270,7 +376,7 @@ interface CommandContext {
 | `args` | Positional arguments keyed by argument name. |
 | `options` | Resolved options keyed by option long name. |
 | `rawInput` | For string input, the original string. For argv input, `argv.join(" ")`, which is lossy: an argument containing a space is indistinguishable from two arguments. |
-| `rawArgv` | The exact argv elements, present only for argv input. This is the reversible form; use it when argument boundaries matter. |
+| `rawArgv` | The exact argv elements for array input, `null` for string input. This is the reversible form; use it when argument boundaries matter. |
 | `commandPath` | The canonical path of the resolved command, for example `["db", "migrate"]`. Aliases are resolved to real names, so it does not depend on what the user typed. |
 | `shell` | The running `Shell` in interactive mode; `null` in direct mode and in programmatic execution. |
 | `signal` | Aborted when the command is cancelled. Pass it to abort-aware APIs such as `fetch` or timers. |
@@ -287,6 +393,19 @@ if (Object.hasOwn(ctx.options, "force")) {
 ```
 
 The trade is deliberate: an option or column literally named `constructor` or `toString` cannot pick up an inherited value.
+
+### `CommandStreams`
+
+```typescript
+interface CommandStreams {
+  readonly stdin: Readable | null;
+  readonly stdout: Writable;
+  readonly stderr: Writable;
+  readonly signal: AbortSignal;
+}
+```
+
+The streams and cancellation signal of one execution. The signal travels with the streams: whoever supplies a command's I/O also supplies the signal that cancels it. `CommandContext` and `FallbackContext` extend it, and `StdioOptions` is its partial form.
 
 #### Argument presence
 
@@ -305,7 +424,7 @@ The trade is deliberate: an option or column literally named `constructor` or `t
 | Interactive shell, unpiped command | `null` |
 | Pipeline, first stage | The stream the surface supplied |
 | Pipeline, later stages | The previous stage's output |
-| Programmatic execution | `ExecOptions.stdin`, default `null` |
+| Programmatic execution | `StdioOptions.stdin`, default `null` |
 
 ## Options
 
@@ -315,14 +434,14 @@ The trade is deliberate: an option or column literally named `constructor` or `t
 interface OptionSchema {
   description?: string;
   type?: "string" | "number" | "boolean" | "string[]" | "number[]";
-  alias?: string | string[];
+  alias?: string | readonly string[];
   required?: boolean;
   default?: unknown;
-  choices?: unknown[];
+  choices?: readonly unknown[];
   parse?: (value: string, ctx: CommandContext) => unknown;
-  validate?: (value: unknown, ctx: CommandContext) => void;
+  validate?: (value: unknown, ctx: CommandContext) => void | Promise<void>;
   hidden?: boolean;
-  autocomplete?: string[] | ((current: string) => string[] | Promise<string[]>);
+  completer?: readonly string[] | Completer;
 }
 ```
 
@@ -330,22 +449,25 @@ interface OptionSchema {
 | --- | --- | --- | --- |
 | `description` | `string` | — | Text shown for the option in help output. |
 | `type` | see above | Inferred | `"boolean"` when the flags string has no `<value>` placeholder, `"string"` otherwise. |
-| `alias` | `string \| string[]` | — | Extra aliases, merged with any declared in the flags string. A leading `-` or `--` is stripped. An alias not declared in long form must be exactly one character. |
+| `alias` | `string \| readonly string[]` | — | Extra aliases, merged with any declared in the flags string. A leading `-` or `--` is stripped. An alias not declared in long form must be exactly one character. |
 | `required` | `boolean` | `false` | Fails with `MissingOptionError` when the option is absent. |
 | `default` | `unknown` | — | Value used when the option is absent. |
-| `choices` | `unknown[]` | — | Restricts the value. Compared leniently, so a declared string choice matches a coerced number. Array-typed options check each element. |
-| `parse` | function | — | Custom parser for an explicitly supplied value. Receives the raw string and the context. |
-| `validate` | function | — | Custom check run after coercion. Throw to reject. |
+| `choices` | `readonly unknown[]` | — | Restricts the value. Compared leniently, so a declared string choice matches a coerced number. Array-typed options check each element. |
+| `parse` | function | — | Custom parser for an explicitly supplied value. Receives the raw string and the context. A returned promise is awaited; a throw or rejection becomes a `ValidationError`. |
+| `validate` | function | — | Custom check run after coercion. Throw or reject to refuse the value; the failure becomes a `ValidationError`. |
 | `hidden` | `boolean` | `false` | Omits the option from help output and tab completion. |
-| `autocomplete` | `string[]` or function | — | Candidates offered for this option's value. Falls back to `choices` when absent. |
+| `completer` | `readonly string[]` or [`Completer`](#completer) | — | Candidates offered for this option's value. Takes precedence over `choices` for completion. |
 
 Rules that are easy to miss:
 
 - A boolean option omitted from the input resolves to `false`, not `undefined`. The builder injects that default unless the option is `required`.
 - Declaring `required: true` and a `default` on the same option throws at definition time, since the default would make the requirement unsatisfiable.
-- A custom `parse` is applied to explicitly supplied values only. A `default` is treated as an already-resolved value; only the built-in coercion for `type` runs on it.
+- A `default` runs through the built-in coercion for `type`, so `"8080"` on a `"number"` option resolves to `8080`. A custom `parse` is not applied to it: a default is an already-resolved value, not raw input.
+- A `default` outside the declared `choices` throws at definition time.
 - `parse` replaces the built-in coercion entirely, so an option with a `parse` may resolve to any type, `Date` included.
+- A `<number>` placeholder requires `type: "number"` or `"number[]"`, and a `<boolean>` placeholder requires `type: "boolean"`.
 - `"number"` accepts ordinary decimal or scientific notation. A magnitude above `Number.MAX_SAFE_INTEGER` is rejected, because its digits cannot be represented exactly.
+- A name or alias already used by another option of the command throws an error with code `ERR_DEFINITION_CONFLICT`. Malformed flags or a schema that contradicts them throw `ERR_INVALID_DEFINITION`.
 
 ### Parsing rules
 
@@ -393,11 +515,11 @@ interface CLIEventMap {
 | `afterExecute` | After the action resolves successfully. |
 | `commandError` | When a resolved command fails during argument validation, option resolution, its own `validate`, or its action. |
 | `error` | For any failure while handling input, including ones raised before a command resolves, such as command-not-found or a parse failure. |
-| `exit` | At most once, when `start()` ends or a force-quit or the shell's SIGTERM ends the process. |
+| `exit` | At most once, when `start` ends or a force-quit or the shell's SIGTERM ends the process. |
 
 `commandError` and `error` **both** fire for a resolved command's failure: `commandError` carries the context, `error` is the catch-all. A handler that must see each failure exactly once should listen to one of them, not both.
 
-`exit` fires after a direct-mode command completes, throws or is force-quit; after a help index is printed for an argument-free non-terminal start; when plugin initialization fails; and when the interactive shell ends or receives SIGTERM. Programmatic execution never fires it on the normal path. A signal the CLI does not handle — SIGTERM or SIGHUP in direct mode, SIGHUP in the shell — ends the process without running `exit` or cancel handlers.
+`exit` fires after a direct-mode command completes, throws or is force-quit; after a help index is printed for an argument-free non-terminal start; when plugin initialization fails; when the interactive shell ends or receives SIGTERM; and when a force-quit ends an `exec` call. Programmatic execution never fires it on the normal path. A signal the CLI does not handle — SIGTERM or SIGHUP in direct mode, SIGHUP in the shell — ends the process without running `exit` or cancel handlers.
 
 A listener that throws cannot break the command: the failure is re-emitted as an `error` event, and the remaining listeners still run. A throwing `error` listener is reported on stderr instead, which stops the loop from recursing.
 
@@ -426,16 +548,24 @@ cli.off("exit", onExit);
 
 ```typescript
 interface PluginContext {
-  command: (definition: string) => CommandBuilder;
-  on: <K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]) => void;
-  off: <K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]) => void;
-  catch: (handler: (input: string, ctx: CatchContext) => void | Promise<void>) => void;
+  command(definition: string): CommandBuilder; // typed like cli.command
+  on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  fallback(handler: FallbackHandler): this;
 }
 ```
 
-The object handed to a function passed to `cli.use(...)`. It exposes only the extension surface — a plugin cannot start the CLI or change its metadata.
+The object handed to a function passed to `cli.use(...)`. It exposes only the extension surface — a plugin cannot start the CLI or change its options. Its setters return the context, so registrations chain.
 
-Plugin bodies run through one serial queue, so registration order is deterministic even when an earlier plugin awaits I/O. A plugin that throws or rejects fails initialization: `start()` reports it and emits `exit`, and a later `use()` on the same instance rethrows the stored failure. See [Events and plugins](events-and-plugins.md).
+### `Plugin`
+
+```typescript
+type Plugin = (ctx: PluginContext) => void | Promise<void>
+```
+
+A synchronous plugin runs inside `use`; an asynchronous one is awaited before the first command runs.
+
+Asynchronous plugin bodies run through one serial queue, so registration order is deterministic even when an earlier plugin awaits I/O. A plugin that throws or rejects asynchronously fails initialization: `start` reports it and emits `exit`, and a later `use` on the same instance rethrows the stored failure. See [Events and plugins](events-and-plugins.md).
 
 ## Interactive shell
 
@@ -444,8 +574,8 @@ Plugin bodies run through one serial queue, so registration order is determinist
 Type-only. The running instance is reached through `ctx.shell`, which is `null` outside the interactive shell.
 
 ```typescript
-class Shell {
-  setPrompt(text: string): void;
+interface Shell {
+  setPrompt(text: string): this;
   enterMode(config: ModeConfig): void;
   exitMode(): void;
   stop(): void;
@@ -457,7 +587,7 @@ class Shell {
 | `setPrompt` | Changes the prompt string. Takes effect at the next prompt; while a mode is active the change applies after the mode is left. |
 | `enterMode` | Hands input over to a sub-REPL with its own prompt and handler. |
 | `exitMode` | Leaves the current mode and returns to the command prompt. |
-| `stop` | Ends the shell session. |
+| `stop` | Ends the shell session after the current input. |
 
 The shell starts only when **both** stdin and stdout are terminals. Its only built-in commands are `exit` and `quit`; a registered command of the same name takes precedence at the top level. `help` is an ordinary registered command, and there is no `clear` or `history` builtin.
 
@@ -466,16 +596,9 @@ The shell starts only when **both** stdin and stdout are terminals. Its only bui
 ```typescript
 interface ModeConfig {
   prompt: string;
-  action: (
-    input: string,
-    ctx: {
-      stdout: Writable;
-      stderr: Writable;
-      signal: AbortSignal;
-    },
-  ) => void | Promise<void>;
-  message?: string;
-  completer?: (line: string) => CompletionResult | Promise<CompletionResult>;
+  action: (input: string, ctx: ModeContext) => void | Promise<void>;
+  banner?: string;
+  completer?: Completer;
   history?: "session" | "none";
 }
 ```
@@ -484,31 +607,26 @@ interface ModeConfig {
 | --- | --- | --- |
 | `prompt` | — | Prompt string shown while the mode is active. |
 | `action` | — | Handler for each submitted line. A mode does not dispatch through the command registry. |
-| `message` | — | Text printed once when the mode is entered. |
-| `completer` | — | Mode-specific completion. Without one, Tab offers nothing: command completion is off inside a mode. Capped at 1000 ms like every other provider. |
+| `banner` | — | Text printed once when the mode is entered. |
+| `completer` | — | Mode-specific completion, a [`Completer`](#completer) called with a `CompletionContext` whose `commandPath` is empty. Without one, Tab offers nothing: command completion is off inside a mode. Cut off at 1000 ms like every other provider. |
 | `history` | `"session"` | `"session"` keeps mode input in memory for the duration of the mode; `"none"` disables it. Mode input is never written to the on-disk history file. |
 
 Inside a mode, `exit` and `quit` always leave the mode rather than the shell. The first Ctrl-C aborts `ctx.signal`; a second force-quits the process with status 130. SIGTERM follows the same cooperative path, then saves history, emits `exit`, and exits with status 143 after a 200 ms grace period.
 
-### `CompletionResult`
+### `ModeContext`
 
 ```typescript
-type CompletionResult = [candidates: string[], completeOn: string]
+type ModeContext = Pick<CommandStreams, "stdout" | "stderr" | "signal">
 ```
 
-The tuple Node's readline completer interface expects: the candidate list, and the substring of the line those candidates replace.
+The context passed to a mode's `action`. A mode never reads stdin, so only the output streams and the signal are present.
 
 ## Colour and terminal text
 
 ### `color`
 
 ```typescript
-const color: Record<string, ColorFn>
-
-interface ColorFn {
-  (text: string): string;
-  [style: string]: ColorFn;
-}
+const color: ColorProxy
 ```
 
 A proxy whose properties are style names. Each returns a callable that is also chainable.
@@ -521,9 +639,20 @@ color.bold.green("ok");
 color.bgCyan.white.underline("banner");
 ```
 
-Accessing an unknown style name **throws** `Error: Unknown style: <name>`, so a typo surfaces immediately instead of silently printing unstyled text. Protocol properties (`then`, `toString`, `valueOf`, `toJSON`, `constructor`, and any symbol) are exempt, so passing a colorizer through `await`, a template literal or `JSON.stringify` does not crash.
+Accessing an unknown style name **throws** a `RangeError` with code `ERR_INVALID_ARG_VALUE`, so a typo surfaces immediately instead of silently printing unstyled text. Protocol properties (`then`, `toString`, `valueOf`, `toJSON`, `constructor`, and any symbol) are exempt, so passing a colorizer through `await`, a template literal or `JSON.stringify` does not crash.
 
 Enablement follows `process.stdout`. Use `createColorizer` when writing elsewhere.
+
+### Style types
+
+```typescript
+type StyleName = "bold" | "dim" | /* … */ "bgWhite"
+type StyleSpec = StyleName | `${StyleName}.${StyleName}` | `${StyleName}.${StyleName}.${string}`
+type ColorFn = ((text: string) => string) & { readonly [K in StyleName]: ColorFn }
+type ColorProxy = { readonly [K in StyleName]: ColorFn }
+```
+
+`StyleName` is the union of the names in the table below. `StyleSpec` is a style or a dot-separated chain of styles, as taken by options such as `color` on a progress bar or `borderColor` on a table. The type system checks the first two links of a chain; any further link is checked when the value is used. `ColorFn` is the chainable callable and `ColorProxy` is the object behind `color` and `createColorizer`.
 
 ### The style set
 
@@ -537,13 +666,21 @@ Six modifiers, ten foregrounds, seven backgrounds — nothing else. There is no 
 
 `gray` and `grey` are two spellings of one colour.
 
+### `isStyleName`
+
+```typescript
+function isStyleName(name: string): name is StyleName
+```
+
+Reports whether `name` is a built-in style name. Inherited members such as `toString` do not qualify.
+
 ### `c`
 
 ```typescript
 function c(strings: TemplateStringsArray, ...values: unknown[]): string
 ```
 
-A tagged template that applies styles with `{styleName text}` markup. Style names chain with dots, and markup nests.
+A tagged template that applies styles with `{styleName text}` markup, bound to `process.stdout`. Style names chain with dots, and markup nests.
 
 ```typescript
 import { c } from "@libraz/node-cli";
@@ -555,12 +692,27 @@ c`{bold.red Error}: ${message}`;
 c`{dim outer {cyan inner} outer}`;
 ```
 
-Unlike `color`, the tag never throws on bad markup: an unknown style name, an unclosed brace or a missing space renders literally. Interpolated values are substituted after styling, so a value that itself contains `{green ...}` is not treated as markup. Nesting deeper than 64 levels throws.
+Unlike `color`, the tag never throws on an unknown name: an unknown style name, an unclosed brace or a missing space renders literally. Interpolated values are substituted after styling, so a value that itself contains `{green ...}` is not treated as markup. Nesting deeper than 64 levels throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+
+### `createTemplateTag`
+
+```typescript
+function createTemplateTag(
+  stream: Writable,
+): (strings: TemplateStringsArray, ...values: unknown[]) => string
+```
+
+Returns a tag with the semantics of `c` whose enablement is decided from `stream`, so escapes are emitted only when colour is enabled for that stream.
+
+```typescript
+const e = createTemplateTag(process.stderr);
+process.stderr.write(e`{bold.red Error}: something went wrong\n`);
+```
 
 ### `createColorizer`
 
 ```typescript
-function createColorizer(stream: NodeJS.WritableStream): Record<string, ColorFn>
+function createColorizer(stream: Writable): ColorProxy
 ```
 
 Returns a `color`-shaped proxy whose enablement is decided from `stream` rather than `process.stdout`. Use it inside a command action so colour follows the stream the action is actually writing to.
@@ -573,7 +725,7 @@ ctx.stdout.write(`${col.green("done")}\n`);
 ### `isColorEnabled`
 
 ```typescript
-function isColorEnabled(stream?: NodeJS.WritableStream): boolean
+function isColorEnabled(stream?: Writable): boolean
 ```
 
 Reports whether escape codes would be emitted for `stream`, which defaults to `process.stdout`. The resolution order is:
@@ -584,14 +736,13 @@ Reports whether escape codes would be emitted for `stream`, which defaults to `p
 4. `TERM=dumb`: colour off.
 5. Whether the stream is a terminal.
 
-### setColorEnabled and resetColorEnabled
+### `setColorEnabled`
 
 ```typescript
-function setColorEnabled(enabled: boolean): void
-function resetColorEnabled(): void
+function setColorEnabled(value: boolean | "auto"): void
 ```
 
-`setColorEnabled` pins the answer for the whole process. `resetColorEnabled` clears the override and restores automatic detection. The override is the right tool for a test that asserts on plain text.
+`true` and `false` pin the answer for the whole process. `"auto"` clears the override and restores automatic detection. The override is the right tool for a test that asserts on plain text.
 
 ### `stringWidth`
 
@@ -612,10 +763,10 @@ Removes every ANSI escape sequence: CSI, OSC, DCS/SOS/PM/APC control strings and
 ### `truncateAnsi`
 
 ```typescript
-function truncateAnsi(text: string, maxWidth: number, marker?: string): string
+function truncateAnsi(text: string, width: number, ellipsis?: string): string
 ```
 
-Truncates to `maxWidth` display columns without splitting a grapheme, appends `marker` (default `"…"`), and closes any styling or hyperlink the result would otherwise leave open, resetting each style attribute on its own so an outer style survives. Returns `""` when `maxWidth` rounds down to zero or less; `NaN` and `Infinity` mean no limit.
+Truncates to `width` display columns without splitting a grapheme, appends `ellipsis` (default `"…"`) when the text is cut, and closes any styling or hyperlink the result would otherwise leave open, resetting each style attribute on its own so an outer style survives. `width` is a positive integer, or `Infinity` for no limit. A non-number throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`; `0`, a negative, `NaN` or a fractional value throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 ### `splitAnsi`
 
@@ -630,6 +781,40 @@ interface AnsiSegment {
 
 Splits the input into ordered runs of escape sequences (`ansi: true`) and visible text (`ansi: false`), using the same recognizer as `stripAnsi`. Concatenating every segment's `text` reproduces the input, which is what lets a consumer transform only the visible parts.
 
+### `splitGraphemes`
+
+```typescript
+function splitGraphemes(text: string): string[]
+```
+
+Splits visible text into user-perceived grapheme clusters, so an emoji with a modifier counts as one unit.
+
+### `sanitizeTerminalText`
+
+```typescript
+function sanitizeTerminalText(text: string, options?: SanitizeTerminalTextOptions): string
+
+interface SanitizeTerminalTextOptions {
+  singleLine?: boolean;
+  allowHyperlinks?: boolean;
+}
+```
+
+Prepares untrusted text for a rendered region. SGR styling and OSC 8 hyperlinks survive; cursor movement, screen clearing and title changes are removed, and any style or hyperlink the text leaves open is closed.
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `singleLine` | `true` | Newlines become spaces. With `false`, line breaks are kept. |
+| `allowHyperlinks` | `true` | `false` strips OSC 8 hyperlinks too. |
+
+### `streamIsTTY`
+
+```typescript
+function streamIsTTY(value: unknown): boolean
+```
+
+Reports whether a value is an object whose `isTTY` is `true`. See [TTY](glossary.md#tty).
+
 See [Colour](color.md) for narrative coverage.
 
 ## Tables
@@ -638,113 +823,124 @@ See [Colour](color.md) for narrative coverage.
 
 ```typescript
 function table(
-  data: unknown[][] | Record<string, unknown>[],
+  data: readonly (readonly unknown[])[] | readonly Record<string, unknown>[],
   options?: TableOptions,
 ): string
 ```
 
-Renders rows as an aligned string with no trailing newline. Accepts an array of objects or an array of arrays.
+Renders rows as an aligned string with no trailing newline. Accepts an array of objects or an array of arrays. The result is returned, never written.
 
-`table()` never wraps. A cell wider than its column is truncated with the truncation marker, newlines and tabs inside a cell have already been collapsed to spaces, and the total width is never clamped to the terminal — a wide table wraps in the terminal rather than being reflowed.
+`table` never wraps. A cell wider than its column is truncated with the ellipsis, newlines and tabs inside a cell have already been collapsed to spaces, and the total width is never clamped to the terminal — a wide table wraps in the terminal rather than being reflowed.
 
-#### Column keys versus labels
+An unknown border or style name, or a number outside its range, throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. A value of the wrong type, including a `columns` entry that is neither a string nor a `ColumnSpec`, throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
-`align`, `maxWidth` and `headerLabels` are keyed by column **key**, never by the displayed label.
+#### Columns
 
-| Data shape | Keys |
+`columns` takes strings and [`ColumnSpec`](#columnspec) objects. A string is shorthand for `{ key }`.
+
+| Data shape | Columns |
 | --- | --- |
 | Array of objects, no `columns` | The union of every row's own property names, in first-seen order. |
-| Array of objects, with `columns` | Exactly the strings in `columns`. |
-| Array of arrays, no `columns` | The row-0 header strings, or `"0"`, `"1"`, … for columns row 0 does not name and for every column when `header: false`. |
-| Array of arrays, with `columns` | The strings in `columns`. Row 0 is then data, not a header. |
+| Array of objects, with `columns` | Exactly the listed columns; `key` selects the property. |
+| Array of arrays, no `columns` | Row 0 is the header; columns are matched by position and keyed `"0"`, `"1"`, … |
+| Array of arrays, with `columns` | Columns are matched by position and `key` is ignored. Row 0 is then data, not a header. |
 
 ### `TableOptions`
 
 ```typescript
 interface TableOptions {
-  columns?: string[];
+  columns?: readonly (string | ColumnSpec)[];
   header?: boolean;
-  headerLabels?: Record<string, string>;
   border?: "none" | "simple" | "rounded" | "single" | "double" | "custom";
   chars?: TableChars;
-  align?: Record<string, "left" | "right" | "center">;
-  colAligns?: ("left" | "right" | "center")[];
-  colWidths?: number[];
-  maxWidth?: Record<string, number>;
-  padding?: number;
-  headerStyle?: "bold" | "dim" | "underline" | "none";
-  truncate?: string;
-  style?: TableStyle;
+  borderColor?: StyleSpec;
+  headerStyle?: StyleSpec | "none";
+  paddingLeft?: number;
+  paddingRight?: number;
+  gap?: number;
+  rowSeparators?: boolean;
+  ellipsis?: string;
+  stream?: Writable;
 }
 ```
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `columns` | Derived from the data | Column keys to include, in order. For array data these double as the header labels, and row 0 is not consumed as a header. |
+| `columns` | Derived from the data | Columns to render, in order. See [Columns](#columns). |
 | `header` | `true` | Whether a header row is rendered. |
-| `headerLabels` | — | Display labels, keyed by column key. |
 | `border` | `"none"` | Border preset. Supplying `chars` without `border` implies `"custom"`. |
 | `chars` | — | Border glyph overrides. `"custom"` starts from the `"single"` preset. |
-| `align` | `"left"` | Alignment per column key. |
-| `colAligns` | — | Alignment by column index. Takes precedence over `align`. |
-| `colWidths` | Auto | Fixed total width per column index, padding included. A value of `0` or less means auto. |
-| `maxWidth` | — | Upper bound on content width per column key. A value of `0` or less means no limit. |
-| `padding` | `2` | Spaces between columns. Applies to `border: "none"` only. |
-| `headerStyle` | `"bold"` | Text style applied to header labels. |
-| `truncate` | `"…"` | Marker appended to a truncated cell. |
-| `style` | — | See [`TableStyle`](#tablestyle). |
+| `borderColor` | — | Style of the border glyphs, such as `"dim"` or `"cyan.bold"`. |
+| `headerStyle` | `"bold"` | Style of the header text; `"none"` leaves it plain. |
+| `paddingLeft` | `1` with a frame (`rounded`, `single`, `double`, `custom`); `0` with `none` and `simple` | Spaces inside each cell, left. |
+| `paddingRight` | Same rule as `paddingLeft` | Spaces inside each cell, right. |
+| `gap` | `2` | Spaces between columns of a borderless table. |
+| `rowSeparators` | `false` | Draws a separator line between data rows. |
+| `ellipsis` | `"…"` | Marker appended to a truncated cell. |
+| `stream` | `process.stdout` | The stream the result is meant for. It only decides whether colour is emitted; nothing is written to it. |
 
-`colWidths[i]` is the column's total width including padding. The smallest honoured value is `padding-left + padding-right + 1`; anything below that renders at that minimum. Every border mode renders the padding it charged, so the requested width is the rendered width.
-
-### `TableStyle`
+### `ColumnSpec`
 
 ```typescript
-interface TableStyle {
-  "padding-left"?: number;
-  "padding-right"?: number;
-  head?: string;
-  border?: string;
-  compact?: boolean;
+interface ColumnSpec {
+  key: string;
+  label?: string;
+  align?: "left" | "right" | "center";
+  width?: number;
+  maxWidth?: number;
 }
 ```
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `padding-left` | `1` for `rounded`, `single`, `double` and `custom`; `0` for `none` and `simple` | Spaces inside each cell, left. |
-| `padding-right` | Same rule as above | Spaces inside each cell, right. |
-| `head` | — | Dot-chained style for header text, such as `"cyan"` or `"cyan.bold"`. |
-| `border` | — | Dot-chained style for border glyphs, such as `"dim"`. |
-| `compact` | `true` | `false` draws a separator between data rows. |
+| `key` | — | Object property to read for object data. Array data is matched by position and ignores it. |
+| `label` | `key` | Header text. |
+| `align` | `"left"` | Alignment of the header and the cells. |
+| `width` | Auto | Fixed total width of the column, padding included, as a positive integer. Wins over `maxWidth`. |
+| `maxWidth` | — | Upper bound on the content width, padding excluded: a positive integer or `Infinity`. |
 
-An unknown style name in `head` or `border` is ignored and the text renders unstyled — unlike `color.<name>`, which throws.
+The smallest honoured `width` is `paddingLeft + paddingRight + 1`; anything below that renders at that minimum. Every border mode renders the padding it charged, so the requested width is the rendered width.
 
 ### `TableChars`
 
 ```typescript
 interface TableChars {
   top?: string;
-  "top-mid"?: string;
-  "top-left"?: string;
-  "top-right"?: string;
+  topMid?: string;
+  topLeft?: string;
+  topRight?: string;
   bottom?: string;
-  "bottom-mid"?: string;
-  "bottom-left"?: string;
-  "bottom-right"?: string;
+  bottomMid?: string;
+  bottomLeft?: string;
+  bottomRight?: string;
   left?: string;
-  "left-mid"?: string;
+  leftMid?: string;
   right?: string;
-  "right-mid"?: string;
-  mid?: string;
-  "mid-mid"?: string;
-  middle?: string;
+  rightMid?: string;
+  horizontal?: string;
+  cross?: string;
+  vertical?: string;
 }
 ```
 
-Each field is one piece of the frame. Supplied glyphs are sanitized, so an escape sequence in a border character cannot restyle the rest of the table. See [Tables](table.md) for worked layouts.
+| Field | Piece of the frame |
+| --- | --- |
+| `top`, `bottom` | Horizontal fill of the top and bottom edge. |
+| `topMid`, `bottomMid` | Junction on the top and bottom edge between two columns. |
+| `topLeft`, `topRight`, `bottomLeft`, `bottomRight` | Corners. |
+| `left`, `right` | Left and right edge of every row. |
+| `leftMid`, `rightMid` | Left and right end of a separator line between rows. |
+| `horizontal` | Horizontal fill of a separator line between rows. |
+| `cross` | Crossing of a separator line and a column divider. |
+| `vertical` | Divider between two columns within a row. |
+
+Supplied glyphs are sanitized, so an escape sequence in a border character cannot restyle the rest of the table. See [Tables](table.md) for worked layouts.
 
 ## Progress
 
-Both indicators default to `process.stderr`, which keeps progress output out of a redirected stdout.
+Every indicator defaults to `process.stderr`, which keeps progress output out of a redirected stdout. An indicator starts drawing when it is created, and every terminal verb (`succeed`, `fail`, `warn`, `stop`) ends it. Any method called afterwards does nothing.
+
+The three verbs `succeed`, `fail` and `warn` replace the indicator with a result line: a green `✔`, a red `✖` or a yellow `⚠`, followed by `message`, which defaults to the label. `stop` leaves the last frame in place and ends the line.
 
 ### progress.bar
 
@@ -756,14 +952,16 @@ progress.bar(options: BarOptions): Bar
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `total` | `number` | — | Required. A non-finite or negative value is normalized to `0`, which renders as complete. |
+| `total` | `number` | — | Required. A finite number of at least `0`; anything else throws. A total of `0` renders as complete. |
 | `label` | `string` | `""` | Text before the bar. |
-| `width` | `number` | `30` | Bar width in characters. Must be positive and finite, or `RangeError` is thrown. |
+| `width` | `number` | `30` | Bar width in characters, from `1` to `4096`. A fractional value draws its whole part. Anything else throws. |
 | `filled` | `string` | `"█"` | Glyph for the filled portion. |
 | `empty` | `string` | `"░"` | Glyph for the empty portion. |
 | `format` | `(state: BarState) => string` | — | Replaces the whole rendered line. |
 | `stream` | `Writable` | `process.stderr` | Output stream. |
-| `color` | `string` | — | Style name applied to the bar. An unknown name is ignored. |
+| `color` | [`StyleSpec`](#style-types) | — | Style applied to the bar, such as `"green"` or `"bold.cyan"`. An unknown name throws at creation. |
+
+An invalid option throws a `TypeError` with code `ERR_INVALID_ARG_TYPE` or a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 #### `Bar`
 
@@ -771,8 +969,10 @@ progress.bar(options: BarOptions): Bar
 | --- | --- |
 | `update(current: number)` | Sets progress to an absolute value, clamped to `0`–`total`. A non-finite value is ignored. |
 | `tick(delta?: number)` | Adds `delta`, default `1`. |
-| `finish()` | Sets progress to `total`, draws a final frame, and ends the line. |
-| `stop()` | Stops without completing. Closes the line only if the bar had drawn one. |
+| `succeed(message?: string)` | Sets progress to `total` and ends the bar with a `✔` result line. |
+| `fail(message?: string)` | Ends the bar at its current position with a `✖` result line. |
+| `warn(message?: string)` | Ends the bar at its current position with a `⚠` result line. |
+| `stop()` | Leaves the last frame in place and ends the line. |
 | `[Symbol.dispose]()` | Alias for `stop()`. |
 
 `Symbol.dispose` makes a bar usable with a `using` declaration, which calls the disposal method automatically at the end of the enclosing block, including when the block throws:
@@ -791,9 +991,9 @@ interface BarState {
   current: number;
   total: number;
   percent: number; // 0 to 100
-  elapsed: number; // ms since the bar was created
-  eta: number;     // estimated ms remaining
-  rate: number;    // units per second
+  elapsedMs: number; // ms since the bar was created
+  etaMs: number; // estimated ms remaining; Infinity while no rate is known
+  ratePerSecond: number; // units per second
 }
 ```
 
@@ -808,95 +1008,91 @@ progress.spinner(options?: SpinnerOptions): Spinner
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `label` | `string` | `""` | Text beside the frame. |
-| `frames` | `string[]` | Braille dots | Animation frames. A non-array, an empty array or a non-string element throws `RangeError`. |
-| `interval` | `number` | `80` | Milliseconds between frames. Must be positive and finite. |
+| `frames` | `readonly string[]` | Braille dots | Animation frames. A non-array or a non-string element throws a `TypeError`; an empty array throws a `RangeError`. |
+| `intervalMs` | `number` | `80` | Milliseconds between frames. Must be positive and finite. |
 | `stream` | `Writable` | `process.stderr` | Output stream. |
-| `color` | `string` | — | Style name applied to the frame. An unknown name is ignored. |
+| `color` | [`StyleSpec`](#style-types) | — | Style applied to the frame. An unknown name throws at creation. |
 
 #### `Spinner`
 
 | Method | Description |
 | --- | --- |
-| `start()` | Begins the animation. |
-| `update(label: string)` | Replaces the label; the next frame shows it. |
-| `succeed(message?)` | Stops and writes a green check line. Defaults to the current label. |
-| `fail(message?)` | Stops and writes a red cross line. |
-| `warn(message?)` | Stops and writes a yellow warning line. |
-| `stop()` | Stops and clears the line, writing no final message. |
+| `setLabel(label: string)` | Replaces the label; the next frame shows it. |
+| `succeed(message?: string)` | Ends the spinner with a `✔` result line. |
+| `fail(message?: string)` | Ends the spinner with a `✖` result line. |
+| `warn(message?: string)` | Ends the spinner with a `⚠` result line. |
+| `stop()` | Leaves the last frame in place and ends the line. |
 | `[Symbol.dispose]()` | Alias for `stop()`. |
 
 ### Behaviour on a non-terminal stream
 
-A progress bar writing to a non-terminal stream emits **nothing at all**, `finish()` included, so a redirected log does not fill with control sequences.
-
-A spinner writing to a non-terminal stream emits nothing either, except `succeed`, `fail` and `warn`, which always write their one final line. That makes a spinner safe to leave in a script whose output is captured: the outcome is recorded, the animation is not.
+A bar or spinner writing to a non-terminal stream emits nothing while it runs, and `stop` writes nothing, so a redirected log does not fill with control sequences. `succeed`, `fail` and `warn` always write their one result line. That makes an indicator safe to leave in a script whose output is captured: the outcome is recorded, the animation is not.
 
 ### progress.multi
 
 ```typescript
-progress.multi(): MultiBar
+progress.multi(options?: MultiBarOptions): MultiBar
 ```
 
-Takes no arguments. The group renders to one stream, fixed by the first `add()` that supplies one; a `stream` on a later bar is ignored, because one frame cannot be split across terminal regions.
+#### `MultiBarOptions`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `stream` | `Writable` | `process.stderr` | Stream shared by every bar in the group. |
+
+The group claims its stream when it is created. One frame cannot be split across terminal regions, so `add` takes no `stream`.
+
+#### `MultiBar`
 
 | Method | Description |
 | --- | --- |
-| `add(options: BarOptions): Bar` | Adds a bar and returns its handle. |
-| `finish()` | Completes every bar and closes the group. |
-| `stop()` | Stops every bar and closes the group. |
+| `add(options: Omit<BarOptions, "stream">): Bar` | Adds a bar drawn in the group's stream and returns its handle. |
+| `succeed(message?: string)` | Ends every unfinished bar with `✔` and closes the group. |
+| `fail(message?: string)` | Ends every unfinished bar with `✖` and closes the group. |
+| `warn(message?: string)` | Ends every unfinished bar with `⚠` and closes the group. |
+| `stop()` | Leaves the last frame in place and closes the group. |
 | `[Symbol.dispose]()` | Alias for `stop()`. |
 
-`add()` called after the group is closed returns an inert bar whose methods are no-ops, so a worker that adds a bar just after `finally { multi.finish() }` does not fail.
+On a group method, `message` is written as one unmarked final line. On a non-terminal stream, each bar's result line is written as the bar ends.
 
-Two standalone indicators cannot render to the same terminal stream at once — the second throws, because neither can know the other's row layout. Concurrent bars belong in a `multi()` group.
+`add` called after the group is closed returns an inert bar whose methods are no-ops, so a worker that adds a bar just after `finally { multi.stop() }` does not fail.
 
-### `releaseAll`
+Two standalone indicators cannot render to the same terminal stream at once — the second throws an error with code `ERR_OUTPUT_BUSY`, because neither can know the other's row layout. Concurrent bars belong in a `multi` group.
 
-```typescript
-function releaseAll(): void
-```
-
-Stops every indicator that is still active and restores the terminal cursor. Command execution calls it in its finalizer, so an action that throws cannot leave the cursor hidden. Call it directly when driving indicators outside a command. Exported both at the top level and as `progress.releaseAll`.
-
-### `restoreCursor`
+### progress.releaseAll
 
 ```typescript
-function restoreCursor(): void
+progress.releaseAll(): void
 ```
 
-Re-shows the cursor on every stream that currently has it hidden. It is a top-level export and **not** a member of `progress`.
+Stops every indicator that is still active and restores the terminal cursor. Command execution calls it in its finalizer, so an action that throws cannot leave the cursor hidden. Call it directly when driving indicators outside a command.
 
 See [Progress](progress.md) for worked usage.
 
 ## Prompts
 
-Every prompt rejects with `PromptCancelError` on Ctrl-C or on end of input (Ctrl-D). A `validate` that throws is not a rejection: the message is shown and the prompt asks again. Only cancellation escapes the call.
+Prompts ask on stderr, so a question never pollutes a redirected stdout. Every prompt rejects with `PromptCancelError` on Ctrl-C, on end of input (Ctrl-D) or when `signal` aborts. A `validate` that throws is not a rejection: the message is shown and the prompt asks again. Only cancellation escapes the call.
 
-Two prompts reading from the same input stream at once throws, since the second would steal the first one's keystrokes.
+Two prompts reading from the same input stream at once throws an error with code `ERR_INPUT_BUSY`, since the second would steal the first one's keystrokes.
 
-### `PromptBaseOptions`
+### `PromptOptions`
 
 ```typescript
-interface PromptBaseOptions<T = unknown> {
-  validate?: (value: T) => void;
-  required?: boolean;
-  prefix?: string;
-  stdout?: Writable;
-  stdin?: Readable;
-  signal?: AbortSignal;
+type PromptOptions<T = unknown> = Pick<StdioOptions, "stdin" | "stderr" | "signal"> & {
+  validate?: (value: T) => void | Promise<void>;
+  marker?: string;
 }
 ```
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `validate` | — | Throw to reject; the prompt re-asks. |
-| `required` | `true` | Consulted by `prompt.text` and `prompt.password` only. |
-| `prefix` | `"?"` | Symbol shown before the question. |
-| `stdout` | `process.stdout` | Where the question is written. |
-| `stdin` | `process.stdin` | Where the answer is read. |
+| `stdin` | `process.stdin` | Where the answer is read. `null` also selects `process.stdin`. |
+| `stderr` | `process.stderr` | Where the question is written. |
 | `signal` | — | Aborting rejects the pending prompt with `PromptCancelError`. |
+| `validate` | — | Throw or reject to refuse the value; the prompt shows the message and asks again. |
+| `marker` | `"?"` | Symbol shown before the question. |
 
-Every prompt options interface extends this one. `stderr` lives on `PasswordOptions` alone.
+Every prompt options interface extends this type. Its stream members match `StdioOptions`, so a command context can be passed as the options object: `prompt.confirm("Continue?", ctx)`.
 
 ### prompt.text
 
@@ -907,8 +1103,9 @@ prompt.text(message: string, options?: TextOptions): Promise<string>
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `default` | `string` | — | Fills an empty submission. |
-| `placeholder` | `string` | — | Hint shown in parentheses. Displayed only when there is no `default`. |
+| `placeholder` | `string` | — | Example shown as `(e.g. …)`. Displayed only when there is no `default`. |
 | `trim` | `boolean` | `true` | Trims surrounding whitespace from the answer. |
+| `required` | `boolean` | `true` | Refuses an empty answer. |
 
 An explicit `default` — including `""` — bypasses `required`: submitting nothing yields the default rather than the "value is required" message.
 
@@ -929,7 +1126,7 @@ Accepts `y`, `yes`, `n` and `no` in any case. Anything else re-asks.
 ```typescript
 prompt.select<T>(
   message: string,
-  choices: Choice<T>[],
+  choices: readonly Choice<T>[],
   options?: SelectOptions<T>,
 ): Promise<T>
 ```
@@ -938,25 +1135,25 @@ prompt.select<T>(
 | --- | --- | --- | --- |
 | `default` | `T` | — | Value returned for an empty submission. Matched by identity against a choice's `value`, or against the choice object itself. |
 
-Choices are answered by their displayed number, or by typing a label, matched case-insensitively. A number within the range of the list always selects by number, so a numeric-looking label stays reachable by its position; any other input is matched against the labels. An empty `choices` array throws.
+Choices are answered by their displayed number, or by typing a label, matched case-insensitively. A number within the range of the list always selects by number, so a numeric-looking label stays reachable by its position; any other input is matched against the labels. An empty `choices` array throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 ### prompt.multiselect
 
 ```typescript
 prompt.multiselect<T>(
   message: string,
-  choices: Choice<T>[],
+  choices: readonly Choice<T>[],
   options?: MultiselectOptions<T>,
 ): Promise<T[]>
 ```
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `default` | `T[]` | — | Pre-selected values, returned for an empty submission. |
+| `default` | `readonly T[]` | — | Pre-selected values, returned for an empty submission. |
 | `min` | `number` | — | Minimum number of distinct selections. Omitted means an empty result is accepted. |
 | `max` | `number` | — | Maximum number of distinct selections. |
 
-Answered with comma-separated numbers. Duplicates are collapsed before `min` and `max` are checked. A `min` above `max`, a `min` above the number of choices, or a non-integer bound throws `RangeError`.
+Answered with comma-separated numbers. Duplicates are collapsed before `min` and `max` are checked. A `min` above `max`, a `min` above the number of choices, or a non-integer bound throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 ### prompt.password
 
@@ -967,13 +1164,13 @@ prompt.password(message: string, options?: PasswordOptions): Promise<string>
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `trim` | `boolean` | `false` | Off by default, unlike `prompt.text`, because surrounding whitespace can be part of a secret. |
-| `stderr` | `Writable` | `process.stderr` | Where the question goes when stdin is a terminal but stdout is not. |
+| `required` | `boolean` | `true` | Refuses an empty answer. |
 
 There is no `default`. Typed characters are masked with one asterisk per grapheme, so the mask reveals neither the display width nor the scalar count of what was typed.
 
-When stdin is a terminal but stdout has been redirected, the question and the masked entry go to `stderr` instead, keeping a captured stdout free of the exchange.
+`required` exists only on `prompt.text` and `prompt.password`; the other prompts have no such option.
 
-### Choice and SelectChoice
+### `Choice` and `SelectChoice`
 
 ```typescript
 interface SelectChoice<T> {
@@ -985,27 +1182,21 @@ interface SelectChoice<T> {
 type Choice<T> = T | SelectChoice<T>;
 ```
 
-A choice is either a bare value or a descriptor. A descriptor with a `label` but no `value` throws a `TypeError`, so an ordinary domain object that happens to carry a `label` property is never silently turned into `undefined`.
-
-### `maskInput`
-
-```typescript
-function maskInput(chunk: string): string
-```
-
-Replaces each visible grapheme in a chunk with `*`, passing ANSI sequences and line breaks through untouched. This is the masking `prompt.password` applies; it is exported for terminal UIs that echo input themselves.
+A choice is either a bare value or a descriptor. A descriptor with a `label` but no `value` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, so an ordinary domain object that happens to carry a `label` property is never silently turned into `undefined`.
 
 See [Prompts](prompts.md) for worked usage.
 
 ## Logging
 
-### `logger`
+### `createLogger`
 
 ```typescript
-function logger(options?: LoggerOptions): Logger
+function createLogger(options?: LoggerOptions): Logger
 ```
 
 Every level — `info` and `success` included — is written to one stream, which defaults to `process.stderr`. There is no level-based routing between stdout and stderr. To put log output on stdout, pass `stream: process.stdout`.
+
+An unknown `level` or an invalid `bufferLimit` throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 #### `LoggerOptions`
 
@@ -1033,7 +1224,7 @@ Messages go through the `format` function of `node:util`, so `%s`, `%d` and `%j`
 
 | Method | Description |
 | --- | --- |
-| `setLevel(level: LogLevel)` | Changes the minimum level at runtime. |
+| `setLevel(level: LogLevel)` | Changes the minimum level at runtime and returns the logger. |
 | `child(prefix: string): Logger` | Creates a child whose prefix is `parent:child`. Without its own level it follows the parent's current level, so a later `parent.setLevel(...)` reaches it. |
 | `flush(): Promise<void>` | Resolves once queued lines have reached the stream, every child's included. Rejects if the stream errors or closes first. |
 
@@ -1051,13 +1242,16 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "silent"
 
 ```typescript
 class CLIError extends Error {
-  code: CLIErrorCode;
-  exitCode: number;
-  constructor(message: string, code: CLIErrorCode, exitCode?: number);
+  readonly code: CLIErrorCode | (string & {});
+  readonly exitCode: number;
+  constructor(
+    message: string,
+    options: { code: CLIErrorCode | (string & {}); exitCode?: number; cause?: unknown },
+  );
 }
 ```
 
-The base class for every error the framework raises. `code` is machine-readable; `exitCode` is the process status the failure implies, defaulting to `1`.
+The base class for every error the framework raises about user input. `code` is machine-readable; `exitCode` is the process status the failure implies, defaulting to `1`; `cause` is forwarded to `Error`. An application subclass may carry a code of its own.
 
 ### `CLIErrorCode`
 
@@ -1076,39 +1270,106 @@ type CLIErrorCode =
 
 ### Subclasses
 
-| Class | `code` | `exitCode` | Extra fields | Raised when |
-| --- | --- | --- | --- | --- |
-| `CommandNotFoundError` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | No command matches the input, or a command group is given an unknown child. |
-| `MissingArgumentError` | `MISSING_ARGUMENT` | `1` | `argName`, `usage?` | A required positional argument is absent, or a required variadic receives zero values. |
-| `ExtraArgumentError` | `EXTRA_ARGUMENT` | `1` | `extra` | More positional values are supplied than the command declares. |
-| `MissingOptionError` | `MISSING_OPTION` | `1` | `optionName` | A `required` option is absent. |
-| `InvalidOptionError` | `INVALID_OPTION` | `1` | `optionName?`, `value?` | A value fails built-in coercion or a `choices` check, or an option is used in a form it does not accept. |
-| `UnknownOptionError` | `UNKNOWN_OPTION` | `1` | `flag` | A flag is not declared by the command. |
-| `ValidationError` | `VALIDATION_ERROR` | `1` | `cause?`, `optionName?` | An option's own `parse` or `validate` throws. |
-| `ParseError` | `PARSE_ERROR` | `1` | `quote?` | The input cannot be tokenized or split into pipeline stages. |
-| `PromptCancelError` | `PROMPT_CANCELLED` | `130` | — | A prompt is cancelled with Ctrl-C or end of input. |
+Every subclass constructor takes its subject first and an options object last, and every options object accepts `cause`.
+
+| Class | Constructor | `code` | `exitCode` | Extra fields | Raised when |
+| --- | --- | --- | --- | --- | --- |
+| `CommandNotFoundError` | `(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | No command matches the input, or a command group is given an unknown child. |
+| `MissingArgumentError` | `(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `1` | `argName`, `usage?` | A required positional argument is absent, or a required variadic receives zero values. |
+| `ExtraArgumentError` | `(extras, { cause? })` | `EXTRA_ARGUMENT` | `1` | `extra`, `extras` | More positional values are supplied than the command declares. `extras` is a `readonly string[]`; `extra` is its first element. |
+| `MissingOptionError` | `(optionName, { cause? })` | `MISSING_OPTION` | `1` | `optionName` | A `required` option is absent. |
+| `InvalidOptionError` | `(message, { optionName?, value?, cause? })` | `INVALID_OPTION` | `1` | `optionName?`, `value?` | A value fails built-in coercion or a `choices` check, or an option is used in a form it does not accept. |
+| `UnknownOptionError` | `(flag, { cause? })` | `UNKNOWN_OPTION` | `1` | `flag`, `optionName` | A flag is not declared by the command. `flag` keeps its leading dashes; `optionName` drops them. |
+| `ValidationError` | `(message, { optionName?, cause? })` | `VALIDATION_ERROR` | `1` | `optionName?` | An option's own `parse` or `validate` throws or rejects. |
+| `ParseError` | `(message, { quote?, cause? })` | `PARSE_ERROR` | `1` | `quote?` | The input cannot be tokenized or split into pipeline stages. |
+| `PromptCancelError` | `({ cause? })` | `PROMPT_CANCELLED` | `130` | — | A prompt is cancelled with Ctrl-C, end of input or an aborted signal. |
 
 `ValidationError` wraps failures of an **option's** `parse` or `validate` only. An error thrown by `CommandBuilder.validate()` propagates unchanged and keeps its own class and message.
 
-`ParseError` covers an unclosed quote (`quote` names which one), an empty or trailing pipe, and an unsupported redirection operator. It is raised before a command is resolved, so a registered `catch()` fallback receives the input instead of the error being thrown.
+`ParseError` covers an unclosed quote (`quote` is `"single"` or `"double"` and names which one), an empty or trailing pipe, and an unsupported redirection operator. It is raised before a command is resolved, so a registered `fallback` handler receives the input instead of the error being thrown.
 
 `PromptCancelError` carries exit code `130`, the conventional status for an interrupted program. Every other `CLIError` defaults to `1`. The interactive shell's SIGTERM path exits `143`. See [Exit code](glossary.md#exit-code).
+
+### `BuiltinCLIError`
+
+```typescript
+type BuiltinCLIError =
+  | CommandNotFoundError
+  | MissingArgumentError
+  | ExtraArgumentError
+  | MissingOptionError
+  | InvalidOptionError
+  | UnknownOptionError
+  | ValidationError
+  | ParseError
+  | PromptCancelError;
+```
+
+The union of the nine classes above, discriminated by `code`.
+
+### `isBuiltinCLIError`
+
+```typescript
+function isBuiltinCLIError(e: unknown): e is BuiltinCLIError
+```
+
+Reports whether a value is one of the nine built-in subclasses. A bare `CLIError` and application subclasses do not match; test those with `instanceof`.
+
+```typescript
+import { isBuiltinCLIError } from "@libraz/node-cli";
+
+try {
+  await cli.exec("deploy");
+} catch (err) {
+  if (isBuiltinCLIError(err) && err.code === "MISSING_ARGUMENT") {
+    // err is narrowed to MissingArgumentError
+    console.error(err.argName);
+  }
+}
+```
+
+### `UsageErrorCode`
+
+```typescript
+type UsageErrorCode =
+  | "ERR_INVALID_ARG_TYPE"
+  | "ERR_INVALID_ARG_VALUE"
+  | "ERR_INVALID_DEFINITION"
+  | "ERR_DEFINITION_CONFLICT"
+  | "ERR_COMMAND_REMOVED"
+  | "ERR_ALREADY_STARTED"
+  | "ERR_OUTPUT_BUSY"
+  | "ERR_INPUT_BUSY";
+```
+
+Codes carried by errors that report misuse of the API by the calling program, as opposed to a failure caused by user input. These errors are not `CLIError` instances: they are a plain `TypeError`, `RangeError` or `Error` with a `code` property, in the manner of Node's own errors.
+
+| Code | Class | Raised when |
+| --- | --- | --- |
+| `ERR_INVALID_ARG_TYPE` | `TypeError` | An argument or option has the wrong type. |
+| `ERR_INVALID_ARG_VALUE` | `RangeError` | A value is out of range or names something unknown, such as a style, a border or a log level. |
+| `ERR_INVALID_DEFINITION` | `Error` | A definition string, option flags or option schema is malformed or contradicts itself. |
+| `ERR_DEFINITION_CONFLICT` | `Error` | An option name or alias, or a command alias, is already taken. |
+| `ERR_COMMAND_REMOVED` | `Error` | A removed command is configured. |
+| `ERR_ALREADY_STARTED` | `Error` | `start` is called a second time. |
+| `ERR_OUTPUT_BUSY` | `Error` | A second indicator claims a terminal stream that another one holds. |
+| `ERR_INPUT_BUSY` | `Error` | A second prompt reads from an input stream that another one holds. |
 
 ### `formatErrorMessage`
 
 ```typescript
-function formatErrorMessage(err: unknown, signal?: AbortSignal): string
+function formatErrorMessage(err: unknown): string
 ```
 
-Renders any thrown value as one line of user-facing text: `"Cancelled"` for a cancellation, otherwise the `Error`'s message, otherwise `String(err)`.
+Renders any thrown value as one line of user-facing text: the `Error`'s message, otherwise `String(err)`.
 
 ### `isCancellationError`
 
 ```typescript
-function isCancellationError(err: unknown, signal?: AbortSignal): boolean
+function isCancellationError(err: unknown, signal: AbortSignal): boolean
 ```
 
-Reports whether a failure is a user-initiated cancellation rather than a genuine fault. A `PromptCancelError` always qualifies. A bare `AbortError` qualifies **only** when a `signal` is supplied and that signal is aborted — without that evidence there is no way to tell whose cancellation it was, and an unrelated aborted request would be misreported as the user pressing Ctrl-C.
+Reports whether a failure is a user-initiated cancellation rather than a genuine fault. A `PromptCancelError` always qualifies. A bare `AbortError` qualifies **only** when `signal` is aborted — without that evidence there is no way to tell whose cancellation it was, and an unrelated aborted request would be misreported as the user pressing Ctrl-C.
 
 ```typescript
 import { isCancellationError } from "@libraz/node-cli";
@@ -1123,34 +1384,15 @@ try {
 
 See [Errors](errors.md).
 
-## Low-level parsing and terminal helpers
+## Low-level parsing helper
 
-These are exported so an integration can reuse the framework's exact behaviour. Ordinary applications do not need them.
+### `tokenize`
 
 ```typescript
 function tokenize(input: string): string[]
-function splitPipes(input: string): string[]
-function activePipeSegment(input: string): string
-function stripOptionPrefix(flag: string): string
-function sanitizeTerminalText(
-  text: string,
-  options?: { singleLine?: boolean; allowHyperlinks?: boolean },
-): string
-function splitGraphemes(text: string): string[]
-function streamIsTTY(stream: object): boolean
-function restoreCursor(): void
 ```
 
-| Function | Description |
-| --- | --- |
-| `tokenize` | Splits a line into argv-style tokens, honouring single quotes, double quotes and backslash escapes. Throws `ParseError` on an unclosed quote. |
-| `splitPipes` | Splits a line at top-level pipe characters, preserving each segment's quoting so it can be tokenized again. Throws `ParseError` on an empty or trailing pipe. |
-| `activePipeSegment` | Returns the segment after the last unquoted pipe, with leading whitespace removed and trailing whitespace kept. Unlike `splitPipes` it preserves a trailing empty segment, which is what lets completion offer commands immediately after a pipe. |
-| `stripOptionPrefix` | Removes leading dashes: `--name` and `-n` become `name` and `n`. |
-| `sanitizeTerminalText` | Prepares untrusted text for a rendered region. SGR styling and OSC 8 hyperlinks survive; cursor movement, screen clearing and title changes are removed. With `singleLine: true` (the default) newlines become spaces. `allowHyperlinks: false` strips links too. |
-| `splitGraphemes` | Splits visible text into user-perceived grapheme clusters, so an emoji with a modifier counts as one unit. |
-| `streamIsTTY` | Reports whether a value looks like a terminal stream. See [TTY](glossary.md#tty). |
-| `restoreCursor` | Re-shows the cursor on every stream that currently has it hidden. |
+Splits a line into argv-style tokens, honouring single quotes, double quotes and backslash escapes. Throws `ParseError` on an unclosed quote. It is exported so an integration can reuse the framework's exact behaviour; ordinary applications do not need it.
 
 ## Environment variables
 
@@ -1172,37 +1414,52 @@ NODE_CLI_DEBUG=1 myapp deploy prod
 | Export | Kind | Section |
 | --- | --- | --- |
 | `createCLI` | function | [Creating a CLI](#createcli) |
-| `CLI` | class | [Creating a CLI](#cli) |
+| `CLI` | type | [Creating a CLI](#cli) |
 | `CLIOptions` | type | [Creating a CLI](#clioptions) |
-| `ExecOptions` | type | [Creating a CLI](#execoptions) |
-| `PluginContext` | type | [Events and plugins](#plugincontext) |
-| `CommandBuilder` | class | [Defining commands](#commandbuilder) |
+| `HistoryFilter` | type | [Creating a CLI](#historyfilter) |
+| `StdioOptions` | type | [Creating a CLI](#stdiooptions) |
+| `FallbackHandler` | type | [Creating a CLI](#fallbackhandler) |
+| `FallbackContext` | type | [Creating a CLI](#fallbackcontext) |
+| `CommandBuilder` | type | [Defining commands](#commandbuilder) |
 | `Action` | type | [Defining commands](#action) |
+| `CommandValidator` | type | [Defining commands](#commandvalidator) |
+| `CancelHandler` | type | [Defining commands](#cancelhandler) |
 | `Completer` | type | [Defining commands](#completer) |
 | `CompletionContext` | type | [Defining commands](#completioncontext) |
-| `CatchContext` | type | [Defining commands](#catchcontext) |
 | `CommandContext` | type | [Execution context](#commandcontext) |
+| `CommandStreams` | type | [Execution context](#commandstreams) |
 | `OptionSchema` | type | [Options](#optionschema) |
 | `CLIEventMap` | type | [Events and plugins](#clieventmap) |
 | `CLIEventHandler` | type | [Events and plugins](#clieventhandler) |
+| `PluginContext` | type | [Events and plugins](#plugincontext) |
+| `Plugin` | type | [Events and plugins](#plugin) |
 | `Shell` | type | [Interactive shell](#shell) |
 | `ModeConfig` | type | [Interactive shell](#modeconfig) |
-| `CompletionResult` | type | [Interactive shell](#completionresult) |
-| `color` | value | [Colour](#color) |
-| `ColorFn` | type | [Colour](#color) |
-| `c` | function | [Colour](#c) |
-| `createColorizer` | function | [Colour](#createcolorizer) |
-| `isColorEnabled` | function | [Colour](#iscolorenabled) |
-| `setColorEnabled` | function | [Colour](#setcolorenabled-and-resetcolorenabled) |
-| `resetColorEnabled` | function | [Colour](#setcolorenabled-and-resetcolorenabled) |
-| `stringWidth` | function | [Colour](#stringwidth) |
-| `stripAnsi` | function | [Colour](#stripansi) |
-| `truncateAnsi` | function | [Colour](#truncateansi) |
-| `splitAnsi` | function | [Colour](#splitansi) |
-| `AnsiSegment` | type | [Colour](#splitansi) |
+| `ModeContext` | type | [Interactive shell](#modecontext) |
+| `tokenize` | function | [Low-level parsing helper](#tokenize) |
+| `color` | value | [Colour and terminal text](#color) |
+| `StyleName` | type | [Colour and terminal text](#style-types) |
+| `StyleSpec` | type | [Colour and terminal text](#style-types) |
+| `ColorFn` | type | [Colour and terminal text](#style-types) |
+| `ColorProxy` | type | [Colour and terminal text](#style-types) |
+| `isStyleName` | function | [Colour and terminal text](#isstylename) |
+| `c` | function | [Colour and terminal text](#c) |
+| `createTemplateTag` | function | [Colour and terminal text](#createtemplatetag) |
+| `createColorizer` | function | [Colour and terminal text](#createcolorizer) |
+| `isColorEnabled` | function | [Colour and terminal text](#iscolorenabled) |
+| `setColorEnabled` | function | [Colour and terminal text](#setcolorenabled) |
+| `stringWidth` | function | [Colour and terminal text](#stringwidth) |
+| `stripAnsi` | function | [Colour and terminal text](#stripansi) |
+| `truncateAnsi` | function | [Colour and terminal text](#truncateansi) |
+| `splitAnsi` | function | [Colour and terminal text](#splitansi) |
+| `AnsiSegment` | type | [Colour and terminal text](#splitansi) |
+| `splitGraphemes` | function | [Colour and terminal text](#splitgraphemes) |
+| `sanitizeTerminalText` | function | [Colour and terminal text](#sanitizeterminaltext) |
+| `SanitizeTerminalTextOptions` | type | [Colour and terminal text](#sanitizeterminaltext) |
+| `streamIsTTY` | function | [Colour and terminal text](#streamistty) |
 | `table` | function | [Tables](#table) |
 | `TableOptions` | type | [Tables](#tableoptions) |
-| `TableStyle` | type | [Tables](#tablestyle) |
+| `ColumnSpec` | type | [Tables](#columnspec) |
 | `TableChars` | type | [Tables](#tablechars) |
 | `progress` | value | [Progress](#progress) |
 | `Bar` | type | [Progress](#bar) |
@@ -1210,11 +1467,10 @@ NODE_CLI_DEBUG=1 myapp deploy prod
 | `BarState` | type | [Progress](#barstate) |
 | `Spinner` | type | [Progress](#spinner) |
 | `SpinnerOptions` | type | [Progress](#spinneroptions) |
-| `MultiBar` | type | [Progress](#progressmulti) |
-| `releaseAll` | function | [Progress](#releaseall) |
-| `restoreCursor` | function | [Progress](#restorecursor) |
+| `MultiBar` | type | [Progress](#multibar) |
+| `MultiBarOptions` | type | [Progress](#multibaroptions) |
 | `prompt` | value | [Prompts](#prompts) |
-| `PromptBaseOptions` | type | [Prompts](#promptbaseoptions) |
+| `PromptOptions` | type | [Prompts](#promptoptions) |
 | `TextOptions` | type | [Prompts](#prompttext) |
 | `ConfirmOptions` | type | [Prompts](#promptconfirm) |
 | `SelectOptions` | type | [Prompts](#promptselect) |
@@ -1222,9 +1478,8 @@ NODE_CLI_DEBUG=1 myapp deploy prod
 | `PasswordOptions` | type | [Prompts](#promptpassword) |
 | `Choice` | type | [Prompts](#choice-and-selectchoice) |
 | `SelectChoice` | type | [Prompts](#choice-and-selectchoice) |
-| `maskInput` | function | [Prompts](#maskinput) |
-| `logger` | function | [Logging](#logger) |
-| `Logger` | type | [Logging](#logger-1) |
+| `createLogger` | function | [Logging](#createlogger) |
+| `Logger` | type | [Logging](#logger) |
 | `LoggerOptions` | type | [Logging](#loggeroptions) |
 | `LogLevel` | type | [Logging](#loglevel) |
 | `CLIError` | class | [Errors](#clierror) |
@@ -1238,15 +1493,11 @@ NODE_CLI_DEBUG=1 myapp deploy prod
 | `ValidationError` | class | [Errors](#subclasses) |
 | `ParseError` | class | [Errors](#subclasses) |
 | `PromptCancelError` | class | [Errors](#subclasses) |
+| `BuiltinCLIError` | type | [Errors](#builtinclierror) |
+| `isBuiltinCLIError` | function | [Errors](#isbuiltinclierror) |
+| `UsageErrorCode` | type | [Errors](#usageerrorcode) |
 | `formatErrorMessage` | function | [Errors](#formaterrormessage) |
 | `isCancellationError` | function | [Errors](#iscancellationerror) |
-| `tokenize` | function | [Low-level parsing and terminal helpers](#low-level-parsing-and-terminal-helpers) |
-| `splitPipes` | function | [Low-level parsing and terminal helpers](#low-level-parsing-and-terminal-helpers) |
-| `activePipeSegment` | function | [Low-level parsing and terminal helpers](#low-level-parsing-and-terminal-helpers) |
-| `stripOptionPrefix` | function | [Low-level parsing and terminal helpers](#low-level-parsing-and-terminal-helpers) |
-| `sanitizeTerminalText` | function | [Low-level parsing and terminal helpers](#low-level-parsing-and-terminal-helpers) |
-| `splitGraphemes` | function | [Low-level parsing and terminal helpers](#low-level-parsing-and-terminal-helpers) |
-| `streamIsTTY` | function | [Low-level parsing and terminal helpers](#low-level-parsing-and-terminal-helpers) |
 
 ## Related pages
 

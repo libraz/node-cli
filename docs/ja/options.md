@@ -57,6 +57,8 @@ await cli.start();
 
 名前 — ロング名とすべてのエイリアス — は `/^[A-Za-z0-9][A-Za-z0-9-]*$/` に一致しなければなりません。先頭は英字か数字、以降は英字、数字、ハイフンです。
 
+`<number>` プレースホルダには `type: "number"` か `"number[]"` が、`<boolean>` プレースホルダには `type: "boolean"` が必要で、ほかの組み合わせは例外を送出します。`<n>` や `<tag>` など、それ以外のプレースホルダ名は自由に付けられます。
+
 プレースホルダは、スキーマで `type` を指定しなかったときの推論結果を決めるだけです。型がいったん決まれば、値を取るかどうかはその型だけで決まります。`.option("--name", { type: "string" })` はプレースホルダを持ちませんが次のトークンを消費し、ヘルプには `--name <name>` と表示されます。
 
 ```typescript
@@ -82,6 +84,8 @@ cli
 | `validate` | `(value: unknown, ctx) => void` | — | 例外を送出して解決済みの値を拒否します |
 | `hidden` | `boolean` | `false` | ヘルプと補完からオプションを除外します |
 | `completer` | `readonly string[] \| Completer` | — | タブ補完用の値の候補。固定のリストか、`CompletionContext` を受け取る関数で指定します。`choices` より優先されます |
+
+不正なフラグ文字列や不正なスキーマは、`.option()` の実行時に `code: "ERR_INVALID_DEFINITION"` を持つ `Error` を送出します。同じコマンドの別のオプションがすでに使っている名前やエイリアスは `ERR_DEFINITION_CONFLICT` を送出します。
 
 `alias` で指定したエイリアスは仕様文字列のものとマージされるので、`.option("--port <n>", { alias: "p" })` と `.option("-p, --port <n>")` は同じオプションを宣言します。
 

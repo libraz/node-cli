@@ -101,8 +101,7 @@ remote
   .description("Register a new remote")
   .option("-f, --fetch", { type: "boolean", description: "Fetch immediately after adding" })
   .action((ctx) => {
-    const name = ctx.args.name as string;
-    const url = ctx.args.url as string;
+    const { name, url } = ctx.args;
     if (remotes.has(name)) throw new Error(`Remote "${name}" already exists`);
     remotes.set(name, url);
     ctx.stdout.write(`Added remote ${name} -> ${url}\n`);
@@ -114,7 +113,7 @@ remote
   .alias("rm")
   .description("Delete a remote")
   .action((ctx) => {
-    const name = ctx.args.name as string;
+    const { name } = ctx.args;
     if (!remotes.delete(name)) throw new Error(`No such remote: ${name}`);
     ctx.stdout.write(`Removed remote ${name}\n`);
   });
@@ -197,22 +196,18 @@ cli
   .option("--yes", { type: "boolean", description: "Skip the confirmation prompt" })
   .validate((ctx) => {
     const allowed = ["dev", "staging", "prod"];
-    const env = ctx.args.env as string;
+    const { env } = ctx.args;
     if (!allowed.includes(env)) {
       throw new Error(`Unknown environment "${env}". Expected one of: ${allowed.join(", ")}`);
     }
   })
   .action(async (ctx) => {
-    const env = ctx.args.env as string;
-    const tag = ctx.options.tag as string;
+    const { env } = ctx.args;
+    const { tag } = ctx.options;
 
     if (!ctx.options.yes) {
       try {
-        const go = await prompt.confirm(`Deploy ${tag} to ${env}?`, {
-          default: false,
-          stdout: ctx.stdout,
-          signal: ctx.signal,
-        });
+        const go = await prompt.confirm(`Deploy ${tag} to ${env}?`, { ...ctx, default: false });
         if (!go) {
           ctx.stdout.write("Aborted.\n");
           return;
@@ -232,7 +227,7 @@ cli
       await sleep(300);
       bar.tick();
     }
-    bar.finish();
+    bar.succeed();
 
     ctx.stdout.write(`Deployed ${tag} to ${env}.\n`);
   });
@@ -240,12 +235,12 @@ cli
 await cli.start();
 ```
 
-プログレスバーは同じ行を描き直します。以下の記録には最後のフレームだけが現れています。
+プログレスバーは同じ行を描き直し、`succeed()` がそれを結果行に置き換えます。
 
 ```text
 $ deployer deploy prod --tag v1.2.3
 ? Deploy v1.2.3 to prod? (y/N) y
-deploy  [██████████████████████████████]  100%  5/5
+✔ deploy
 Deployed v1.2.3 to prod.
 ```
 
@@ -270,11 +265,11 @@ $ deployer deploy prod --yes
 Error: Option --tag is required
 ```
 
-プログレスバーの出力先は `ctx.stderr` です。stdout が別のプログラムへパイプされる可能性がある以上、進捗はこちらに出すべきものです。[`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts) を土台にしています。[プログレス](progress.md) と [プロンプト](prompts.md) も参照してください。
+プログレスバーの出力先は `ctx.stderr` です。stdout が別のプログラムへパイプされる可能性がある以上、進捗はこちらに出すべきものです。確認の質問も同じ理由で `ctx.stderr` に出ます。プロンプトに `ctx` を渡すと、コマンドの `stdin`、`stderr`、`signal` がそのまま使われます。[`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts) を土台にしています。[プログレス](progress.md) と [プロンプト](prompts.md) も参照してください。
 
 ## 揃えと色を指定したステータステーブル
 
-`headerLabels`、`align`、`maxWidth` はいずれも列キー、つまりオブジェクトのプロパティ名で指定します。ヘッダに表示されるラベルではありません。セルに色を付けても表示幅は増えないため、揃えには影響しません。
+各 `ColumnSpec` は、表示するオブジェクトのプロパティを `key` で指定し、ヘッダの `label` と `align` を設定します。セルに色を付けても表示幅は増えないため、揃えには影響しません。
 
 ```typescript
 #!/usr/bin/env node
@@ -301,9 +296,14 @@ cli
     ctx.stdout.write(
       `${table(rows, {
         border: "rounded",
-        headerLabels: { service: "Service", replicas: "Pods", latency: "p95", state: "State" },
-        align: { replicas: "right", latency: "right", state: "center" },
-        style: { head: "cyan.bold", border: "dim" },
+        columns: [
+          { key: "service", label: "Service" },
+          { key: "replicas", label: "Pods", align: "right" },
+          { key: "latency", label: "p95", align: "right" },
+          { key: "state", label: "State", align: "center" },
+        ],
+        headerStyle: "cyan.bold",
+        borderColor: "dim",
       })}\n`,
     );
   });
@@ -464,7 +464,7 @@ function healthPlugin(baseUrl: string) {
         cmd.stdout.write(`pong from ${baseUrl} (timeout ${cmd.options.timeout}ms)\n`);
       });
 
-    ctx.catch((input, io) => {
+    ctx.fallback((input, io) => {
       io.stderr.write(`Unknown command: ${input}\n`);
     });
   };
@@ -527,7 +527,7 @@ cli
     }
     const lines = (await readAll(ctx.stdin)).split("\n").filter(Boolean);
     for (const line of lines) {
-      if (line.includes(ctx.args.pattern as string)) ctx.stdout.write(`${line}\n`);
+      if (line.includes(ctx.args.pattern)) ctx.stdout.write(`${line}\n`);
     }
   });
 
@@ -552,7 +552,7 @@ cli
     }
     ctx.shell.enterMode({
       prompt: "calc> ",
-      message: "Calculator. Type an arithmetic expression, or exit to return.",
+      banner: "Calculator. Type an arithmetic expression, or exit to return.",
       action: (input, io) => {
         if (!/^[\d\s+\-*/().]+$/.test(input)) {
           io.stderr.write("only + - * / and parentheses are supported\n");
@@ -620,14 +620,14 @@ cli
   .command("run [...names]")
   .description("Run tasks concurrently")
   .action(async (ctx) => {
-    const requested = (ctx.args.names as string[] | undefined) ?? [];
+    const requested = ctx.args.names;
     const selected = requested.length > 0
       ? tasks.filter((task) => requested.includes(task.name))
       : tasks;
 
     if (selected.length === 0) throw new Error("No matching task");
 
-    const multi = progress.multi();
+    const multi = progress.multi({ stream: ctx.stderr });
     const started = Date.now();
 
     try {
@@ -637,7 +637,6 @@ cli
             total: task.steps,
             label: task.name,
             width: 20,
-            stream: ctx.stderr,
           });
           for (let step = 0; step < task.steps; step++) {
             await sleep(task.ms);
@@ -645,8 +644,10 @@ cli
           }
         }),
       );
-    } finally {
-      multi.finish();
+      multi.succeed();
+    } catch (err) {
+      multi.fail();
+      throw err;
     }
 
     const summary = selected.map((task) => ({
@@ -655,7 +656,10 @@ cli
       result: "ok",
     }));
 
-    ctx.stdout.write(`${table(summary, { border: "rounded", align: { steps: "right" } })}\n`);
+    ctx.stdout.write(`${table(summary, {
+      border: "rounded",
+      columns: ["task", { key: "steps", align: "right" }, "result"],
+    })}\n`);
     ctx.stdout.write(`finished in ${Date.now() - started}ms\n`);
   });
 
@@ -670,12 +674,12 @@ build  [████████████░░░░░░░░]  60%  6/10
 test  [███████░░░░░░░░░░░░░]  33%  2/6
 ```
 
-そして `finish()` の後、stdout にサマリテーブルが続きます。
+`succeed()` の後は各行が結果行に変わり、続けて stdout にサマリテーブルが出力されます。
 
 ```text
-lint  [████████████████████]  100%  4/4
-build  [████████████████████]  100%  10/10
-test  [████████████████████]  100%  6/6
+✔ lint
+✔ build
+✔ test
 ╭───────┬───────┬────────╮
 │ task  │ steps │ result │
 ├───────┼───────┼────────┤
@@ -688,7 +692,7 @@ finished in 1215ms
 
 経過時間の数値は実行ごとに変わります。行の幅は揃えられません。各行はラベル、バー、パーセント、カウントをスペース 2 つでつないだものです。列として揃えたい場合はラベル側を自分で埋めてください。
 
-`multi.finish()` は `finally` に置いてあり、グループが閉じた後に追加されたバーは何もしないため、遅れて終わったタスクがコマンドを失敗させることはありません。[`08-task-runner.ts`](../../examples/08-task-runner.ts) を土台にしています。[プログレス](progress.md) も参照してください。
+タスクが例外を投げたときは `catch` 内の `multi.fail()` がグループを閉じます。グループが閉じた後に追加されたバーは何もしないため、遅れて終わったタスクがコマンドを失敗させることはありません。[`08-task-runner.ts`](../../examples/08-task-runner.ts) を土台にしています。[プログレス](progress.md) も参照してください。
 
 ## 深いサブコマンドツリーとモードサブプロンプト
 
@@ -720,7 +724,10 @@ root
       columns: Object.keys(records[0] ?? {}).length,
     }));
     ctx.stdout.write(
-      `${table(rows, { border: "rounded", align: { rows: "right", columns: "right" } })}\n`,
+      `${table(rows, {
+        border: "rounded",
+        columns: ["table", { key: "rows", align: "right" }, { key: "columns", align: "right" }],
+      })}\n`,
     );
   });
 
@@ -739,12 +746,12 @@ tables
   .description("Print the rows of a table")
   .option("-l, --limit <n>", { type: "number", default: 10, description: "Maximum rows" })
   .validate((ctx) => {
-    if (!Object.hasOwn(db, ctx.args.name as string)) {
+    if (!Object.hasOwn(db, ctx.args.name)) {
       throw new Error(`No such table: ${ctx.args.name}`);
     }
   })
   .action((ctx) => {
-    const rows = db[ctx.args.name as string].slice(0, ctx.options.limit as number);
+    const rows = db[ctx.args.name].slice(0, ctx.options.limit);
     ctx.stdout.write(`${table(rows, { border: "rounded" })}\n`);
   });
 
@@ -758,7 +765,7 @@ cli
     }
     ctx.shell.enterMode({
       prompt: "sql> ",
-      message: "SQL mode. Type exit to return.",
+      banner: "SQL mode. Type exit to return.",
       history: "none",
       action: (input, io) => {
         const match = /^select\s+\*\s+from\s+(\w+)$/i.exec(input.trim());
@@ -849,7 +856,7 @@ cli
   .option("--region <region>", {
     type: "string",
     default: "us-east-1",
-    autocomplete: regions,
+    completer: regions,
     description: "Target region",
   })
   .option("--cache", {
@@ -857,18 +864,18 @@ cli
     default: true,
     description: "Reuse the cached plan",
   })
-  .complete((ctx) => stacks.filter((name) => name.startsWith(ctx.current)))
-  .cancel((ctx) => {
+  .completer((ctx) => stacks.filter((name) => name.startsWith(ctx.current)))
+  .onCancel((ctx) => {
     ctx.stderr.write("plan cancelled; nothing was written\n");
   })
   .action(async (ctx) => {
-    const since = ctx.options.since as Date | undefined;
-    ctx.stdout.write(`stack:  ${(ctx.args.stack as string | undefined) ?? "(all)"}\n`);
+    const { since } = ctx.options;
+    ctx.stdout.write(`stack:  ${ctx.args.stack ?? "(all)"}\n`);
     ctx.stdout.write(`region: ${ctx.options.region}\n`);
     ctx.stdout.write(`since:  ${since ? since.toISOString() : "(beginning)"}\n`);
     ctx.stdout.write(`cache:  ${ctx.options.cache ? "on" : "off"}\n`);
 
-    const targets = ctx.args.stack ? [ctx.args.stack as string] : stacks;
+    const targets = ctx.args.stack ? [ctx.args.stack] : stacks;
     for (const target of targets) {
       if (ctx.signal.aborted) return;
       await inspect(target);
@@ -916,7 +923,7 @@ Options:
   -h, --help               Show help for this command
 ```
 
-タブ補完はツール自身のプロンプトで動きます。位置引数の候補は `.complete(...)` が、`--region` の値は `autocomplete` が供給します。
+タブ補完はツール自身のプロンプトで動きます。位置引数の候補は `.completer(...)` が、`--region` の値はオプションの `completer` が供給します。
 
 ```text
 infra> plan a<TAB>
@@ -995,10 +1002,10 @@ try {
 この書き方でテストを書くときに効いてくる点が 3 つあります。
 
 - `exec` の下では `ctx.shell` が `null` になるため、モードを開くコマンドはガードが必要です。テスト対象になるのはモードではなくガードのほうです。
-- `exec` は通常の経路で `exit` イベントを発火しません。発火するのは `start()` だけです。`exit` を検証するテストには `start(argv)` が必要です。
-- `createColorizer`、ロガー、`progress` の色付けは、それぞれが結び付けられたストリームから判定されます。`PassThrough` は端末ではないため、その出力はプレーンになります。`color` と `c` は代わりに `process.stdout` に従います。エスケープシーケンスそのものを検証したい場合は `setColorEnabled(true)` を呼び、終わったら `resetColorEnabled()` を呼んでください。
+- `exec` は通常の経路で `exit` イベントを発火しません。発火するのは `cli.start(argv)` だけで、これは終了コードで解決されます。`exit` を検証するテストには `start(argv)` が必要です。
+- `createColorizer`、ロガー、`progress` の色付けは、それぞれが結び付けられたストリームから判定されます。`PassThrough` は端末ではないため、その出力はプレーンになります。`color` と `c` は代わりに `process.stdout` に従います。エスケープシーケンスそのものを検証したい場合は `setColorEnabled(true)` を呼び、終わったら `setColorEnabled("auto")` を呼んでください。
 
-テストごとに新しい `CLI` を作れば、登録内容がケース間で漏れることはありません。`start()` は同じインスタンスで 2 回呼ぶと例外を投げます。
+テストごとに新しい `CLI` を作れば、登録内容がケース間で漏れることはありません。`cli.start(argv)` は同じインスタンスで 2 回呼ぶと例外を投げます。
 
 ## 次に読むもの
 

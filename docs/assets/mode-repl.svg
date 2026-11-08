@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 546" width="960" height="546" role="img" aria-labelledby="ttl dsc">
   <title id="ttl">The mode sub-REPL</title>
-  <desc id="dsc">A two-state diagram. On the left, the main shell with its "&gt;" prompt reads a line, matches it against the command registry and runs it. On the right, a mode with its own prompt reads a line, awaits your action(input, ctx) and repeats — the input never reaches the router. ctx.shell.enterMode({ prompt, action }) moves from the shell into the mode and prints the optional message once; exit, quit, Ctrl+D or ctx.shell.exitMode() returns. Four notes cover exit and quit always winning inside a mode, session-only in-memory history, tab completion being off without a completer, and Ctrl+C aborting the action's signal with a second press force-quitting. A closing band states that the mode context carries only stdout, stderr and signal.</desc>
+  <desc id="dsc">A two-state diagram. On the left, the main shell with its "&gt;" prompt reads a line, matches it against the command registry and runs it. On the right, a mode with its own prompt reads a line, awaits your action(input, ctx) and repeats — the input never reaches the router. ctx.shell.enterMode({ prompt, action }) moves from the shell into the mode and prints the optional banner once; exit, quit, Ctrl+D or ctx.shell.exitMode() returns. Four notes cover exit and quit always winning inside a mode, session-only in-memory history, tab completion being off without a completer, and Ctrl+C aborting the action's signal with a second press force-quitting. A closing band states that the mode context carries only stdout, stderr and signal.</desc>
 
   <style>
     .bg    { fill:#f6f8fa }
@@ -74,7 +74,7 @@
   <text class="mono" x="352" y="92">ctx.shell.enterMode({</text>
   <text class="mono" x="352" y="104">  prompt, action })</text>
   <path class="ln" d="M 342 118 H 556" marker-end="url(#a)"/>
-  <text class="s" x="352" y="140"><tspan class="monod">message</tspan> is printed</text>
+  <text class="s" x="352" y="140"><tspan class="monod">banner</tspan> is printed</text>
   <text class="s" x="352" y="154">once on entry</text>
 
   <!-- B -> A -->

@@ -53,7 +53,7 @@ routing works in the interactive shell and in tests.
 | `remove()` | Unregisters the command | `true` if removed | Returns `false` |
 
 A completer receives a `CompletionContext` and returns candidates for
-`ctx.current`, either as an array or as a promise of one:
+`ctx.current`, either as a readonly array or as a promise of one:
 
 ```typescript
 cli
@@ -91,9 +91,13 @@ Four bracket forms are recognized:
 | Token | Meaning | Value in `ctx.args` |
 |---|---|---|
 | `<name>` | Required, exactly one value | `string` |
-| `[name]` | Optional, at most one value | `string`, or the key is absent |
-| `<...name>` | Required variadic — one or more values | `string[]`, never empty |
-| `[...name]` | Optional variadic — zero or more values | `string[]`, possibly empty |
+| `[name]` | Optional, at most one value | `string \| undefined`; the key is absent when omitted |
+| `<...name>` | Required variadic — one or more values | `readonly string[]`, never empty |
+| `[...name]` | Optional variadic — zero or more values | `readonly string[]`, possibly empty |
+
+When the specification is a string literal, `ctx.args` is typed from it, so no
+cast is needed. A specification held in a `string` variable leaves `ctx.args` as
+`Record<string, unknown>`.
 
 *Variadic* means the argument collects every remaining value into an array
 instead of taking exactly one. See the [glossary](glossary.md).
@@ -102,8 +106,8 @@ instead of taking exactly one. See the [glossary](glossary.md).
 
 ```typescript
 cli.command("copy <source> [dest]").action((ctx) => {
-  const source = ctx.args.source as string;
-  const dest = (ctx.args.dest as string | undefined) ?? ".";
+  const source = ctx.args.source;
+  const dest = ctx.args.dest ?? ".";
   ctx.stdout.write(`${source} -> ${dest}\n`);
 });
 ```
@@ -119,7 +123,7 @@ With a variadic argument the last row behaves differently:
 
 ```typescript
 cli.command("copy <...files>").action((ctx) => {
-  const files = ctx.args.files as string[];
+  const files = ctx.args.files;
   ctx.stdout.write(`${files.length} file(s)\n`);
 });
 ```
@@ -159,15 +163,16 @@ positional arguments.
 ## Positional arguments at runtime
 
 `ctx.args` holds the positional arguments, keyed by the names from the
-specification string. Four rules describe every value it can hold.
+specification string. Its members are readonly. Four rules describe every value
+it can hold.
 
 **Values are always strings.** A non-variadic argument is a `string`; a variadic
-argument is a `string[]`. No conversion is applied, so a numeric argument must be
+argument is a `readonly string[]`. No conversion is applied, so a numeric argument must be
 converted in the action:
 
 ```typescript
 cli.command("wait <seconds>").action((ctx) => {
-  const seconds = Number(ctx.args.seconds as string);
+  const seconds = Number(ctx.args.seconds);
   if (!Number.isFinite(seconds)) throw new Error("seconds must be a number");
   ctx.stdout.write(`waiting ${seconds}s\n`);
 });
@@ -228,7 +233,7 @@ A group has no action, so it cannot run. It behaves as follows:
 - With no extra input (`myapp db`) it prints its own help page, listing its
   subcommands.
 - With extra input (`myapp db bogus`) it reports an unknown command. If a
-  fallback handler is registered with `cli.catch()`, that handler receives the
+  fallback handler is registered with `cli.fallback()`, that handler receives the
   input instead; otherwise a `CommandNotFoundError` is thrown, carrying the list
   of available subcommands.
 
@@ -312,8 +317,8 @@ An alias is resolved to the real command name before the action runs, so
 
 Aliases are checked when they are registered. Adding an alias that collides with
 a sibling command's name, or with an alias another sibling already claims,
-throws an `Error` with `code: "ERR_DEFINITION_CONFLICT"`. A real command always wins over an alias of the same name, so an alias
-can never shadow a command.
+throws an `Error` with `code: "ERR_DEFINITION_CONFLICT"`. A real command always
+wins over an alias of the same name, so an alias can never shadow a command.
 
 ## Hidden commands
 
@@ -351,7 +356,7 @@ The function may be asynchronous, and it is awaited:
 
 ```typescript
 cli.command("deploy <env>").validate(async (ctx) => {
-  const exists = await environmentExists(ctx.args.env as string);
+  const exists = await environmentExists(ctx.args.env);
   if (!exists) throw new Error("Environment not found");
 });
 ```
@@ -384,10 +389,13 @@ any abort-aware API so the work itself stops:
 
 ```typescript
 cli.command("fetch <url>").action(async (ctx) => {
-  const res = await fetch(ctx.args.url as string, { signal: ctx.signal });
+  const res = await fetch(ctx.args.url, { signal: ctx.signal });
   ctx.stdout.write(await res.text());
 });
 ```
+
+An action that catches errors can tell a cancellation from a failure with
+`isCancellationError(err, ctx.signal)`; see [Errors](errors.md).
 
 Cancellation is cooperative: aborting the signal and calling the cancel handler
 asks the command to stop, and the command is expected to do so on its own.
@@ -396,7 +404,7 @@ Nothing forcibly unwinds a running action.
 At a terminal there is an escape hatch for a command that ignores the request: a
 second Ctrl+C terminates the process with exit status 130. That escalation
 belongs to the interrupt path only. When the signal comes from an
-`ExecOptions.signal` passed to `cli.exec()`, there is no second press and no
+`signal` passed to `cli.exec()`, there is no second press and no
 forced exit — a command that ignores the abort runs to completion.
 
 ## Removing a command
@@ -443,15 +451,17 @@ rethrown. Events are described in
 
 ### The command context
 
-Every action, validator, and cancel handler receives the same context object:
+Every action, validator, and cancel handler receives the same context object.
+`args` and `options` are typed from the command definition and the `.option()`
+calls that precede the handler (see [Typed options](options.md#typed-options)):
 
 | Property | Type | Description |
 |---|---|---|
-| `args` | `Record<string, unknown>` | Positional arguments by name; null-prototype |
-| `options` | `Record<string, unknown>` | Resolved options by canonical long name; null-prototype |
+| `args` | typed from the definition string | Positional arguments by name; readonly, null-prototype |
+| `options` | typed from the option schemas | Resolved options by canonical long name; readonly, null-prototype |
 | `rawInput` | `string` | The input as one string |
-| `rawArgv` | `string[] \| undefined` | The exact input elements, when the input was an array |
-| `commandPath` | `string[]` | The canonical path, for example `["db", "migrate"]` |
+| `rawArgv` | `readonly string[] \| null` | The exact input elements, when the input was an array; otherwise `null` |
+| `commandPath` | `readonly string[]` | The canonical path, for example `["db", "migrate"]` |
 | `shell` | `Shell \| null` | The interactive shell, or `null` |
 | `signal` | `AbortSignal` | Aborted when the command is cancelled |
 | `stdin` | `Readable \| null` | Input stream, or `null` when none is available |
@@ -464,7 +474,7 @@ Three of these need care:
   command-line words the operating system hands the program — `rawInput` is
   those elements joined with single spaces, so quoting and embedded spaces are
   no longer distinguishable. Use `rawArgv` when the exact values matter.
-  `rawArgv` is present only for array input, and is `undefined` for the string
+  `rawArgv` is set only for array input, and is `null` for the string
   input used by `cli.exec()` and by the interactive shell.
 - **`shell` is non-null only inside the interactive shell.** It is `null` in
   direct mode and under `cli.exec()`.
@@ -518,6 +528,6 @@ in the help index like any other, sorted last.
 
 - [Options](options.md) — flags, types, defaults, and the input forms they accept
 - [Errors](errors.md) — the error classes raised by dispatch and validation
-- [Events and plugins](events-and-plugins.md) — lifecycle events, `cli.catch()`, and plugins
+- [Events and plugins](events-and-plugins.md) — lifecycle events, `cli.fallback()`, and plugins
 - [Interactive shell](interactive-shell.md) — the REPL, pipes, and tab completion
 - [API reference](api-reference.md) — full signatures

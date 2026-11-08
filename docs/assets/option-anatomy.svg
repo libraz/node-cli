@@ -95,7 +95,7 @@
   <text class="monod" x="722" y="198">type, alias, required,</text>
   <text class="monod" x="722" y="212">default, choices, parse,</text>
   <text class="monod" x="722" y="226">validate, description,</text>
-  <text class="monod" x="722" y="240">hidden, autocomplete</text>
+  <text class="monod" x="722" y="240">hidden, completer</text>
 
   <!-- ============ bottom panel: accepted forms ============ -->
   <rect class="grp" x="24" y="272" width="912" height="268" rx="10"/>

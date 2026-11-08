@@ -18,7 +18,7 @@ console.log(name, sure, env);
 
 1回の呼び出しで1つの答えを読み取り、受け入れられる入力が来るまで質問を繰り返します。質問は既定で `process.stderr` へ書き、答えは `process.stdin` から読みます。
 
-質問を stderr に書くので、`mycli init | jq` のようにパイプしてもプロンプトの文字列は流れ込みません。1.x のように stdout へ出したいときは `{ stderr: process.stdout }` を渡します。stderr をリダイレクトした場合（`2>log`）は、質問が端末に表示されません。
+質問を stderr に書くので、`mycli init | jq` のようにパイプしてもプロンプトの文字列は流れ込みません。stdout へ出したいときは `{ stderr: process.stdout }` を渡します。stderr をリダイレクトした場合（`2>log`）は、質問が端末に表示されません。
 
 ### コマンドの中で
 
@@ -204,17 +204,18 @@ const region = await prompt.select("Region:", [
 ```ts
 import { isCancellationError, prompt } from "@libraz/node-cli";
 
-try {
-  const name = await prompt.text("Your name:");
-  console.log(`Hello, ${name}`);
-} catch (err) {
-  if (isCancellationError(err)) {
-    console.error("Cancelled.");
-    process.exitCode = 130;
-  } else {
+cli.command("greet").action(async (ctx) => {
+  try {
+    const name = await prompt.text("Your name:", ctx);
+    ctx.stdout.write(`Hello, ${name}\n`);
+  } catch (err) {
+    if (isCancellationError(err, ctx.signal)) {
+      ctx.stderr.write("Cancelled.\n");
+      return;
+    }
     throw err;
   }
-}
+});
 ```
 
 `AbortSignal` を渡すと、プロンプトに制限時間や外部からの中止ボタンを与えられます。
@@ -257,7 +258,7 @@ const answer = await prompt.text("Quick — a word:", {
 - **`text` は既定で必須です。** 空の答えを受け入れるには `default: ""` を渡します。
 - **`password` に `default` はありません。**
 - **既定値の照合は参照ベースです。** 深い等価ではなく `Object.is` を使います。
-- **質問は stderr に出ます。** 1.x の挙動に戻すには `{ stderr: process.stdout }` を渡します。
+- **質問は stderr に出ます。** stdout に出したいときは `{ stderr: process.stdout }` を渡します。
 - **`required` があるのは `text` と `password` だけです。**
 - **選択の番号は 1 始まりです。** `multiselect` の答えに含まれる重複は、`min` と `max` の判定前にまとめられます。
 - **キャンセルは `null` の結果ではなく例外です。** 答えを作れないプロンプトの経路は、どれも `PromptCancelError` を投げます。

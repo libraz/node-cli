@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 546" width="960" height="546" role="img" aria-labelledby="ttl dsc">
   <title id="ttl">モードのサブ REPL</title>
-  <desc id="dsc">2 つの状態を並べた図です。左のメインシェルは「&gt;」のプロンプトで行を読み、レジストリと突き合わせてコマンドを実行します。右のモードは独自のプロンプトで行を読み、登録した action(input, ctx) を待って繰り返します。入力はルーターに届きません。ctx.shell.enterMode({ prompt, action }) でシェルからモードへ移り、message は入場時に一度だけ表示されます。戻るのは exit・quit・Ctrl+D・ctx.shell.exitMode() です。モードの中では exit と quit が常に優先されること、履歴はセッション内のメモリだけであること、completer が無ければタブ補完が無効であること、Ctrl+C がアクションの signal を中断し 2 回目で強制終了することを併記し、最後にモードの ctx が stdout・stderr・signal だけであることを示しています。</desc>
+  <desc id="dsc">2 つの状態を並べた図です。左のメインシェルは「&gt;」のプロンプトで行を読み、レジストリと突き合わせてコマンドを実行します。右のモードは独自のプロンプトで行を読み、登録した action(input, ctx) を待って繰り返します。入力はルーターに届きません。ctx.shell.enterMode({ prompt, action }) でシェルからモードへ移り、banner は入場時に一度だけ表示されます。戻るのは exit・quit・Ctrl+D・ctx.shell.exitMode() です。モードの中では exit と quit が常に優先されること、履歴はセッション内のメモリだけであること、completer が無ければタブ補完が無効であること、Ctrl+C がアクションの signal を中断し 2 回目で強制終了することを併記し、最後にモードの ctx が stdout・stderr・signal だけであることを示しています。</desc>
 
   <style>
     .bg    { fill:#f6f8fa }
@@ -74,7 +74,7 @@
   <text class="mono" x="352" y="92">ctx.shell.enterMode({</text>
   <text class="mono" x="352" y="104">  prompt, action })</text>
   <path class="ln" d="M 342 118 H 556" marker-end="url(#a)"/>
-  <text class="s" x="352" y="140"><tspan class="monod">message</tspan> は入場時に</text>
+  <text class="s" x="352" y="140"><tspan class="monod">banner</tspan> は入場時に</text>
   <text class="s" x="352" y="154">一度だけ表示されます</text>
 
   <!-- B から A へ -->

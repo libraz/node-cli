@@ -1,0 +1,122 @@
+[
+  { "name": "new CLI", "scope": "docs", "patterns": ["new CLI\\("] },
+  { "name": "CLI value export", "scope": "exports", "patterns": ["export \\{[^}]*\\bCLI\\b"] },
+  { "name": "logger()", "scope": "both", "patterns": ["\\blogger\\("] },
+  {
+    "name": "CLI setters",
+    "scope": "docs",
+    "patterns": [
+      "\\bcli\\.(prompt|description|banner|history|historySize|historyFilter)\\(",
+      "^\\s*\\.(banner|history|historySize|historyFilter)\\(",
+      "`(banner|history|historySize|historyFilter)\\("
+    ]
+  },
+  {
+    "name": ".complete( / .cancel(",
+    "scope": "docs",
+    "patterns": ["\\)\\s*\\.(complete|cancel)\\(", "^\\s*\\.(complete|cancel)\\("]
+  },
+  { "name": "autocomplete", "scope": "docs", "patterns": ["\\bautocomplete\\b"] },
+  {
+    "name": "catch",
+    "scope": "both",
+    "patterns": [
+      "\\bcli\\.catch\\(",
+      "\\.catch\\(\\s*(async\\s*)?\\(\\s*\\w+\\s*,",
+      "\\bCatchContext\\b"
+    ]
+  },
+  {
+    "name": "CompletionResult and tuple mode completer",
+    "scope": "both",
+    "patterns": ["\\bCompletionResult\\b", "completer:\\s*(async\\s*)?\\(\\s*line\\b"]
+  },
+  {
+    "name": "ModeConfig.message",
+    "scope": "docs",
+    "patterns": ["^\\s*message\\s*:\\s*(c`|[\"'])"],
+    "files": ["^docs/[a-z]+/interactive-shell\\.md$", "^examples/"]
+  },
+  {
+    "name": "names removed from the root",
+    "scope": "both",
+    "patterns": [
+      "\\b(stripOptionPrefix|splitPipes|activePipeSegment|maskInput|restoreCursor|resetColorEnabled|TableStyle|PromptBaseOptions|ExecOptions)\\b"
+    ]
+  },
+  {
+    "name": "top-level releaseAll",
+    "scope": "docs",
+    "patterns": ["import \\{[^}]*\\breleaseAll\\b"]
+  },
+  {
+    "name": "old progress API",
+    "scope": "docs",
+    "patterns": [
+      "\\.finish\\(\\)",
+      "\\bspinner\\w*\\.start\\(\\)",
+      "`start\\(\\)`",
+      "\\bspinner\\w*\\.update\\(",
+      "`update\\(label"
+    ]
+  },
+  { "name": "interval", "scope": "docs", "patterns": ["\\binterval\\s*:", "`interval`"] },
+  {
+    "name": "old BarState fields",
+    "scope": "docs",
+    "patterns": [
+      "\\b(state|s)\\.(elapsed|eta|rate)\\b",
+      "`(elapsed|eta|rate)`",
+      "\\b(elapsed|eta|rate): number"
+    ]
+  },
+  {
+    "name": "MultiBar.add per-bar stream",
+    "scope": "docs",
+    "patterns": ["\\.add\\(\\{[^}]*\\bstream\\s*:"]
+  },
+  {
+    "name": "prompt prefix and stdout",
+    "scope": "docs",
+    "patterns": ["prompt\\.\\w+\\(.*\\b(prefix|stdout)\\s*:", "^\\s*\\{\\s*stdout:\\s*ctx\\.stdout"]
+  },
+  {
+    "name": "prompt prefix and stdout in prompts.md",
+    "scope": "docs",
+    "patterns": ["`(prefix|stdout)`"],
+    "files": ["^docs/[a-z]+/prompts\\.md$"]
+  },
+  {
+    "name": "old table options",
+    "scope": "docs",
+    "patterns": [
+      "\\b(colAligns|colWidths|headerLabels)\\b",
+      "\"padding-(left|right)\"",
+      "\\btruncate\\s*:",
+      "\\bstyle\\s*:\\s*\\{",
+      "\\bhead\\s*:",
+      "\\bcompact\\s*:",
+      "`padding`",
+      "\\balign\\s*:\\s*\\{",
+      "\\bmaxWidth\\s*:\\s*\\{",
+      "[\"`](top|bottom|left|right)-(left|right|mid)[\"`]",
+      "[\"`]mid-mid[\"`]",
+      "\\bmiddle\\s*:"
+    ]
+  },
+  {
+    "name": "positional CLIError constructor",
+    "scope": "docs",
+    "patterns": ["super\\(\\s*\\w+,\\s*\"[A-Z_]+\"", "code: CLIErrorCode, exitCode"]
+  },
+  {
+    "name": "old cancellation API",
+    "scope": "docs",
+    "patterns": ["isCancellationError\\(\\s*\\w+\\s*\\)", "formatErrorMessage\\([^)]*signal"]
+  },
+  {
+    "name": "old start signature",
+    "scope": "docs",
+    "patterns": ["start\\(argv\\?: string\\[\\]\\): Promise<void>"]
+  }
+]

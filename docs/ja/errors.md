@@ -40,7 +40,7 @@ mycli>
 | クラス | `code` | `exitCode` | 追加フィールド | 投げられる場面 |
 |---|---|---|---|---|
 | `CLIError(message, { code, exitCode?, cause? })` | 指定どおり | `1` | `code`, `exitCode`, `cause?` | 基底クラス。サブクラス化して差し支えありません |
-| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | `catch` ハンドラがない状態で認識できない入力が来たとき、コマンドグループに未知の子コマンドが指定されたとき、`help <unknown>` を実行したとき |
+| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | `fallback` ハンドラがない状態で認識できない入力が来たとき、コマンドグループに未知の子コマンドが指定されたとき、`help <unknown>` を実行したとき |
 | `MissingArgumentError(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `1` | `argName`, `usage?` | 必須の位置引数がないとき。値が 1 つもない必須の可変長引数は `...name` として報告されます |
 | `ExtraArgumentError(extras, { cause? })` | `EXTRA_ARGUMENT` | `1` | `extras`, `extra`（先頭の 1 件） | コマンドの引数を埋めたあとに位置引数の値が余ったとき |
 | `MissingOptionError(optionName, { cause? })` | `MISSING_OPTION` | `1` | `optionName` | `required: true` を宣言したオプションがないとき |

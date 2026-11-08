@@ -42,7 +42,7 @@ cli
   .description("Greet someone")
   .option("-u, --uppercase", { type: "boolean" })
   .action((ctx) => {
-    const name = ctx.args.name as string;
+    const { name } = ctx.args;
     ctx.stdout.write(`Hello, ${ctx.options.uppercase ? name.toUpperCase() : name}!\n`);
   });
 

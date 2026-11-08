@@ -73,6 +73,10 @@ Names — the long name and every alias — must match
 `/^[A-Za-z0-9][A-Za-z0-9-]*$/`: start with a letter or digit, then letters,
 digits, or hyphens.
 
+A `<number>` placeholder requires `type: "number"` or `"number[]"`, and a
+`<boolean>` placeholder requires `type: "boolean"`; any other combination throws.
+Any other placeholder name, such as `<n>` or `<tag>`, is free text.
+
 The placeholder only sets the *inferred* type when the schema does not state one.
 Once the type is settled, that type alone decides whether the option consumes a
 value. `.option("--name", { type: "string" })` has no placeholder yet still
@@ -101,6 +105,10 @@ cli
 | `validate` | `(value: unknown, ctx) => void` | — | Rejects a resolved value by throwing |
 | `hidden` | `boolean` | `false` | Excludes the option from help and completion |
 | `completer` | `readonly string[] \| Completer` | — | Value candidates for tab completion, as a fixed list or a function of the `CompletionContext`; takes precedence over `choices` |
+
+A malformed flags string or an invalid schema throws an `Error` with
+`code: "ERR_INVALID_DEFINITION"` when `.option()` runs. A name or alias already
+used by another option on the same command throws `ERR_DEFINITION_CONFLICT`.
 
 Aliases from `alias` are merged with those in the specification string, so
 `.option("--port <n>", { alias: "p" })` and `.option("-p, --port <n>")` declare

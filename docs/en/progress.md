@@ -96,7 +96,7 @@ Non-finite values passed to `update` or `tick` are ignored, and every value is c
 
 ## `progress.spinner(options?)`
 
-Creates an animated indicator for work whose duration is unknown. On a terminal the spinner claims its stream and starts animating before `spinner()` returns; there is no `start()`.
+Creates an animated indicator for work whose duration is unknown. On a terminal the spinner claims its stream and starts animating before `spinner()` returns.
 
 ### `SpinnerOptions`
 

@@ -11,7 +11,7 @@
  *   npx tsx examples/04-output-showcase.ts spinner
  *   npx tsx examples/04-output-showcase.ts logger
  */
-import { createCLI, createColorizer, logger, progress, table } from "../src/index.js";
+import { createCLI, createColorizer, createLogger, progress, table } from "../src/index.js";
 
 const cli = createCLI({ name: "showcase" });
 
@@ -58,7 +58,12 @@ cli
       table(users, {
         border: ctx.options.border as "none" | "simple" | "rounded",
         headerStyle: "bold",
-        align: { active: "center" },
+        columns: [
+          { key: "name" },
+          { key: "role" },
+          { key: "email" },
+          { key: "active", align: "center" },
+        ],
       }),
     );
     ctx.stdout.write("\n\n");
@@ -89,21 +94,21 @@ cli
       total: 50,
       label: "Processing",
       color: "green",
-      stream: ctx.stdout,
+      stream: ctx.stderr,
     });
 
     for (let i = 0; i <= 50; i++) {
       bar.update(i);
       await sleep(30);
     }
-    bar.finish();
+    bar.succeed("Processed 50 items");
 
     ctx.stdout.write("\n=== Multi Bar ===\n");
-    const multi = progress.multi();
+    const multi = progress.multi({ stream: ctx.stderr });
     const bars = [
-      multi.add({ total: 40, label: "File 1", color: "cyan", stream: ctx.stdout }),
-      multi.add({ total: 60, label: "File 2", color: "yellow", stream: ctx.stdout }),
-      multi.add({ total: 30, label: "File 3", color: "magenta", stream: ctx.stdout }),
+      multi.add({ total: 40, label: "File 1", color: "cyan" }),
+      multi.add({ total: 60, label: "File 2", color: "yellow" }),
+      multi.add({ total: 30, label: "File 3", color: "magenta" }),
     ];
 
     for (let i = 0; i <= 60; i++) {
@@ -112,7 +117,7 @@ cli
       if (i <= 30) bars[2].update(i);
       await sleep(30);
     }
-    multi.finish();
+    multi.succeed("All files processed");
   });
 
 // ── Spinner demo ──
@@ -124,31 +129,28 @@ cli
     const spinner = progress.spinner({
       label: "Installing dependencies...",
       color: "cyan",
-      stream: ctx.stdout,
+      stream: ctx.stderr,
     });
 
-    spinner.start();
     await sleep(1500);
-    spinner.update("Compiling TypeScript...");
+    spinner.setLabel("Compiling TypeScript...");
     await sleep(1500);
-    spinner.update("Running tests...");
+    spinner.setLabel("Running tests...");
     await sleep(1000);
     spinner.succeed("Build complete!");
 
     const spinner2 = progress.spinner({
       label: "Deploying to production...",
       color: "yellow",
-      stream: ctx.stdout,
+      stream: ctx.stderr,
     });
-    spinner2.start();
     await sleep(1500);
     spinner2.fail("Deployment failed: timeout");
 
     const spinner3 = progress.spinner({
       label: "Checking disk space...",
-      stream: ctx.stdout,
+      stream: ctx.stderr,
     });
-    spinner3.start();
     await sleep(1000);
     spinner3.warn("Disk usage above 80%");
   });
@@ -164,7 +166,7 @@ cli
     default: "debug",
   })
   .action((ctx) => {
-    const log = logger({
+    const log = createLogger({
       level: ctx.options.level as "debug" | "info" | "warn" | "error",
       prefix: "app",
       timestamp: true,

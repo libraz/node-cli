@@ -56,7 +56,7 @@ The prompt the tool opens inside itself when it is started with no arguments in 
 
 ### Mode (sub-REPL)
 
-A temporary state the interactive shell can be pushed into, in which every line typed goes to one handler instead of being parsed as a command. A `sql` command might enter a mode where each line is a query, with its own prompt string, its own completion, and its own in-memory history that is never written to disk. A mode is entered from a command through `ctx.shell`, and exited to return to the normal prompt. See [Interactive shell](interactive-shell.md).
+A temporary state the interactive shell can be pushed into, in which every line typed goes to one handler instead of being parsed as a command. A `sql` command might enter a mode where each line is a query, with its own prompt string, its own `completer`, and its own in-memory history that is never written to disk. A mode is entered from a command through `ctx.shell`, and exited to return to the normal prompt. See [Interactive shell](interactive-shell.md).
 
 ### Option
 
@@ -64,7 +64,7 @@ A named input written with a leading dash, supplied in any order: `--port 8080`,
 
 ### Option schema
 
-The object describing one option's behaviour: its `type` (`string`, `number`, `boolean`, or an array form), short `alias` names, whether it is `required`, its `default`, the `choices` it is restricted to, a custom `parse` function, a custom `validate` function, whether it is `hidden` from help, and its completion candidates. It is the second argument to `.option()`, and everything the library knows about the option — including how it is rendered in help — comes from it. See [Options](options.md).
+The object describing one option's behaviour: its `type` (`string`, `number`, `boolean`, or an array form), short `alias` names, whether it is `required`, its `default`, the `choices` it is restricted to, a custom `parse` function, a custom `validate` function, whether it is `hidden` from help, and its `completer`, the candidates offered for completion. It is the second argument to `.option()`, and everything the library knows about the option — including how it is rendered in help — comes from it. See [Options](options.md).
 
 ### Pipe
 
@@ -76,11 +76,11 @@ A function that receives a context object and uses it to register commands, even
 
 ### Prompt (input function)
 
-`prompt` is an exported object whose methods ask the user a question and resolve with the answer: `prompt.text()`, `prompt.confirm()`, `prompt.select()`, `prompt.multiselect()`, and `prompt.password()`. These are used from inside a command action, and they need a terminal to read from. Not to be confused with the prompt string below. See [Prompts](prompts.md).
+`prompt` is an exported object whose methods ask the user a question and resolve with the answer: `prompt.text()`, `prompt.confirm()`, `prompt.select()`, `prompt.multiselect()`, and `prompt.password()`. These are used from inside a command action, and they need a terminal to read from. They write the question to standard error by default, so passing the command context, as in `prompt.text("Name?", ctx)`, routes the question and the input through the command's own streams. Not to be confused with the prompt string below. See [Prompts](prompts.md).
 
 ### Prompt (string)
 
-The characters printed at the start of each input line in the interactive shell, marking where typing begins. It defaults to `"> "` and is configured with the `prompt` option of `createCLI()` or with `cli.prompt()`. A mode can substitute its own prompt string while it is active. Not to be confused with the prompt input functions above. See [Interactive shell](interactive-shell.md).
+The characters printed at the start of each input line in the interactive shell, marking where typing begins. It defaults to `"> "` and is configured with the `prompt` option of `createCLI()`. A mode can substitute its own prompt string while it is active. Not to be confused with the prompt input functions above. See [Interactive shell](interactive-shell.md).
 
 ### REPL
 
@@ -96,7 +96,7 @@ Signals an operating system sends to a running process. SIGINT is what Ctrl-C se
 
 ### stderr
 
-Standard error: the second output stream every process has, conventionally used for diagnostics, warnings, and error messages. It is separate from standard output so that `myapp export > data.json` captures the data while log lines still reach the terminal. A command writes to it through `ctx.stderr`, and `logger()` uses it by default. See [Logging](logging.md).
+Standard error: the second output stream every process has, conventionally used for diagnostics, warnings, and error messages. It is separate from standard output so that `myapp export > data.json` captures the data while log lines still reach the terminal. A command writes to it through `ctx.stderr`, and `createLogger()` uses it by default. See [Logging](logging.md).
 
 ### stdin
 
@@ -112,7 +112,7 @@ A command nested under another command, so it is invoked by naming both: `myapp 
 
 ### Tab completion
 
-Pressing the Tab key to have the tool fill in or suggest the rest of what is being typed. Inside the interactive shell this completes command names, subcommands, option flags, and option values, using candidates the option schema or a `.complete()` handler supplies. It works only at the tool's own prompt: the library does not generate completion scripts for bash, zsh, or fish, so Tab at a system shell prompt still completes filenames. See [Interactive shell](interactive-shell.md).
+Pressing the Tab key to have the tool fill in or suggest the rest of what is being typed. Inside the interactive shell this completes command names, subcommands, option flags, and option values, using candidates the option schema's `completer` or a command's `.completer()` supplies. It works only at the tool's own prompt: the library does not generate completion scripts for bash, zsh, or fish, so Tab at a system shell prompt still completes filenames. See [Interactive shell](interactive-shell.md).
 
 ### TTY
 

@@ -18,7 +18,7 @@ console.log(name, sure, env);
 
 Each call reads one answer, re-asking until the input is acceptable. Questions are written to `process.stderr` and answers are read from `process.stdin` by default.
 
-Writing the question to stderr keeps `mycli init | jq` from receiving prompt text. To send questions to stdout as 1.x did, pass `{ stderr: process.stdout }`. If stderr is redirected (`2>log`), the question is not visible on the terminal.
+Writing the question to stderr keeps `mycli init | jq` from receiving prompt text. To send questions to stdout, pass `{ stderr: process.stdout }`. If stderr is redirected (`2>log`), the question is not visible on the terminal.
 
 ### Inside a command
 
@@ -35,7 +35,7 @@ In tests, `exec()` runs with no stdin unless one is supplied, so give it one whe
 
 ### Finish indicators before prompting
 
-A [spinner or bar](progress.md) draws on stderr, the same stream a prompt now uses. End it (`stop()`, `succeed()` and so on) before asking, or the question line is interleaved with the animation frames.
+A [spinner or bar](progress.md) draws on stderr, the same stream a prompt uses. End it (`stop()`, `succeed()` and so on) before asking, or the question line is interleaved with the animation frames.
 
 ## What the object contains
 
@@ -204,17 +204,18 @@ Detect it with `isCancellationError`:
 ```ts
 import { isCancellationError, prompt } from "@libraz/node-cli";
 
-try {
-  const name = await prompt.text("Your name:");
-  console.log(`Hello, ${name}`);
-} catch (err) {
-  if (isCancellationError(err)) {
-    console.error("Cancelled.");
-    process.exitCode = 130;
-  } else {
+cli.command("greet").action(async (ctx) => {
+  try {
+    const name = await prompt.text("Your name:", ctx);
+    ctx.stdout.write(`Hello, ${name}\n`);
+  } catch (err) {
+    if (isCancellationError(err, ctx.signal)) {
+      ctx.stderr.write("Cancelled.\n");
+      return;
+    }
     throw err;
   }
-}
+});
 ```
 
 An `AbortSignal` gives a prompt a deadline or an external cancel button:
@@ -257,7 +258,7 @@ In the [interactive shell](interactive-shell.md), `ctx.stdin` is `null` for a co
 - **`text` is required by default.** Pass `default: ""` to accept an empty answer.
 - **`password` has no `default`.**
 - **Default matching is reference-based.** `Object.is`, not deep equality.
-- **Questions go to stderr.** Pass `{ stderr: process.stdout }` for the 1.x behavior.
+- **Questions go to stderr.** Pass `{ stderr: process.stdout }` to write them to stdout.
 - **`required` exists on `text` and `password` only.**
 - **Selection numbers are 1-based**, and duplicates in a `multiselect` answer are collapsed before `min` and `max` are checked.
 - **Cancellation is an exception, not a `null` result.** Every prompt path that cannot produce an answer throws `PromptCancelError`.

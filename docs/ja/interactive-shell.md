@@ -6,14 +6,14 @@
 
 ## シェルが起動する条件
 
-`cli.start()` は 2 つのモードのどちらかを選びます。
+`cli.start()` は 2 つのモードのどちらかを選びます。終了コードで解決し、同じ値を `process.exitCode` にも設定します。
 
 - **直接実行モード** — コマンドライン引数が 1 つ以上渡された場合。引数は 1 つのコマンドとして実行され、プロセスは終了します。
 - **対話シェル** — 引数が**1 つもない**こと、そして標準入力ストリームと標準出力ストリームが**どちらも端末である**ことが条件です。
 
 端末（TTY）とは、実際に対話できるコンソールのことです。シェルのウィンドウからプログラムを起動したときは、入力も出力も端末になります。どちらか一方でもファイルや別のプログラムにつながっていれば、端末ではありません。
 
-引数がなく、かつどちらかのストリームが端末でない場合、シェルは起動しません。ヘルプ一覧を表示して `start()` は戻ります。最初につまずきやすいのがこの挙動です。
+引数がなく、かつどちらかのストリームが端末でない場合、シェルは起動しません。ヘルプ一覧を表示して `cli.start()` は解決します。最初につまずきやすいのがこの挙動です。
 
 ```
 mycli            # both streams are terminals -> interactive shell
@@ -39,13 +39,13 @@ cli
 await cli.start();
 ```
 
-`start()` は `CLI` インスタンスごとに 1 度しか呼べません。2 度目の呼び出しは例外を投げます。
+`cli.start()` は `CLI` インスタンスごとに 1 度しか呼べません。2 度目の呼び出しは、コード `ERR_ALREADY_STARTED` の `Error` を投げます。
 
 ## バナーとプロンプト
 
-バナーは、シェルの起動時に一度だけ表示される行です。`banner` オプションか `banner()` メソッドで設定します。設定しない場合はアプリケーション名が表示され、バージョンを設定してあれば続けて `v` とバージョンが付きます。空文字列を渡すと表示を抑止できます。
+バナーは、シェルの起動時に一度だけ表示される行です。`createCLI` の `banner` オプションで設定します。設定しない場合はアプリケーション名が表示され、バージョンを設定してあれば続けて `v` とバージョンが付きます。空文字列を渡すと表示を抑止できます。
 
-プロンプトは、入力行の前に表示されるテキストです。`prompt` オプションか `prompt()` メソッドで設定し、既定値は `"> "` です。
+プロンプトは、入力行の前に表示されるテキストです。`createCLI` の `prompt` オプションで設定し、既定値は `"> "` です。
 
 ```typescript
 const cli = createCLI({
@@ -177,7 +177,7 @@ type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
 
 ### オプション値の補完
 
-オプション値の候補は `autocomplete` 設定から得られます。配列でも、同期・非同期どちらの関数でも構いません。`autocomplete` がない場合は、そのオプションの `choices` を文字列に変換して使います。
+オプション値の候補は `completer` 設定から得られます。配列でも、同期・非同期どちらでもよい `Completer` でも構いません。`Completer` には、コマンドの completer と同じ `CompletionContext` が渡されます。`completer` がない場合は、そのオプションの `choices` を文字列に変換して使います。
 
 ```typescript
 async function loadProfileNames(): Promise<string[]> {
@@ -187,10 +187,10 @@ async function loadProfileNames(): Promise<string[]> {
 cli
   .command("deploy <env>")
   .option("--region <region>", {
-    autocomplete: ["us-east-1", "us-west-2", "eu-west-1"],
+    completer: ["us-east-1", "us-west-2", "eu-west-1"],
   })
   .option("--profile <profile>", {
-    autocomplete: async (current) => {
+    completer: async ({ current }) => {
       const names = await loadProfileNames();
       return names.filter((name) => name.startsWith(current));
     },
@@ -372,7 +372,7 @@ cli
 
 Ctrl+C は実行中のコマンドに中断を送ります。フレームワークはこれを 2 段階で処理します。
 
-**1 回目の押下。** `ctx.signal` が中止され、`.cancel()` で登録したハンドラが実行され、標準エラーストリームに次の行が書き出されます。
+**1 回目の押下。** `ctx.signal` が中止され、`.onCancel()` で登録したハンドラが実行され、標準エラーストリームに次の行が書き出されます。
 
 ```
 Interrupted. Press Ctrl-C again to force quit.
@@ -387,7 +387,7 @@ Interrupted. Press Ctrl-C again to force quit.
 ```typescript
 cli
   .command("sync")
-  .cancel((ctx) => {
+  .onCancel((ctx) => {
     ctx.stderr.write("\nRolling back...\n");
   })
   .action(async (ctx) => {
@@ -435,7 +435,7 @@ cli
 ## 関連ページ
 
 - [コマンド](commands.md) — コマンド、引数、サブコマンド、キャンセルハンドラの定義
-- [オプション](options.md) — オプションフラグ、型、`choices`、`autocomplete`
+- [オプション](options.md) — オプションフラグ、型、`choices`、`completer`
 - [プロンプト](prompts.md) — アクションの中から利用者に質問する
 - [イベントとプラグイン](events-and-plugins.md) — ライフサイクルイベント、プラグイン、`cli.exec()`
 - [エラー](errors.md) — エラークラスと終了コード

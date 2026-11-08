@@ -46,7 +46,7 @@ calc> exit
 |---|------|----------|-------------|
 | 01 | [minimal](01-minimal.ts) | Hello World | Basic command, dual mode |
 | 02 | [git-style](02-git-style.ts) | Project Management | Subcommands, aliases, options, choices |
-| 03 | [deploy-tool](03-deploy-tool.ts) | Deployment Workflow | Validation, events, catch handler, color |
+| 03 | [deploy-tool](03-deploy-tool.ts) | Deployment Workflow | Validation, events, fallback handler, color |
 | 04 | [output-showcase](04-output-showcase.ts) | Output Utilities | Color, table, progress bar, spinner, logger |
 | 05 | [interactive-prompts](05-interactive-prompts.ts) | Setup Wizard | text, confirm, select, multiselect, password |
 | 06 | [plugin-system](06-plugin-system.ts) | Extensible CLI | Plugins, async plugins, event hooks |

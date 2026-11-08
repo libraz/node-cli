@@ -11,7 +11,7 @@
  *   npx tsx examples/08-task-runner.ts list
  */
 import type { Writable } from "node:stream";
-import { createCLI, createColorizer, logger, progress, table } from "../src/index.js";
+import { createCLI, createColorizer, createLogger, progress, table } from "../src/index.js";
 
 interface Task {
   name: string;
@@ -91,7 +91,7 @@ cli
 
 async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
   const col = createColorizer(ctx.stdout);
-  const log = logger({ prefix: "runner", timestamp: true, stream: ctx.stderr });
+  const log = createLogger({ prefix: "runner", timestamp: true, stream: ctx.stderr });
   const spinner = progress.spinner({
     label: `Running ${col.bold(task.name)}...`,
     color: "cyan",
@@ -99,7 +99,6 @@ async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
   });
 
   task.status = "running";
-  spinner.start();
 
   if (verbose) {
     log.info("Starting task: %s", task.name);
@@ -110,7 +109,7 @@ async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
   for (let i = 0; i < steps; i++) {
     await sleep(task.duration / steps);
     if (verbose && i === Math.floor(steps / 2)) {
-      spinner.update(`Running ${col.bold(task.name)}... (50%)`);
+      spinner.setLabel(`Running ${col.bold(task.name)}... (50%)`);
     }
   }
 
@@ -124,7 +123,7 @@ async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
 
 async function runAll(ctx: TaskContext, verbose: boolean) {
   const col = createColorizer(ctx.stdout);
-  const log = logger({ prefix: "runner", timestamp: true, stream: ctx.stderr });
+  const log = createLogger({ prefix: "runner", timestamp: true, stream: ctx.stderr });
   ctx.stdout.write(`${col.bold("Running all tasks...")}\n\n`);
 
   const bar = progress.bar({
@@ -144,7 +143,7 @@ async function runAll(ctx: TaskContext, verbose: boolean) {
     bar.update(i + 1);
   }
 
-  bar.finish();
+  bar.succeed();
 
   ctx.stdout.write(`\n${col.green.bold("All tasks completed!")}\n\n`);
 

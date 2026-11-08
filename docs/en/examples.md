@@ -101,8 +101,7 @@ remote
   .description("Register a new remote")
   .option("-f, --fetch", { type: "boolean", description: "Fetch immediately after adding" })
   .action((ctx) => {
-    const name = ctx.args.name as string;
-    const url = ctx.args.url as string;
+    const { name, url } = ctx.args;
     if (remotes.has(name)) throw new Error(`Remote "${name}" already exists`);
     remotes.set(name, url);
     ctx.stdout.write(`Added remote ${name} -> ${url}\n`);
@@ -114,7 +113,7 @@ remote
   .alias("rm")
   .description("Delete a remote")
   .action((ctx) => {
-    const name = ctx.args.name as string;
+    const { name } = ctx.args;
     if (!remotes.delete(name)) throw new Error(`No such remote: ${name}`);
     ctx.stdout.write(`Removed remote ${name}\n`);
   });
@@ -197,22 +196,18 @@ cli
   .option("--yes", { type: "boolean", description: "Skip the confirmation prompt" })
   .validate((ctx) => {
     const allowed = ["dev", "staging", "prod"];
-    const env = ctx.args.env as string;
+    const { env } = ctx.args;
     if (!allowed.includes(env)) {
       throw new Error(`Unknown environment "${env}". Expected one of: ${allowed.join(", ")}`);
     }
   })
   .action(async (ctx) => {
-    const env = ctx.args.env as string;
-    const tag = ctx.options.tag as string;
+    const { env } = ctx.args;
+    const { tag } = ctx.options;
 
     if (!ctx.options.yes) {
       try {
-        const go = await prompt.confirm(`Deploy ${tag} to ${env}?`, {
-          default: false,
-          stdout: ctx.stdout,
-          signal: ctx.signal,
-        });
+        const go = await prompt.confirm(`Deploy ${tag} to ${env}?`, { ...ctx, default: false });
         if (!go) {
           ctx.stdout.write("Aborted.\n");
           return;
@@ -232,7 +227,7 @@ cli
       await sleep(300);
       bar.tick();
     }
-    bar.finish();
+    bar.succeed();
 
     ctx.stdout.write(`Deployed ${tag} to ${env}.\n`);
   });
@@ -240,12 +235,12 @@ cli
 await cli.start();
 ```
 
-The bar redraws one line in place; the transcript shows its final frame.
+The bar redraws one line in place, and `succeed()` replaces it with a result line.
 
 ```text
 $ deployer deploy prod --tag v1.2.3
 ? Deploy v1.2.3 to prod? (y/N) y
-deploy  [██████████████████████████████]  100%  5/5
+✔ deploy
 Deployed v1.2.3 to prod.
 ```
 
@@ -270,11 +265,11 @@ $ deployer deploy prod --yes
 Error: Option --tag is required
 ```
 
-The bar writes to `ctx.stderr`, which is where progress belongs when stdout may be piped into another program. Builds on [`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts). See [Progress](progress.md) and [Prompts](prompts.md).
+The bar writes to `ctx.stderr`, which is where progress belongs when stdout may be piped into another program, and the confirmation question is asked on `ctx.stderr` for the same reason. Passing `ctx` to the prompt hands it the command's `stdin`, `stderr` and `signal`. Builds on [`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts). See [Progress](progress.md) and [Prompts](prompts.md).
 
 ## A status table with aligned and coloured columns
 
-`headerLabels`, `align` and `maxWidth` are keyed by the column key — the object property name — not by the label shown in the header. Colour applied to a cell adds no display width, so alignment is unaffected.
+Each `ColumnSpec` names the object property it shows with `key` and sets the header `label` and the `align`. Colour applied to a cell adds no display width, so alignment is unaffected.
 
 ```typescript
 #!/usr/bin/env node
@@ -301,9 +296,14 @@ cli
     ctx.stdout.write(
       `${table(rows, {
         border: "rounded",
-        headerLabels: { service: "Service", replicas: "Pods", latency: "p95", state: "State" },
-        align: { replicas: "right", latency: "right", state: "center" },
-        style: { head: "cyan.bold", border: "dim" },
+        columns: [
+          { key: "service", label: "Service" },
+          { key: "replicas", label: "Pods", align: "right" },
+          { key: "latency", label: "p95", align: "right" },
+          { key: "state", label: "State", align: "center" },
+        ],
+        headerStyle: "cyan.bold",
+        borderColor: "dim",
       })}\n`,
     );
   });
@@ -464,7 +464,7 @@ function healthPlugin(baseUrl: string) {
         cmd.stdout.write(`pong from ${baseUrl} (timeout ${cmd.options.timeout}ms)\n`);
       });
 
-    ctx.catch((input, io) => {
+    ctx.fallback((input, io) => {
       io.stderr.write(`Unknown command: ${input}\n`);
     });
   };
@@ -527,7 +527,7 @@ cli
     }
     const lines = (await readAll(ctx.stdin)).split("\n").filter(Boolean);
     for (const line of lines) {
-      if (line.includes(ctx.args.pattern as string)) ctx.stdout.write(`${line}\n`);
+      if (line.includes(ctx.args.pattern)) ctx.stdout.write(`${line}\n`);
     }
   });
 
@@ -552,7 +552,7 @@ cli
     }
     ctx.shell.enterMode({
       prompt: "calc> ",
-      message: "Calculator. Type an arithmetic expression, or exit to return.",
+      banner: "Calculator. Type an arithmetic expression, or exit to return.",
       action: (input, io) => {
         if (!/^[\d\s+\-*/().]+$/.test(input)) {
           io.stderr.write("only + - * / and parentheses are supported\n");
@@ -583,7 +583,7 @@ pipes> exit
 
 `exit` inside a mode leaves the mode rather than the shell, because a mode does not dispatch through the command registry and a command of that name would be unreachable there.
 
-The same pipeline runs programmatically, since `exec` takes a string:
+The same pipeline runs programmatically, since `exec` accepts a string:
 
 ```typescript
 await cli.exec("list | filter ts | count");
@@ -620,14 +620,14 @@ cli
   .command("run [...names]")
   .description("Run tasks concurrently")
   .action(async (ctx) => {
-    const requested = (ctx.args.names as string[] | undefined) ?? [];
+    const requested = ctx.args.names;
     const selected = requested.length > 0
       ? tasks.filter((task) => requested.includes(task.name))
       : tasks;
 
     if (selected.length === 0) throw new Error("No matching task");
 
-    const multi = progress.multi();
+    const multi = progress.multi({ stream: ctx.stderr });
     const started = Date.now();
 
     try {
@@ -637,7 +637,6 @@ cli
             total: task.steps,
             label: task.name,
             width: 20,
-            stream: ctx.stderr,
           });
           for (let step = 0; step < task.steps; step++) {
             await sleep(task.ms);
@@ -645,8 +644,10 @@ cli
           }
         }),
       );
-    } finally {
-      multi.finish();
+      multi.succeed();
+    } catch (err) {
+      multi.fail();
+      throw err;
     }
 
     const summary = selected.map((task) => ({
@@ -655,7 +656,10 @@ cli
       result: "ok",
     }));
 
-    ctx.stdout.write(`${table(summary, { border: "rounded", align: { steps: "right" } })}\n`);
+    ctx.stdout.write(`${table(summary, {
+      border: "rounded",
+      columns: ["task", { key: "steps", align: "right" }, "result"],
+    })}\n`);
     ctx.stdout.write(`finished in ${Date.now() - started}ms\n`);
   });
 
@@ -670,12 +674,12 @@ build  [████████████░░░░░░░░]  60%  6/10
 test  [███████░░░░░░░░░░░░░]  33%  2/6
 ```
 
-And after `finish()`, followed by the summary table on stdout:
+After `succeed()` each row becomes a result line, followed by the summary table on stdout:
 
 ```text
-lint  [████████████████████]  100%  4/4
-build  [████████████████████]  100%  10/10
-test  [████████████████████]  100%  6/6
+✔ lint
+✔ build
+✔ test
 ╭───────┬───────┬────────╮
 │ task  │ steps │ result │
 ├───────┼───────┼────────┤
@@ -688,7 +692,7 @@ finished in 1215ms
 
 The elapsed figure varies from run to run. Rows are not padded to a common width: each line is the label, the bar, the percentage and the count, joined by two spaces. Pad the labels yourself if a column should line up.
 
-`multi.finish()` sits in a `finally`, and a bar added after the group closes is inert, so a task that finishes late cannot fail the command. Builds on [`08-task-runner.ts`](../../examples/08-task-runner.ts). See [Progress](progress.md).
+`multi.fail()` in the `catch` closes the group when a task throws, and a bar added after the group closes is inert, so a task that finishes late cannot fail the command. Builds on [`08-task-runner.ts`](../../examples/08-task-runner.ts). See [Progress](progress.md).
 
 ## A deep subcommand tree with a mode sub-prompt
 
@@ -720,7 +724,10 @@ root
       columns: Object.keys(records[0] ?? {}).length,
     }));
     ctx.stdout.write(
-      `${table(rows, { border: "rounded", align: { rows: "right", columns: "right" } })}\n`,
+      `${table(rows, {
+        border: "rounded",
+        columns: ["table", { key: "rows", align: "right" }, { key: "columns", align: "right" }],
+      })}\n`,
     );
   });
 
@@ -739,12 +746,12 @@ tables
   .description("Print the rows of a table")
   .option("-l, --limit <n>", { type: "number", default: 10, description: "Maximum rows" })
   .validate((ctx) => {
-    if (!Object.hasOwn(db, ctx.args.name as string)) {
+    if (!Object.hasOwn(db, ctx.args.name)) {
       throw new Error(`No such table: ${ctx.args.name}`);
     }
   })
   .action((ctx) => {
-    const rows = db[ctx.args.name as string].slice(0, ctx.options.limit as number);
+    const rows = db[ctx.args.name].slice(0, ctx.options.limit);
     ctx.stdout.write(`${table(rows, { border: "rounded" })}\n`);
   });
 
@@ -758,7 +765,7 @@ cli
     }
     ctx.shell.enterMode({
       prompt: "sql> ",
-      message: "SQL mode. Type exit to return.",
+      banner: "SQL mode. Type exit to return.",
       history: "none",
       action: (input, io) => {
         const match = /^select\s+\*\s+from\s+(\w+)$/i.exec(input.trim());
@@ -849,7 +856,7 @@ cli
   .option("--region <region>", {
     type: "string",
     default: "us-east-1",
-    autocomplete: regions,
+    completer: regions,
     description: "Target region",
   })
   .option("--cache", {
@@ -857,18 +864,18 @@ cli
     default: true,
     description: "Reuse the cached plan",
   })
-  .complete((ctx) => stacks.filter((name) => name.startsWith(ctx.current)))
-  .cancel((ctx) => {
+  .completer((ctx) => stacks.filter((name) => name.startsWith(ctx.current)))
+  .onCancel((ctx) => {
     ctx.stderr.write("plan cancelled; nothing was written\n");
   })
   .action(async (ctx) => {
-    const since = ctx.options.since as Date | undefined;
-    ctx.stdout.write(`stack:  ${(ctx.args.stack as string | undefined) ?? "(all)"}\n`);
+    const { since } = ctx.options;
+    ctx.stdout.write(`stack:  ${ctx.args.stack ?? "(all)"}\n`);
     ctx.stdout.write(`region: ${ctx.options.region}\n`);
     ctx.stdout.write(`since:  ${since ? since.toISOString() : "(beginning)"}\n`);
     ctx.stdout.write(`cache:  ${ctx.options.cache ? "on" : "off"}\n`);
 
-    const targets = ctx.args.stack ? [ctx.args.stack as string] : stacks;
+    const targets = ctx.args.stack ? [ctx.args.stack] : stacks;
     for (const target of targets) {
       if (ctx.signal.aborted) return;
       await inspect(target);
@@ -916,7 +923,7 @@ Options:
   -h, --help               Show help for this command
 ```
 
-Tab completion works at the tool's own prompt: `.complete(...)` supplies the positional candidates, and `autocomplete` supplies the values of `--region`.
+Tab completion works at the tool's own prompt: `.completer(...)` supplies the positional candidates, and the option's `completer` supplies the values of `--region`.
 
 ```text
 infra> plan a<TAB>
@@ -995,10 +1002,10 @@ try {
 Three details matter when writing tests this way:
 
 - `ctx.shell` is `null` under `exec`, so a command that opens a mode must guard for it. Test the guard, not the mode.
-- `exec` does not emit the `exit` event on the normal path; only `start()` does. An assertion on `exit` needs `start(argv)`.
-- Colour from `createColorizer`, the logger and `progress` is decided from the stream they are bound to, and a `PassThrough` is not a terminal, so that output is plain. `color` and `c` follow `process.stdout` instead. Call `setColorEnabled(true)` when the escape codes themselves are what is being asserted, and `resetColorEnabled()` afterwards.
+- `exec` does not emit the `exit` event on the normal path; only `cli.start(argv)` does, and it resolves to the exit code. An assertion on `exit` needs `start(argv)`.
+- Colour from `createColorizer`, the logger and `progress` is decided from the stream they are bound to, and a `PassThrough` is not a terminal, so that output is plain. `color` and `c` follow `process.stdout` instead. Call `setColorEnabled(true)` when the escape codes themselves are what is being asserted, and `setColorEnabled("auto")` afterwards.
 
-A fresh `CLI` per test keeps registrations from leaking between cases; `start()` throws if called twice on one instance.
+A fresh `CLI` per test keeps registrations from leaking between cases; `cli.start(argv)` throws if called twice on one instance.
 
 ## Where to go next
 

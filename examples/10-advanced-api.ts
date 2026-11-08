@@ -13,16 +13,16 @@
  *   npx tsx examples/10-advanced-api.ts logs
  *   npx tsx examples/10-advanced-api.ts completion-info
  */
-import { c, createCLI, createColorizer, logger, progress, table } from "../src/index.js";
+import { c, createCLI, createColorizer, createLogger, progress, table } from "../src/index.js";
 
 const cli = createCLI({
   name: "advanced",
   version: "1.0.0",
   prompt: "advanced> ",
   description: "Advanced API catalog",
-})
-  .banner(c`{bold.cyan Advanced API Demo} {dim v1.0.0}`)
-  .history(`/tmp/node-cli-advanced-${process.pid}.history`);
+  banner: c`{bold.cyan Advanced API Demo} {dim v1.0.0}`,
+  historyFile: `/tmp/node-cli-advanced-${process.pid}.history`,
+});
 
 cli
   .command("config")
@@ -78,22 +78,16 @@ cli
     ctx.stdout.write(
       table(rows, {
         border: "double",
-        columns: ["service", "owner", "description", "latency"],
-        headerLabels: {
-          service: "Service",
-          owner: "Owner",
-          description: "Description",
-          latency: "p95",
-        },
-        colWidths: [12, 12, 28, 10],
-        maxWidth: { description: 28 },
-        align: { latency: "right" },
-        truncate: "..",
-        style: {
-          head: "cyan.bold",
-          border: "dim",
-          compact: false,
-        },
+        columns: [
+          { key: "service", label: "Service", width: 12 },
+          { key: "owner", label: "Owner", width: 12 },
+          { key: "description", label: "Description", width: 28, maxWidth: 28 },
+          { key: "latency", label: "p95", width: 10, align: "right" },
+        ],
+        ellipsis: "..",
+        headerStyle: "cyan.bold",
+        borderColor: "dim",
+        rowSeparators: true,
       }),
     );
     ctx.stdout.write("\n");
@@ -105,7 +99,7 @@ cli
   .action((ctx) => {
     const custom = progress.bar({
       total: 3,
-      stream: ctx.stdout,
+      stream: ctx.stderr,
       format(state) {
         return `custom ${state.current}/${state.total} (${state.percent}%)`;
       },
@@ -113,17 +107,16 @@ cli
     custom.update(1);
     custom.stop();
 
-    const multi = progress.multi();
+    const multi = progress.multi({ stream: ctx.stderr });
     const first = multi.add({
       total: 2,
       label: "first",
       color: "green",
-      stream: ctx.stdout,
       format(state) {
         return `first ${state.current}/${state.total}`;
       },
     });
-    const second = multi.add({ total: 2, label: "second", color: "yellow", stream: ctx.stdout });
+    const second = multi.add({ total: 2, label: "second", color: "yellow" });
     first.tick();
     second.update(2);
     multi.stop();
@@ -133,7 +126,7 @@ cli
   .command("logs")
   .description("Show runtime logger level changes")
   .action((ctx) => {
-    const log = logger({ level: "info", prefix: "advanced", stream: ctx.stdout });
+    const log = createLogger({ level: "info", prefix: "advanced", stream: ctx.stdout });
     log.debug("hidden debug");
     log.info("visible info");
     log.setLevel("debug");
@@ -148,10 +141,10 @@ cli
   .description("Register command and option completion providers")
   .option("--region <region>", {
     type: "string",
-    autocomplete: ["us-east-1", "us-west-2", "eu-west-1"],
-    description: "Region with explicit autocomplete candidates",
+    completer: ["us-east-1", "us-west-2", "eu-west-1"],
+    description: "Region with explicit completion candidates",
   })
-  .complete((ctx) => {
+  .completer((ctx) => {
     const all = ["alpha", "beta", "gamma", "delta"];
     return all.filter((item) => item.startsWith(ctx.current));
   })
@@ -164,7 +157,7 @@ cli
 cli
   .command("cancel-info")
   .description("Register a custom SIGINT cancel handler")
-  .cancel((ctx) => {
+  .onCancel((ctx) => {
     const col = createColorizer(ctx.stderr);
     ctx.stderr.write(col.yellow("Cancelled long-running work\n"));
   })

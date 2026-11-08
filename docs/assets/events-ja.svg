@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 480" width="960" height="480" role="img" aria-labelledby="ttl dsc">
   <title id="ttl">ライフサイクルイベントとプラグイン登録</title>
-  <desc id="dsc">左の欄は 1 回のコマンド実行で発火する順番を縦に並べたものです。解決とパース、command.validate(ctx)、beforeExecute(ctx)、action(ctx)、afterExecute(ctx) と進みます。横のレールはどの段階でも失敗しうることを示し、同じ失敗点から commandError(err, ctx) と error(err) の両方へ矢印が伸びます。下段の exit は cli.start() が終わるときに 1 回発火しますが、通常のプログラム実行の経路では発火しません。右の欄は 2 つの cli.use が各プラグインに PluginContext を渡し、そこから command()・on()・off()・catch() を呼んで、1 つの共有レジストリとイベントリスナーへ書き込む様子を示します。プラグイン本体は 1 本の直列キューで実行され、例外を投げたプラグインは致命的です。</desc>
+  <desc id="dsc">左の欄は 1 回のコマンド実行で発火する順番を縦に並べたものです。解決とパース、command.validate(ctx)、beforeExecute(ctx)、action(ctx)、afterExecute(ctx) と進みます。横のレールはどの段階でも失敗しうることを示し、同じ失敗点から commandError(err, ctx) と error(err) の両方へ矢印が伸びます。下段の exit は cli.start() が終わるときに 1 回発火しますが、通常のプログラム実行の経路では発火しません。右の欄は 2 つの cli.use が各プラグインに PluginContext を渡し、そこから command()・on()・off()・fallback() を呼んで、1 つの共有レジストリとイベントリスナーへ書き込む様子を示します。プラグイン本体は 1 本の直列キューで実行され、例外を投げたプラグインは致命的です。</desc>
 
   <style>
     .bg    { fill:#f6f8fa }
@@ -136,7 +136,7 @@
   <rect class="chip" x="750" y="180" width="80" height="28" rx="6"/>
   <text class="monod" x="790" y="199" text-anchor="middle">off()</text>
   <rect class="chip" x="839" y="180" width="81" height="28" rx="6"/>
-  <text class="monod" x="879" y="199" text-anchor="middle">catch()</text>
+  <text class="monod" x="879" y="199" text-anchor="middle">fallback()</text>
 
   <path class="ln" d="M 612 208 V 216"/>
   <path class="ln" d="M 701 208 V 216"/>

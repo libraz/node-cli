@@ -166,14 +166,14 @@ type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
 ```typescript
 interface PluginContext {
-  command(definition: string): CommandBuilder;
+  command<D extends string>(definition: D): CommandBuilderFor<D>;
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   fallback(handler: FallbackHandler): this;
 }
 ```
 
-`on`、`off`、`fallback` はコンテキスト自身を返すので、登録をつなげて書けます。`command` だけは、新しいコマンドの builder を返します。
+`on`、`off`、`fallback` はコンテキスト自身を返すので、登録をつなげて書けます。`command` だけは、新しいコマンドの builder を返します。リテラルの定義文字列からは、`cli.command()` と同じく型が付きます。
 
 `use` はありません（プラグインが別のプラグインを登録することはできません）。コマンドレジストリへのアクセスもなく、ロガーや設定オブジェクトもありません。それらが必要なプラグインは、自分のパラメータとして受け取ってください。
 
@@ -317,7 +317,7 @@ cli
   .command("greet <name>")
   .option("--loud", { description: "Shout the greeting" })
   .action((ctx) => {
-    const message = `Hello, ${String(ctx.args.name)}!`;
+    const message = `Hello, ${ctx.args.name}!`;
     ctx.stdout.write(`${ctx.options.loud ? message.toUpperCase() : message}\n`);
   });
 
