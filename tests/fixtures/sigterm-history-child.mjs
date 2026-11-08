@@ -10,7 +10,7 @@ cli
   .command("hang")
   .onCancel(() => process.stdout.write("CANCELLED\n"))
   .action((ctx) => {
-    progress.spinner({ label: "HANGING", stream: ctx.stderr }).start();
+    progress.spinner({ label: "HANGING", stream: ctx.stderr });
     setInterval(() => {}, 1_000);
     return new Promise(() => {});
   });

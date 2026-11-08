@@ -21,8 +21,7 @@ cli.command("normal").action((ctx) => {
 });
 
 cli.command("hang").action((ctx) => {
-  const spinner = progress.spinner({ label: "HANGING", stream: ctx.stderr });
-  spinner.start();
+  progress.spinner({ label: "HANGING", stream: ctx.stderr });
   setInterval(() => {}, 1_000);
   return new Promise(() => {});
 });

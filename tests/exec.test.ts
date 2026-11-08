@@ -188,7 +188,7 @@ describe("programmatic exec", () => {
     const cli = createCLI();
     const tty = createMockTTY();
     cli.command("broken").action(() => {
-      progress.spinner({ stream: tty, label: "working" }).start();
+      progress.spinner({ stream: tty, label: "working" });
       throw new Error("command failed");
     });
 

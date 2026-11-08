@@ -314,7 +314,6 @@ describe("logging beside an active progress renderer", () => {
     const stream = createMockTTY();
     const spinner = progress.spinner({ label: "working", stream });
     const log = createLogger({ stream, timestamp: false });
-    spinner.start();
     const before = stream.getOutput().length;
 
     log.info("hello");
