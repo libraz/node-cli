@@ -1,0 +1,6 @@
+# Packages `ncu -u` must not raise, and why. Drop an entry once its blocker is
+# gone so the next run picks the package up again.
+#
+# Nothing is held: every devDependency tracks its latest release.
+# npmMinimalAgeGate is 0 in .yarnrc.yml, so no cooldown is needed here.
+reject: []
