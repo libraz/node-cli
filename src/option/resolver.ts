@@ -6,13 +6,16 @@ import type { MutableCommandContext, OptionDef } from "../types.js";
  *
  * Performs alias normalization, type coercion, custom parsing, default
  * application, required-value checks, choice validation, and custom
- * validation. Unknown options (not present in `defs`) are passed through
- * unchanged.
+ * validation. A custom `parse` or `validate` may return a Promise, which is
+ * awaited before the next option is processed; when none does, the result is
+ * returned synchronously. Unknown options (not present in `defs`) are passed
+ * through unchanged.
  *
  * @param raw - The raw key/value pairs obtained from the argument parser.
  * @param defs - A map of canonical option names to their definitions.
  * @param ctx - The current command execution context.
- * @returns A record of fully resolved option values keyed by their long names.
+ * @returns The fully resolved option values keyed by their long names, or a
+ *   promise of them once a custom callback returned a Promise.
  * @throws {MissingOptionError} If a required option is not provided.
  * @throws {InvalidOptionError} If a value fails type coercion or choice validation.
  * @throws {ValidationError} If a custom `parse` or `validate` function rejects the value.
@@ -21,7 +24,7 @@ export function resolveOptions(
   raw: Record<string, unknown>,
   defs: Map<string, OptionDef>,
   ctx: MutableCommandContext,
-): Record<string, unknown> {
+): Record<string, unknown> | Promise<Record<string, unknown>> {
   const resolved: Record<string, unknown> = Object.create(null);
 
   // The parser is the sole alias-normalization point. Keeping this function on
@@ -31,94 +34,156 @@ export function resolveOptions(
   Object.assign(resolved, raw);
   ctx.options = resolved;
 
-  // First pass: parse/coerce/default/required for every option.
-  for (const [, def] of defs) {
-    const { long, schema } = def;
-    const rawValue = raw[long];
-    // Presence is tracked from the raw (pre-parse) value so it is decoupled from
-    // the resolved value: a flag the user explicitly passed whose custom `parse`
-    // returns `undefined` is still present. Default application and the required
-    // check are driven by presence, never by whether the resolved value happens
-    // to be `undefined`, keeping scalar and array options consistent.
-    const present = rawValue !== undefined;
-    let value = rawValue;
+  // First pass: parse/coerce/default/required for every option. Second pass:
+  // every validator sees the complete, canonical option set.
+  const steps: (() => void | Promise<void>)[] = [];
+  for (const [, def] of defs) steps.push(() => resolveValue(def, raw, resolved, ctx));
+  for (const [, def] of defs) steps.push(() => checkValue(def, resolved, ctx));
+  return runInOrder(steps, 0, resolved);
+}
 
-    if (present) {
-      if (schema.parse) {
-        // A custom parser is the user's escape hatch: it receives the raw
-        // string(s) and fully owns coercion. Built-in coercion is skipped.
-        try {
-          value = Array.isArray(value)
-            ? value.map((v) => schema.parse?.(String(v), ctx))
-            : schema.parse(String(value), ctx);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          throw new ValidationError(`Invalid value for --${long}: ${message}`, {
-            optionName: long,
-            cause: err,
-          });
-        }
-      } else {
-        value = coerceOptionValue(value, schema.type, long);
-      }
-    } else if (schema.required) {
-      throw new MissingOptionError(long);
-    } else if (schema.default !== undefined) {
-      // Apply the default only when the flag was absent, and run it through the
-      // same built-in coercion an explicit value receives so the runtime type
-      // matches (e.g. a string default on a `number` option becomes a number).
-      // The builder coerces a declared default too, but only to reject a bad one
-      // at definition time; this call is what makes resolveOptions correct for a
-      // definition it did not build. Custom `parse` is not re-applied: a default
-      // is an already-resolved value, not raw input.
-      value = coerceOptionValue(schema.default, schema.type, long);
-    }
+/**
+ * Runs steps in order, staying synchronous until a step returns a Promise, so
+ * synchronous callbacks keep the action starting in the same tick as before.
+ */
+function runInOrder<T>(
+  steps: readonly (() => void | Promise<void>)[],
+  start: number,
+  result: T,
+): T | Promise<T> {
+  for (let i = start; i < steps.length; i++) {
+    const pending = steps[i]();
+    if (pending instanceof Promise) return pending.then(() => runInOrder(steps, i + 1, result));
+  }
+  return result;
+}
 
-    // Keep the flag present whenever it was supplied — even if its resolved
-    // value is `undefined` — so an explicit parse-to-undefined is preserved
-    // rather than being dropped and re-triggering defaults downstream.
+/** Wraps a custom `parse` or `validate` failure in a {@link ValidationError}. */
+function validationFailure(long: string, err: unknown): ValidationError {
+  const message = err instanceof Error ? err.message : String(err);
+  return new ValidationError(`Invalid value for --${long}: ${message}`, {
+    optionName: long,
+    cause: err,
+  });
+}
+
+/**
+ * Calls a custom callback, turning a throw or a rejection into a
+ * {@link ValidationError} and handing the (possibly awaited) result to `then`.
+ */
+function guardCustom<T>(
+  long: string,
+  call: () => T | Promise<T>,
+  then: (value: T) => void,
+): void | Promise<void> {
+  let result: T | Promise<T>;
+  try {
+    result = call();
+  } catch (err) {
+    throw validationFailure(long, err);
+  }
+  if (!(result instanceof Promise)) {
+    then(result);
+    return;
+  }
+  return result.then(then, (err: unknown) => {
+    throw validationFailure(long, err);
+  });
+}
+
+/** First-pass step: parses or coerces one option, or applies its default. */
+function resolveValue(
+  def: OptionDef,
+  raw: Record<string, unknown>,
+  resolved: Record<string, unknown>,
+  ctx: MutableCommandContext,
+): void | Promise<void> {
+  const { long, schema } = def;
+  const rawValue = raw[long];
+  // Presence is tracked from the raw (pre-parse) value so it is decoupled from
+  // the resolved value: a flag the user explicitly passed whose custom `parse`
+  // returns `undefined` is still present. Default application and the required
+  // check are driven by presence, never by whether the resolved value happens
+  // to be `undefined`, keeping scalar and array options consistent.
+  const present = rawValue !== undefined;
+
+  // Keep the flag present whenever it was supplied — even if its resolved
+  // value is `undefined` — so an explicit parse-to-undefined is preserved
+  // rather than being dropped and re-triggering defaults downstream.
+  const store = (value: unknown) => {
     if (present || value !== undefined) resolved[long] = value;
     else delete resolved[long];
+  };
+
+  if (present && schema.parse) {
+    // A custom parser is the user's escape hatch: it receives the raw
+    // string(s) and fully owns coercion. Built-in coercion is skipped.
+    const parse = schema.parse;
+    return guardCustom(
+      long,
+      () => {
+        if (!Array.isArray(rawValue)) return parse(String(rawValue), ctx);
+        const parsed = rawValue.map((element) => parse(String(element), ctx));
+        return parsed.some((element) => element instanceof Promise) ? Promise.all(parsed) : parsed;
+      },
+      store,
+    );
   }
 
-  // Second pass: every validator sees the complete, canonical option set.
-  for (const [, def] of defs) {
-    const { long, schema } = def;
-    const value = resolved[long];
+  if (present) {
+    store(coerceOptionValue(rawValue, schema.type, long));
+  } else if (schema.required) {
+    throw new MissingOptionError(long);
+  } else if (schema.default !== undefined) {
+    // Apply the default only when the flag was absent, and run it through the
+    // same built-in coercion an explicit value receives so the runtime type
+    // matches (e.g. a string default on a `number` option becomes a number).
+    // The builder coerces a declared default too, but only to reject a bad one
+    // at definition time; this call is what makes resolveOptions correct for a
+    // definition it did not build. Custom `parse` is not re-applied: a default
+    // is an already-resolved value, not raw input.
+    store(coerceOptionValue(schema.default, schema.type, long));
+  } else {
+    store(undefined);
+  }
+}
 
-    // Choices check (compare leniently so declared string choices match
-    // coerced numeric values and vice versa). For array-typed options each
-    // element is validated individually rather than the joined array.
-    if (Object.hasOwn(resolved, long) && schema.choices) {
-      const allowed = schema.choices;
-      const allowedStrings = allowed.map(String);
-      const isAllowed = (v: unknown) => allowed.includes(v) || allowedStrings.includes(String(v));
-      const candidates = Array.isArray(value) ? value : [value];
-      for (const candidate of candidates) {
-        if (!isAllowed(candidate)) {
-          throw new InvalidOptionError(
-            `Invalid value "${candidate}" for --${long}. Allowed: ${allowed.join(", ")}`,
-            { optionName: long, value: candidate },
-          );
-        }
-      }
-    }
+/** Second-pass step: checks one resolved option against its choices and validator. */
+function checkValue(
+  def: OptionDef,
+  resolved: Record<string, unknown>,
+  ctx: MutableCommandContext,
+): void | Promise<void> {
+  const { long, schema } = def;
+  if (!Object.hasOwn(resolved, long)) return;
+  const value = resolved[long];
 
-    // Validate
-    if (Object.hasOwn(resolved, long) && schema.validate) {
-      try {
-        schema.validate(value, ctx);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new ValidationError(`Invalid value for --${long}: ${message}`, {
-          optionName: long,
-          cause: err,
-        });
+  // Choices check (compare leniently so declared string choices match
+  // coerced numeric values and vice versa). For array-typed options each
+  // element is validated individually rather than the joined array.
+  if (schema.choices) {
+    const allowed = schema.choices;
+    const allowedStrings = allowed.map(String);
+    const isAllowed = (v: unknown) => allowed.includes(v) || allowedStrings.includes(String(v));
+    const candidates = Array.isArray(value) ? value : [value];
+    for (const candidate of candidates) {
+      if (!isAllowed(candidate)) {
+        throw new InvalidOptionError(
+          `Invalid value "${candidate}" for --${long}. Allowed: ${allowed.join(", ")}`,
+          { optionName: long, value: candidate },
+        );
       }
     }
   }
 
-  return resolved;
+  const validate = schema.validate;
+  if (validate) {
+    return guardCustom(
+      long,
+      () => validate(value, ctx),
+      () => {},
+    );
+  }
 }
 
 /**

@@ -417,7 +417,7 @@ export class CLI {
 
     CommandBuilder.create(this.registry, "help [...command]")
       .description("Show help information")
-      .complete(({ args, current }) => {
+      .completer(({ args, current }) => {
         const path = (args.command as string[] | undefined) ?? [];
         const parentPath = current ? path.slice(0, -1) : path;
         // Resolve the parent the way dispatch and the help action do, so nothing

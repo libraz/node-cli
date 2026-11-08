@@ -298,7 +298,7 @@ describe("graceful pipeline stop", () => {
     const cancel = vi.fn();
     let upstreamSignal: AbortSignal | undefined;
     CommandBuilder.create(registry, "produce")
-      .cancel(cancel)
+      .onCancel(cancel)
       .action(
         (ctx) =>
           new Promise<void>((resolveProduce) => {

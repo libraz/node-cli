@@ -137,7 +137,7 @@ describe("programmatic exec", () => {
     });
     cli
       .command("wait")
-      .cancel(cancel)
+      .onCancel(cancel)
       .action(
         (ctx) =>
           new Promise<void>((resolve) => {

@@ -28,8 +28,10 @@ await cli.start();
 ```
 
 The command is registered while `cli.command()` runs, not when the chain ends,
-so it exists as soon as the call returns. Every builder method returns the same
-builder, so the order of the chained calls does not matter.
+so it exists as soon as the call returns. Every configuration method returns the
+same builder, so the order of the chained calls does not matter. Two methods end
+or move the chain: `command(spec)` returns the subcommand's builder, and
+`remove()` returns a boolean.
 
 The action receives one argument, the [command context](#the-command-context).
 Write output through `ctx.stdout` rather than `console.log` so that output
@@ -37,18 +39,31 @@ routing works in the interactive shell and in tests.
 
 ### Builder methods
 
-| Method | Effect |
-|---|---|
-| `description(text)` | Sets the text shown next to the command in help |
-| `option(flags, schema)` | Declares a flag — see [Options](options.md) |
-| `action(fn)` | Sets the function to run when the command is dispatched |
-| `alias(...names)` | Adds alternative names for the command |
-| `hidden(hidden = true)` | Hides the command from help and completion |
-| `validate(fn)` | Sets a check that runs before the action |
-| `cancel(fn)` | Sets a handler that runs when the command is interrupted |
-| `complete(fn)` | Sets a custom tab-completion provider — see [Interactive shell](interactive-shell.md) |
-| `command(spec)` | Declares a subcommand under this command |
-| `remove()` | Unregisters the command |
+| Method | Effect | Returns | Repeated call |
+|---|---|---|---|
+| `description(text)` | Sets the text shown next to the command in help | the builder | Replaces |
+| `option(flags, schema)` | Declares a flag — see [Options](options.md) | the builder | Same name replaces in place; a new name adds |
+| `action(fn)` | Sets the function to run when the command is dispatched | the builder | Replaces |
+| `alias(...names)` | Adds alternative names for the command | the builder | Adds; duplicates are ignored |
+| `hidden(hidden = true)` | Hides the command from help and completion | the builder | Replaces |
+| `validate(fn)` | Sets a check that runs before the action | the builder | Replaces |
+| `onCancel(fn)` | Sets a handler that runs when the command is interrupted | the builder | Replaces |
+| `completer(fn)` | Sets a custom tab-completion provider — see [Interactive shell](interactive-shell.md) | the builder | Replaces |
+| `command(spec)` | Declares a subcommand under this command | the subcommand's builder | Same name merges into the existing subcommand |
+| `remove()` | Unregisters the command | `true` if removed | Returns `false` |
+
+A completer receives a `CompletionContext` and returns candidates for
+`ctx.current`, either as an array or as a promise of one:
+
+```typescript
+cli
+  .command("checkout <branch>")
+  .completer(async (ctx) => {
+    const branches = await listBranches({ signal: ctx.signal });
+    return branches.filter((name) => name.startsWith(ctx.current));
+  })
+  .action(checkout);
+```
 
 There is no `default()`, `example()`, `usage()`, or `argument()` method. A usage
 line is generated from the specification string, and there is no concept of a
@@ -117,9 +132,9 @@ cli.command("copy <...files>").action((ctx) => {
 
 ### Errors raised when the spec is invalid
 
-These are thrown as ordinary `Error` objects while `cli.command()` runs, so a
-malformed specification fails at startup rather than when a user types the
-command:
+These are thrown as `Error` objects with `code: "ERR_INVALID_DEFINITION"` while
+`cli.command()` runs, so a malformed specification fails at startup rather than
+when a user types the command:
 
 - A bare name appears after an argument token (`"deploy <env> now"`).
 - The string contains no bare name at all (`"<env>"`).
@@ -297,7 +312,7 @@ An alias is resolved to the real command name before the action runs, so
 
 Aliases are checked when they are registered. Adding an alias that collides with
 a sibling command's name, or with an alias another sibling already claims,
-throws. A real command always wins over an alias of the same name, so an alias
+throws an `Error` with `code: "ERR_DEFINITION_CONFLICT"`. A real command always wins over an alias of the same name, so an alias
 can never shadow a command.
 
 ## Hidden commands
@@ -351,12 +366,13 @@ A running command is cancelled when the user presses Ctrl+C, or when an
 `AbortSignal` supplied to `cli.exec()` aborts. Two mechanisms report this,
 and they fire together, so a command may use either or both.
 
-`cancel()` registers a callback for cleanup:
+`onCancel()` registers a callback for cleanup. It is not awaited; if it returns
+a promise that rejects, the rejection is reported through the `error` event:
 
 ```typescript
 cli
   .command("sync")
-  .cancel((ctx) => {
+  .onCancel((ctx) => {
     ctx.stderr.write("\nCancelled; rolling back.\n");
     releaseLock();
   })
@@ -395,7 +411,7 @@ temp.remove(); // true
 
 Removal takes the command's whole subtree with it, including the aliases
 registered anywhere beneath it. Afterwards every other builder method on that
-builder throws `Cannot configure detached command "temporary"`, so a stale
+builder throws an `Error` with `code: "ERR_COMMAND_REMOVED"`, so a stale
 reference cannot silently reconfigure a command that is no longer registered.
 
 ## The command lifecycle

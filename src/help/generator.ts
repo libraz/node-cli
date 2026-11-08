@@ -21,7 +21,7 @@ export interface HelpMetadata {
 
 export class HelpGenerator {
   private readonly registry: CommandRegistry;
-  private metadata: HelpMetadata;
+  private readonly metadata: HelpMetadata;
 
   /**
    * Creates a new {@link HelpGenerator}.
@@ -31,13 +31,6 @@ export class HelpGenerator {
    */
   constructor(registry: CommandRegistry, metadata: HelpMetadata = {}) {
     this.registry = registry;
-    this.metadata = metadata;
-  }
-
-  /**
-   * Updates the metadata displayed in the help header.
-   */
-  setMetadata(metadata: HelpMetadata): void {
     this.metadata = metadata;
   }
 

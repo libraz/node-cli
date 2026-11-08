@@ -15,7 +15,7 @@ import {
 } from "../command/registry.js";
 import { guardCall } from "../guard.js";
 import { renderSafe } from "../output/color.js";
-import type { CommandDefinition, OptionDef } from "../types.js";
+import type { CommandDefinition, Completer, CompletionContext, OptionDef } from "../types.js";
 import { SHELL_COMMANDS } from "./builtins.js";
 
 /**
@@ -98,13 +98,7 @@ export class ShellCompleter {
    * @returns A tuple of [completionCandidates, substringBeingCompleted] or a Promise thereof.
    */
   complete(line: string): CompletionResult | Promise<CompletionResult> {
-    // Track consecutive Tab presses
-    if (line === this.lastLine) {
-      this.tabCount++;
-    } else {
-      this.tabCount = 1;
-      this.lastLine = line;
-    }
+    this.countTab(line);
 
     // Complete within the active pipeline segment (the command the cursor is in),
     // mirroring how execution splits pipes — so `ls | gr<TAB>` completes `grep`,
@@ -200,6 +194,7 @@ export class ShellCompleter {
             optDef,
             valuePrefix,
             rawEq === -1 ? valuePrefix : rawCurrent.slice(rawEq + 1),
+            (signal) => this.commandContext(command, tokens, segment, line, valuePrefix, signal),
           );
         }
       }
@@ -214,7 +209,9 @@ export class ShellCompleter {
       const optDef = this.findPrecedingOption(optionScopeRemaining, endsWithSpace, command.options);
       if (optDef) {
         const valueCurrent = endsWithSpace ? "" : current;
-        return this.completeOptionValue(optDef, valueCurrent, rawCurrent);
+        return this.completeOptionValue(optDef, valueCurrent, rawCurrent, (signal) =>
+          this.commandContext(command, tokens, segment, line, valueCurrent, signal),
+        );
       }
     }
 
@@ -234,57 +231,81 @@ export class ShellCompleter {
 
     // Custom command completer
     if (command.completer) {
-      // Use the canonical command path (aliases resolved to real names) so the
-      // completer always sees the same path regardless of which alias was typed.
-      const commandPath = this.registry.getCommandPath(command);
-      // Best-effort parse of what has been typed so far, so the completer can
-      // make context-aware suggestions. Parsing never throws here.
-      let parsedArgs: Record<string, unknown> = {};
-      let parsedOptions: Record<string, unknown> = {};
-      try {
-        const parsed = parse(tokens, this.registry);
-        parsedArgs = parsed.args;
-        parsedOptions = parsed.options;
-      } catch {
-        // Ignore parse failures during completion (partial/invalid input).
-      }
-      const filterByPrefix = (candidates: string[]) =>
-        formatCompletionCandidates(candidates, current);
       const controller = new AbortController();
-      const result = guardCall<ReturnType<NonNullable<CommandDefinition["completer"]>> | undefined>(
-        () =>
-          command.completer?.({
-            line: segment,
-            fullLine: line,
-            current,
-            commandPath,
-            args: parsedArgs,
-            options: parsedOptions,
-            iteration: this.tabCount,
-            signal: controller.signal,
-          }),
-        () => undefined,
+      const ctx = this.commandContext(command, tokens, segment, line, current, controller.signal);
+      return this.runCompleter(command.completer, ctx, controller, rawCurrent, (candidates) =>
+        formatCompletionCandidates(candidates, current),
       );
-      if (result === undefined) return [[], rawCurrent];
-      if (result instanceof Promise) {
-        return this.completeWithTimeout(result, rawCurrent, controller, filterByPrefix);
-      }
-      return [filterByPrefix(result), rawCurrent];
     }
 
     return [[], rawCurrent];
   }
 
-  private completeWithTimeout(
-    result: Promise<string[]>,
-    completeOn: string,
+  /** Counts consecutive Tab presses on the same line; any other line restarts at 1. */
+  private countTab(line: string): void {
+    if (line === this.lastLine) {
+      this.tabCount++;
+    } else {
+      this.tabCount = 1;
+      this.lastLine = line;
+    }
+  }
+
+  /**
+   * Builds the completion context for a command: the canonical command path
+   * (aliases resolved, so the completer sees one path whichever alias was
+   * typed) and a best-effort parse of what has been typed so far.
+   */
+  private commandContext(
+    command: CommandDefinition,
+    tokens: string[],
+    segment: string,
+    line: string,
+    current: string,
+    signal: AbortSignal,
+  ): CompletionContext {
+    let args: Record<string, unknown> = {};
+    let options: Record<string, unknown> = {};
+    try {
+      const parsed = parse(tokens, this.registry);
+      args = parsed.args;
+      options = parsed.options;
+    } catch {
+      // Ignore parse failures during completion (partial/invalid input).
+    }
+    return {
+      line: segment,
+      fullLine: line,
+      current,
+      commandPath: this.registry.getCommandPath(command),
+      args,
+      options,
+      iteration: this.tabCount,
+      signal,
+    };
+  }
+
+  /**
+   * Calls a completer under the completion deadline. A throw, a rejection or the
+   * deadline yields no candidates; the deadline also aborts `controller`.
+   * Formatting happens inside the capped promise so a throwing formatter fails
+   * the same way a rejecting provider does, rather than leaving readline paused.
+   */
+  private runCompleter(
+    completer: Completer,
+    ctx: CompletionContext,
     controller: AbortController,
-    filterByPrefix: (candidates: string[]) => string[],
-  ): Promise<CompletionResult> {
-    // Filtering happens inside the capped promise so a throwing filter fails the
-    // same way a rejecting provider does, rather than leaving readline paused.
+    completeOn: string,
+    format: (candidates: unknown) => string[],
+  ): CompletionResult | Promise<CompletionResult> {
+    const result = guardCall<ReturnType<Completer> | undefined>(
+      () => completer(ctx),
+      () => undefined,
+    );
+    if (result === undefined) return [[], completeOn];
+    if (!(result instanceof Promise)) return [format(result), completeOn];
     return withCompletionTimeout(
-      result.then((candidates) => [filterByPrefix(candidates), completeOn] as CompletionResult),
+      result.then((candidates) => [format(candidates), completeOn] as CompletionResult),
       [[], completeOn],
       this.completionTimeoutMs,
       controller,
@@ -313,6 +334,35 @@ export class ShellCompleter {
     };
     if (!(result instanceof Promise)) return wellFormed(result);
     return withCompletionTimeout(result.then(wellFormed), fallback, this.completionTimeoutMs);
+  }
+
+  /**
+   * Runs a shell mode's {@link Completer} for the whole input line. The mode's
+   * context has `line` and `fullLine` set to the input, `current` set to the
+   * last word (`""` at a word boundary), an empty command path, args and
+   * options, and the same Tab counting and deadline signal as command
+   * completion. Candidates are made terminal-safe but not filtered: the mode
+   * owns its own matching.
+   * @param completer - The mode's completer.
+   * @param line - The input line readline is completing.
+   * @returns The candidates paired with the word readline replaces.
+   */
+  async runModeProvider(completer: Completer, line: string): Promise<CompletionResult> {
+    this.countTab(line);
+    const { words, atBoundary } = scanWords(line);
+    const last = atBoundary ? undefined : words[words.length - 1];
+    const controller = new AbortController();
+    const ctx: CompletionContext = {
+      line,
+      fullLine: line,
+      current: last?.value ?? "",
+      commandPath: [],
+      args: {},
+      options: {},
+      iteration: this.tabCount,
+      signal: controller.signal,
+    };
+    return this.runCompleter(completer, ctx, controller, last?.raw ?? "", safeCandidates);
   }
 
   /**
@@ -406,38 +456,29 @@ export class ShellCompleter {
   }
 
   /**
-   * Completes an option's value using its `autocomplete` or `choices` config.
+   * Completes an option's value using its `completer` or `choices` config.
+   * @param context - Builds the completer's context; called only for a function completer.
    */
   private completeOptionValue(
     optDef: OptionDef,
     current: string,
     rawCurrent: string,
+    context: (signal: AbortSignal) => CompletionContext,
   ): CompletionResult | Promise<CompletionResult> {
-    const { autocomplete, choices } = optDef.schema;
+    const { completer, choices } = optDef.schema;
 
-    if (autocomplete) {
-      if (Array.isArray(autocomplete)) {
-        const candidates = formatCompletionCandidates(autocomplete, current);
-        return [candidates, rawCurrent];
+    if (completer) {
+      if (typeof completer !== "function") {
+        return [formatCompletionCandidates(completer, current), rawCurrent];
       }
-      // Function-based autocomplete
-      const result = guardCall<ReturnType<Exclude<typeof autocomplete, string[]>> | undefined>(
-        () => autocomplete(current),
-        () => undefined,
+      const controller = new AbortController();
+      return this.runCompleter(
+        completer,
+        context(controller.signal),
+        controller,
+        rawCurrent,
+        (candidates) => formatCompletionCandidates(candidates, current),
       );
-      if (result === undefined) return [[], rawCurrent];
-      if (result instanceof Promise) {
-        return withCompletionTimeout(
-          result.then(
-            (candidates) =>
-              [formatCompletionCandidates(candidates, current), rawCurrent] as CompletionResult,
-          ),
-          [[], rawCurrent],
-          this.completionTimeoutMs,
-        );
-      }
-      const filtered = formatCompletionCandidates(result, current);
-      return [filtered, rawCurrent];
     }
 
     if (choices) {

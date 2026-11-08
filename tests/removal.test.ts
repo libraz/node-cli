@@ -80,8 +80,23 @@ describe("command removal", () => {
     expect(() => builder.hidden()).toThrow(/detached/);
     expect(() => builder.option("--flag")).toThrow(/detached/);
     expect(() => builder.action(() => {})).toThrow(/detached/);
-    expect(() => builder.complete(() => [])).toThrow(/detached/);
+    expect(() => builder.completer(() => [])).toThrow(/detached/);
     expect(() => builder.validate(() => {})).toThrow(/detached/);
-    expect(() => builder.cancel(() => {})).toThrow(/detached/);
+    expect(() => builder.onCancel(() => {})).toThrow(/detached/);
+  });
+
+  it("codes alias registration on a removed definition as ERR_COMMAND_REMOVED", () => {
+    const registry = new CommandRegistry();
+    const definition = registry.register({
+      name: "task",
+      argDefs: [],
+      options: new Map(),
+      subcommands: new Map(),
+    });
+    registry.unregister(["task"]);
+
+    expect(() => registry.registerAliases(definition, [], ["t"])).toThrow(
+      expect.objectContaining({ code: "ERR_COMMAND_REMOVED" }),
+    );
   });
 });

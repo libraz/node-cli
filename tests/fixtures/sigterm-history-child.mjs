@@ -8,7 +8,7 @@ const cli = createCLI({
 cli.on("exit", () => process.stdout.write("EXIT_EVENT\n"));
 cli
   .command("hang")
-  .cancel(() => process.stdout.write("CANCELLED\n"))
+  .onCancel(() => process.stdout.write("CANCELLED\n"))
   .action((ctx) => {
     progress.spinner({ label: "HANGING", stream: ctx.stderr }).start();
     setInterval(() => {}, 1_000);

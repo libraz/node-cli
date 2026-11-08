@@ -308,4 +308,29 @@ describe("resolveOptions", () => {
     const result = resolveOptions({ unknown: "val" }, defs, dummyCtx);
     expect(result.unknown).toBe("val");
   });
+
+  it("stays synchronous until a custom callback returns a Promise, then keeps option order", async () => {
+    const order: string[] = [];
+    const defs = new Map([
+      ["a", makeDef("a", { type: "string", parse: async (value) => `${order.push("a")}${value}` })],
+      [
+        "b",
+        makeDef("b", {
+          type: "string",
+          validate: (value) => {
+            order.push(`b:${String(value)}`);
+          },
+        }),
+      ],
+    ]);
+    expect(
+      resolveOptions({ b: "x" }, new Map([["b", defs.get("b") as OptionDef]]), dummyCtx),
+    ).not.toBeInstanceOf(Promise);
+
+    order.length = 0;
+    const pending = resolveOptions({ a: "1", b: "2" }, defs, dummyCtx);
+    expect(pending).toBeInstanceOf(Promise);
+    await expect(pending).resolves.toMatchObject({ a: "11", b: "2" });
+    expect(order).toEqual(["a", "b:2"]);
+  });
 });

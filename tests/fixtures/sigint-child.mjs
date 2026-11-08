@@ -3,7 +3,7 @@ import { createCLI } from "../../dist/index.js";
 const cli = createCLI();
 cli
   .command("wait")
-  .cancel((ctx) => {
+  .onCancel((ctx) => {
     ctx.stdout.write("CANCEL\n");
     throw new Error("cancel cleanup failed");
   })

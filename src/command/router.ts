@@ -663,7 +663,10 @@ export class CommandRouter {
       if (!command.action) return;
 
       // Resolve options
-      ctx.options = resolveOptions(result.options, command.options, ctx);
+      // Awaited only when a custom callback went async, so a fully synchronous
+      // resolution starts the action in the same tick.
+      const options = resolveOptions(result.options, command.options, ctx);
+      ctx.options = options instanceof Promise ? await options : options;
 
       // Run command-level validation
       if (command.validate) {

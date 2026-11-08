@@ -1,8 +1,10 @@
+import { usageError } from "../errors.js";
 import { coerceOptionValue } from "../option/resolver.js";
 import type {
   Action,
-  CommandContext,
+  CancelHandler,
   CommandDefinition,
+  CommandValidator,
   Completer,
   OptionSchema,
 } from "../types.js";
@@ -56,12 +58,17 @@ export class CommandBuilder {
 
   private assertRegistered(): void {
     if (!this.registry.isRegistered(this.definition, this.parentPath)) {
-      throw new Error(`Cannot configure detached command "${this.definition.name}"`);
+      throw usageError(
+        "state",
+        "ERR_COMMAND_REMOVED",
+        `Cannot configure detached command "${this.definition.name}"`,
+      );
     }
   }
 
   /**
    * Sets a human-readable description for this command, used in help output.
+   * Repeated call: replaces the previous description.
    *
    * @param text - The description text.
    * @returns This builder instance for chaining.
@@ -72,7 +79,13 @@ export class CommandBuilder {
     return this;
   }
 
-  /** Excludes this command from generated help and completion. */
+  /**
+   * Excludes this command from generated help and completion.
+   * Repeated call: replaces the previous setting.
+   *
+   * @param hidden - Whether the command is hidden. Defaults to true.
+   * @returns This builder instance for chaining.
+   */
   hidden(hidden = true): this {
     this.assertRegistered();
     this.definition.hidden = hidden;
@@ -83,12 +96,19 @@ export class CommandBuilder {
    * Adds an option to this command.
    *
    * The flags string may contain short and long forms separated by commas,
-   * with an optional value placeholder (e.g., `"-p, --port <number>"`).
-   * If no type is provided in the schema, it is inferred from the flag format.
+   * with an optional value placeholder (e.g., `"-p, --port <port>"`).
+   * If no type is provided in the schema, it is inferred from the flag format:
+   * a placeholder means `string`, none means `boolean`. A `<number>` placeholder
+   * requires `type: "number"` or `"number[]"`, and a `<boolean>` placeholder
+   * requires `type: "boolean"`.
+   * Repeated call: the same option name replaces the previous definition in
+   * place; a new name adds an option.
    *
    * @param flags - The option flags string.
    * @param schema - Optional schema describing the option's type, default value, etc.
    * @returns This builder instance for chaining.
+   * @throws {Error} `ERR_INVALID_DEFINITION` for malformed flags or an invalid
+   *   schema, `ERR_DEFINITION_CONFLICT` when a name or alias belongs to another option.
    */
   option(flags: string, schema: OptionSchema = {}): this {
     this.assertRegistered();
@@ -102,8 +122,25 @@ export class CommandBuilder {
       resolved.type = takesValue ? "string" : "boolean";
     }
 
+    // The placeholder names the value's type in help, so it must agree with it.
+    const placeholderTypes = valueName === "number" ? ["number", "number[]"] : ["boolean"];
+    if (
+      (valueName === "number" || valueName === "boolean") &&
+      !placeholderTypes.includes(resolved.type)
+    ) {
+      throw usageError(
+        "state",
+        "ERR_INVALID_DEFINITION",
+        `Option "--${long}" uses the <${valueName}> placeholder but its type is ${resolved.type}; set type: "${valueName}" or rename the placeholder`,
+      );
+    }
+
     if (resolved.required === true && resolved.default !== undefined) {
-      throw new Error(`Option "--${long}" cannot be both required and have a default value`);
+      throw usageError(
+        "state",
+        "ERR_INVALID_DEFINITION",
+        `Option "--${long}" cannot be both required and have a default value`,
+      );
     }
 
     // Single source of truth for "does this option take a value": derive it from
@@ -127,19 +164,29 @@ export class CommandBuilder {
         resolved.default === null &&
         (resolved.type === "boolean" || resolved.type === "number")
       ) {
-        throw new Error(`Invalid default for --${long}: null is not a ${resolved.type}`);
+        throw usageError(
+          "state",
+          "ERR_INVALID_DEFINITION",
+          `Invalid default for --${long}: null is not a ${resolved.type}`,
+        );
       }
       try {
         resolved.default = coerceOptionValue(resolved.default, resolved.type, long);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Invalid default for --${long}: ${message}`);
+        throw usageError(
+          "state",
+          "ERR_INVALID_DEFINITION",
+          `Invalid default for --${long}: ${message}`,
+        );
       }
       if (resolved.choices) {
         const allowed = resolved.choices.map(String);
         const values = Array.isArray(resolved.default) ? resolved.default : [resolved.default];
         if (values.some((value) => !allowed.includes(String(value)))) {
-          throw new Error(
+          throw usageError(
+            "state",
+            "ERR_INVALID_DEFINITION",
             `Invalid default for --${long}: value is not one of the declared choices`,
           );
         }
@@ -149,7 +196,7 @@ export class CommandBuilder {
     // Merge schema-declared aliases (e.g. { alias: "p" }) into the alias list.
     const mergedAliases = [...aliases, ...longAliases];
     if (resolved.alias) {
-      const extra = Array.isArray(resolved.alias) ? resolved.alias : [resolved.alias];
+      const extra = typeof resolved.alias === "string" ? [resolved.alias] : resolved.alias;
       for (const a of extra) {
         const name = stripOptionPrefix(a);
         if (name && !mergedAliases.includes(name)) {
@@ -158,16 +205,26 @@ export class CommandBuilder {
       }
     }
 
-    if (!long) throw new Error(`Invalid option flags: missing option name in "${flags}"`);
+    if (!long) {
+      throw usageError(
+        "state",
+        "ERR_INVALID_DEFINITION",
+        `Invalid option flags: missing option name in "${flags}"`,
+      );
+    }
     if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(long)) {
-      throw new Error(`Invalid option name "${long}"`);
+      throw usageError("state", "ERR_INVALID_DEFINITION", `Invalid option name "${long}"`);
     }
     for (const alias of mergedAliases) {
       if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(alias)) {
-        throw new Error(`Invalid option alias "${alias}"`);
+        throw usageError("state", "ERR_INVALID_DEFINITION", `Invalid option alias "${alias}"`);
       }
       if (!longAliases.includes(alias) && alias.length !== 1) {
-        throw new Error(`Option alias "-${alias}" must be exactly one character`);
+        throw usageError(
+          "state",
+          "ERR_INVALID_DEFINITION",
+          `Option alias "-${alias}" must be exactly one character`,
+        );
       }
     }
 
@@ -181,7 +238,11 @@ export class CommandBuilder {
       if (existingLong === long) continue;
       for (const existingName of [existing.long, ...existing.aliases]) {
         if (candidateNames.has(existingName)) {
-          throw new Error(`Option name or alias "${existingName}" is already registered`);
+          throw usageError(
+            "state",
+            "ERR_DEFINITION_CONFLICT",
+            `Option name or alias "${existingName}" is already registered`,
+          );
         }
       }
     }
@@ -199,6 +260,7 @@ export class CommandBuilder {
 
   /**
    * Sets the action handler that is invoked when this command is executed.
+   * Repeated call: replaces the previous action.
    *
    * @param fn - The async (or sync) function to run when the command matches.
    * @returns This builder instance for chaining.
@@ -216,12 +278,14 @@ export class CommandBuilder {
   }
 
   /**
-   * Sets a custom tab-completion function for this command.
+   * Sets a custom tab-completion function for this command's arguments. It
+   * receives a `CompletionContext` and returns candidates for `ctx.current`.
+   * Repeated call: replaces the previous completer.
    *
    * @param fn - The completer function that returns completion candidates.
    * @returns This builder instance for chaining.
    */
-  complete(fn: Completer): this {
+  completer(fn: Completer): this {
     this.assertRegistered();
     this.definition.completer = fn;
     return this;
@@ -229,11 +293,14 @@ export class CommandBuilder {
 
   /**
    * Adds one or more aliases for this command.
+   * Repeated call: adds to the existing aliases; duplicates are ignored.
    *
    * @param names - Alias names that can be used to invoke this command.
    * @returns This builder instance for chaining.
+   * @throws {Error} `ERR_DEFINITION_CONFLICT` when an alias names another command
+   *   or another command's alias at the same level.
    */
-  alias(...names: string[]): this {
+  alias(...names: readonly string[]): this {
     this.assertRegistered();
     const aliases = [...(this.definition.aliases ?? [])];
     // Deduplicate against existing aliases and the command's own name.
@@ -249,31 +316,39 @@ export class CommandBuilder {
 
   /**
    * Sets a pre-action validator for this command.
-   * The validator receives the command context and should throw to reject execution.
+   * The validator receives the command context after option resolution and
+   * should throw (or reject) to stop execution; it is awaited before the action.
+   * Repeated call: replaces the previous validator.
    *
    * @param fn - The validation function.
    * @returns This builder instance for chaining.
    */
-  validate(fn: (ctx: CommandContext) => void | Promise<void>): this {
+  validate(fn: CommandValidator): this {
     this.assertRegistered();
     this.definition.validate = fn;
     return this;
   }
 
   /**
-   * Sets a handler invoked when SIGINT is received during this command's execution.
+   * Sets a handler invoked when this command is interrupted while running:
+   * Ctrl-C, an aborted exec signal, or SIGTERM in the shell. It is not awaited;
+   * a rejection is reported through the `error` event.
+   * Repeated call: replaces the previous handler.
    *
    * @param fn - The cancel handler function.
    * @returns This builder instance for chaining.
    */
-  cancel(fn: (ctx: CommandContext) => void): this {
+  onCancel(fn: CancelHandler): this {
     this.assertRegistered();
     this.definition.cancelHandler = fn;
     return this;
   }
 
   /**
-   * Removes this command from the registry.
+   * Removes this command from the registry. It returns a boolean, so the chain
+   * ends here; any later configuration call on this builder throws
+   * `ERR_COMMAND_REMOVED`.
+   * Repeated call: returns false.
    *
    * @returns True if the command was found and removed, false otherwise.
    */
@@ -282,10 +357,13 @@ export class CommandBuilder {
   }
 
   /**
-   * Registers a subcommand under this command and returns a new builder for it.
+   * Registers a subcommand under this command and returns the subcommand's
+   * builder, not this one, so the chain continues on the child.
+   * Repeated call: the same name merges into the existing subcommand.
    *
    * @param definitionStr - The definition string for the subcommand (e.g., `"list [filter]"`).
    * @returns A new {@link CommandBuilder} for configuring the subcommand.
+   * @throws {Error} `ERR_INVALID_DEFINITION` for a malformed definition string.
    */
   command(definitionStr: string): CommandBuilder {
     this.assertRegistered();

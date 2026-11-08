@@ -163,7 +163,7 @@ describe("CommandRouter", () => {
 
     for (const name of ["first", "second"]) {
       CommandBuilder.create(registry, name)
-        .cancel(() => {
+        .onCancel(() => {
           cancelled.push(name);
           if (name === "first") throw new Error("broken cleanup");
         })
@@ -221,7 +221,7 @@ describe("CommandRouter", () => {
     const cancel = vi.fn();
     let finish: (() => void) | undefined;
     CommandBuilder.create(registry, "slow")
-      .cancel(cancel)
+      .onCancel(cancel)
       .action(
         () =>
           new Promise<void>((resolve) => {

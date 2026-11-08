@@ -1,3 +1,4 @@
+import { usageError } from "../errors.js";
 import type { CommandDefinition } from "../types.js";
 
 /**
@@ -74,7 +75,11 @@ export class CommandRegistry {
     const prefix = parentPath.join("/");
     const aliasTarget = this.aliasMap.get(`${prefix}:${name}`);
     if (aliasTarget !== undefined && aliasTarget !== name) {
-      throw new Error(`Command "${name}" conflicts with alias for command "${aliasTarget}"`);
+      throw usageError(
+        "state",
+        "ERR_DEFINITION_CONFLICT",
+        `Command "${name}" conflicts with alias for command "${aliasTarget}"`,
+      );
     }
   }
 
@@ -88,14 +93,18 @@ export class CommandRegistry {
   registerAliases(
     def: CommandDefinition,
     parentPath: string[],
-    aliases: string[] = def.aliases ?? [],
+    aliases: readonly string[] = def.aliases ?? [],
   ): void {
     if (aliases.length === 0) return;
     const prefix = parentPath.join("/");
     // Sibling commands at this level, used to detect alias/name collisions.
     const siblings = parentPath.length === 0 ? this.root : this.resolve(parentPath)?.subcommands;
     if (siblings?.get(def.name) !== def) {
-      throw new Error(`Cannot add aliases to detached command "${def.name}"`);
+      throw usageError(
+        "state",
+        "ERR_COMMAND_REMOVED",
+        `Cannot add aliases to detached command "${def.name}"`,
+      );
     }
 
     // Validate the complete batch before committing any mapping.
@@ -105,7 +114,9 @@ export class CommandRegistry {
       // Collision with another command's existing alias at the same level.
       const existingAlias = this.aliasMap.get(key);
       if (existingAlias !== undefined && existingAlias !== def.name) {
-        throw new Error(
+        throw usageError(
+          "state",
+          "ERR_DEFINITION_CONFLICT",
           `Alias "${alias}" already maps to command "${existingAlias}" and cannot also alias "${def.name}"`,
         );
       }
@@ -113,7 +124,11 @@ export class CommandRegistry {
       // Collision with a real command of that name at the same level.
       const sibling = siblings?.get(alias);
       if (sibling && sibling !== def) {
-        throw new Error(`Alias "${alias}" conflicts with existing command "${alias}"`);
+        throw usageError(
+          "state",
+          "ERR_DEFINITION_CONFLICT",
+          `Alias "${alias}" conflicts with existing command "${alias}"`,
+        );
       }
     }
 

@@ -1,4 +1,4 @@
-import { InvalidOptionError, ParseError, UnknownOptionError } from "../errors.js";
+import { InvalidOptionError, ParseError, UnknownOptionError, usageError } from "../errors.js";
 import type { ArgDef, CommandDefinition, OptionDef, ParseResult } from "../types.js";
 import type { CommandRegistry } from "./registry.js";
 
@@ -329,7 +329,9 @@ export function parseDefinitionString(definition: string): {
       // name but a silent ambiguity (it would become an unreachable subcommand).
       // Reject it so the mistake surfaces at definition time.
       if (seenArg) {
-        throw new Error(
+        throw usageError(
+          "state",
+          "ERR_INVALID_DEFINITION",
           `Invalid command definition: command name "${token}" cannot follow an argument in "${definition}"`,
         );
       }
@@ -339,21 +341,29 @@ export function parseDefinitionString(definition: string): {
 
   const name = names.pop();
   if (!name) {
-    throw new Error(`Invalid command definition: missing command name in "${definition}"`);
+    throw usageError(
+      "state",
+      "ERR_INVALID_DEFINITION",
+      `Invalid command definition: missing command name in "${definition}"`,
+    );
   }
 
   const argumentNames = new Set<string>();
   let seenOptional = false;
   for (const arg of argDefs) {
     if (argumentNames.has(arg.name)) {
-      throw new Error(
+      throw usageError(
+        "state",
+        "ERR_INVALID_DEFINITION",
         `Invalid command definition: duplicate argument name "${arg.name}" in "${definition}"`,
       );
     }
     argumentNames.add(arg.name);
     if (!arg.required) seenOptional = true;
     if (arg.required && seenOptional) {
-      throw new Error(
+      throw usageError(
+        "state",
+        "ERR_INVALID_DEFINITION",
         `Invalid command definition: required argument "${arg.name}" cannot follow an optional argument in "${definition}"`,
       );
     }
@@ -362,7 +372,9 @@ export function parseDefinitionString(definition: string): {
   // A variadic argument must be the last argument; nothing after it is reachable.
   for (let i = 0; i < argDefs.length - 1; i++) {
     if (argDefs[i].variadic) {
-      throw new Error(
+      throw usageError(
+        "state",
+        "ERR_INVALID_DEFINITION",
         `Invalid command definition: variadic argument "...${argDefs[i].name}" must be last in "${definition}"`,
       );
     }
@@ -381,7 +393,9 @@ function parseArgToken(token: string): ArgDef {
   const required = token.startsWith("<");
   const closer = required ? ">" : "]";
   if (!token.endsWith(closer)) {
-    throw new Error(
+    throw usageError(
+      "state",
+      "ERR_INVALID_DEFINITION",
       `Invalid command definition: argument token "${token}" is missing its closing "${closer}"`,
     );
   }
@@ -389,7 +403,11 @@ function parseArgToken(token: string): ArgDef {
   const variadic = inner.startsWith("...");
   const name = variadic ? inner.slice(3) : inner;
   if (name.length === 0) {
-    throw new Error(`Invalid command definition: empty argument name in "${token}"`);
+    throw usageError(
+      "state",
+      "ERR_INVALID_DEFINITION",
+      `Invalid command definition: empty argument name in "${token}"`,
+    );
   }
 
   return { name, required, variadic };

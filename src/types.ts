@@ -27,7 +27,7 @@ export interface OptionSchema {
   /** The expected value type of the option. */
   type?: "string" | "number" | "boolean" | "string[]" | "number[]";
   /** Short alias or list of aliases for the option (e.g. "-v"). */
-  alias?: string | string[];
+  alias?: string | readonly string[];
   /** Whether the option must be provided. */
   required?: boolean;
   /**
@@ -39,15 +39,26 @@ export interface OptionSchema {
    */
   default?: unknown;
   /** Restricts the option value to one of the given choices. */
-  choices?: unknown[];
-  /** Custom parser that converts the raw string value into the desired type. */
+  choices?: readonly unknown[];
+  /**
+   * Custom parser that converts the raw string value into the desired type. A
+   * returned Promise is awaited before the action runs; a throw or rejection
+   * becomes a `ValidationError`.
+   */
   parse?: (value: string, ctx: CommandContext) => unknown;
-  /** Custom validator that throws on invalid values. */
-  validate?: (value: unknown, ctx: CommandContext) => void;
+  /**
+   * Custom validator that throws (or rejects) on invalid values. It is awaited
+   * before the action runs; a failure becomes a `ValidationError`.
+   */
+  validate?: (value: unknown, ctx: CommandContext) => void | Promise<void>;
   /** If true, the option is hidden from help output. */
   hidden?: boolean;
-  /** Completion candidates for this option's value. Can be a static array or a function. */
-  autocomplete?: string[] | ((current: string) => string[] | Promise<string[]>);
+  /**
+   * Completion candidates for this option's value: a static list, or a
+   * {@link Completer} called with the completion context. Takes precedence over
+   * `choices` for completion.
+   */
+  completer?: readonly string[] | Completer;
 }
 
 /**
@@ -76,10 +87,11 @@ export interface OptionDef {
 export type Action = (ctx: CommandContext) => void | Promise<void>;
 
 /**
- * A completion provider that returns suggested completions for the current input.
- * May be synchronous or asynchronous.
+ * A completion provider that returns candidates for the word under the cursor
+ * (`ctx.current`). May be synchronous or asynchronous; it is cut off when
+ * `ctx.signal` aborts at the completion deadline.
  */
-export type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
+export type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonly string[]>;
 
 /**
  * A command-level validator run after option resolution and before the action.
@@ -225,7 +237,7 @@ export interface CommandContext extends CommandStreams {
    * Signal that is aborted when the command is cancelled (e.g. SIGINT in the
    * interactive shell or direct mode). Async actions can pass it to
    * abort-aware APIs (`fetch`, timers, streams) or listen for `"abort"` to stop
-   * cooperatively. It is the signal-based counterpart to `cli.command().cancel()`:
+   * cooperatively. It is the signal-based counterpart to `cli.command().onCancel()`:
    * both fire on the same cancellation, so a command may use either or both.
    */
   readonly signal: AbortSignal;
@@ -272,25 +284,27 @@ export interface PluginContext {
 export type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
 /**
- * Context passed to a command's completion provider.
+ * Context passed to a {@link Completer}. In a shell mode, `line` and
+ * `fullLine` are the whole input line, `commandPath` is empty, and `args` and
+ * `options` are empty.
  */
 export interface CompletionContext {
   /** The active pipeline segment being completed. */
-  line: string;
+  readonly line: string;
   /** The complete input line, including earlier pipeline segments. */
-  fullLine: string;
-  /** The current word (token) under the cursor. */
-  current: string;
+  readonly fullLine: string;
+  /** The current word (token) under the cursor; `""` at a word boundary. */
+  readonly current: string;
   /** The resolved command path up to the current input. */
-  commandPath: string[];
-  /** Positional arguments parsed so far. */
-  args: Record<string, unknown>;
+  readonly commandPath: readonly string[];
+  /** Positional arguments parsed so far, as raw strings. */
+  readonly args: Record<string, unknown>;
   /** Raw option values parsed so far; coercion, defaults, and validation are not applied during completion. */
-  options: Record<string, unknown>;
+  readonly options: Record<string, unknown>;
   /** Number of consecutive Tab presses (1-based). Resets on any other input. */
-  iteration: number;
+  readonly iteration: number;
   /** Aborted when the completion deadline expires. */
-  signal: AbortSignal;
+  readonly signal: AbortSignal;
 }
 
 // ── CLI Options ──

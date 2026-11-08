@@ -147,7 +147,7 @@ describe("ShellCompleter", () => {
   it("escapes whitespace in option-value candidates before readline inserts them", () => {
     const registry2 = new CommandRegistry();
     CommandBuilder.create(registry2, "deploy <env>").option("--region <region>", {
-      autocomplete: ["New York"],
+      completer: ["New York"],
     });
     const completer2 = new ShellCompleter(registry2);
 
@@ -159,11 +159,11 @@ describe("ShellCompleter", () => {
     expect(candidates).toEqual([]);
   });
 
-  describe("option value autocomplete", () => {
-    it("completes option values from static autocomplete array", () => {
+  describe("option value completer", () => {
+    it("completes option values from static completer array", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "deploy <env>").option("--region <region>", {
-        autocomplete: ["us-east-1", "us-west-2", "eu-west-1"],
+        completer: ["us-east-1", "us-west-2", "eu-west-1"],
       });
       const comp = new ShellCompleter(reg);
 
@@ -174,7 +174,7 @@ describe("ShellCompleter", () => {
     it("filters option value candidates by partial input", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "deploy <env>").option("--region <region>", {
-        autocomplete: ["us-east-1", "us-west-2", "eu-west-1"],
+        completer: ["us-east-1", "us-west-2", "eu-west-1"],
       });
       const comp = new ShellCompleter(reg);
 
@@ -182,10 +182,10 @@ describe("ShellCompleter", () => {
       expect(candidates).toEqual(["us-east-1", "us-west-2"]);
     });
 
-    it("completes option values from function autocomplete", () => {
+    it("completes option values from function completer", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "deploy <env>").option("--region <region>", {
-        autocomplete: () => ["us-east-1", "us-west-2", "eu-west-1"],
+        completer: () => ["us-east-1", "us-west-2", "eu-west-1"],
       });
       const comp = new ShellCompleter(reg);
 
@@ -193,10 +193,10 @@ describe("ShellCompleter", () => {
       expect(candidates).toEqual(["us-east-1", "us-west-2", "eu-west-1"]);
     });
 
-    it("completes option values from async autocomplete", async () => {
+    it("completes option values from async completer", async () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "deploy <env>").option("--region <region>", {
-        autocomplete: async () => ["us-east-1", "us-west-2"],
+        completer: async () => ["us-east-1", "us-west-2"],
       });
       const comp = new ShellCompleter(reg);
 
@@ -206,10 +206,10 @@ describe("ShellCompleter", () => {
       expect(candidates).toEqual(["us-east-1", "us-west-2"]);
     });
 
-    it("isolates sync and async autocomplete failures", async () => {
+    it("isolates sync and async completer failures", async () => {
       const syncRegistry = new CommandRegistry();
       CommandBuilder.create(syncRegistry, "sync").option("--value <value>", {
-        autocomplete: () => {
+        completer: () => {
           throw new Error("provider failed");
         },
       });
@@ -217,7 +217,7 @@ describe("ShellCompleter", () => {
 
       const asyncRegistry = new CommandRegistry();
       CommandBuilder.create(asyncRegistry, "async").option("--value <value>", {
-        autocomplete: async () => {
+        completer: async () => {
           throw new Error("provider failed");
         },
       });
@@ -230,7 +230,7 @@ describe("ShellCompleter", () => {
     it("completes option values using short alias", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "deploy <env>").option("-r, --region <region>", {
-        autocomplete: ["us-east-1", "us-west-2"],
+        completer: ["us-east-1", "us-west-2"],
       });
       const comp = new ShellCompleter(reg);
 
@@ -238,11 +238,11 @@ describe("ShellCompleter", () => {
       expect(candidates).toEqual(["us-east-1", "us-west-2"]);
     });
 
-    it("prefers autocomplete over choices when both present", () => {
+    it("prefers completer over choices when both present", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "deploy <env>").option("--env <env>", {
         choices: ["prod", "staging"],
-        autocomplete: ["production", "staging", "development"],
+        completer: ["production", "staging", "development"],
       });
       const comp = new ShellCompleter(reg);
 
@@ -250,7 +250,7 @@ describe("ShellCompleter", () => {
       expect(candidates).toEqual(["production", "staging", "development"]);
     });
 
-    it("falls back to choices when no autocomplete is set", () => {
+    it("falls back to choices when no completer is set", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "deploy <env>").option("--env <env>", {
         choices: ["prod", "staging", "dev"],
@@ -267,7 +267,7 @@ describe("ShellCompleter", () => {
       const reg = new CommandRegistry();
       let lastIteration = 0;
       CommandBuilder.create(reg, "test")
-        .complete((ctx) => {
+        .completer((ctx) => {
           lastIteration = ctx.iteration;
           return ["a", "b"];
         })
@@ -288,7 +288,7 @@ describe("ShellCompleter", () => {
       const reg = new CommandRegistry();
       let lastIteration = 0;
       CommandBuilder.create(reg, "test")
-        .complete((ctx) => {
+        .completer((ctx) => {
           lastIteration = ctx.iteration;
           return ["a", "b"];
         })
@@ -307,7 +307,7 @@ describe("ShellCompleter", () => {
       const reg = new CommandRegistry();
       let iteration = 0;
       CommandBuilder.create(reg, "test")
-        .complete((ctx) => {
+        .completer((ctx) => {
           iteration = ctx.iteration;
           return [];
         })
@@ -324,7 +324,7 @@ describe("ShellCompleter", () => {
     it("allows iteration-based progressive completions", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "color")
-        .complete((ctx) => {
+        .completer((ctx) => {
           if (ctx.iteration === 1) return ["red", "green", "blue"];
           return ["red", "green", "blue", "cyan", "magenta", "yellow"];
         })
@@ -343,7 +343,7 @@ describe("ShellCompleter", () => {
     it("calls custom completer when no other completion matches", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "connect <host>")
-        .complete(() => ["localhost", "example.com", "192.168.1.1"])
+        .completer(() => ["localhost", "example.com", "192.168.1.1"])
         .action(() => {});
       const comp = new ShellCompleter(reg);
 
@@ -354,7 +354,7 @@ describe("ShellCompleter", () => {
     it("handles async custom completers", async () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "connect <host>")
-        .complete(async () => ["localhost", "example.com"])
+        .completer(async () => ["localhost", "example.com"])
         .action(() => {});
       const comp = new ShellCompleter(reg);
 
@@ -368,7 +368,7 @@ describe("ShellCompleter", () => {
       const reg = new CommandRegistry();
       let aborted = false;
       CommandBuilder.create(reg, "connect <host>")
-        .complete(({ signal }) => {
+        .completer(({ signal }) => {
           signal.addEventListener("abort", () => {
             aborted = true;
           });
@@ -381,12 +381,12 @@ describe("ShellCompleter", () => {
       expect(aborted).toBe(true);
     });
 
-    it("times out a stalled option-value autocomplete on both flag forms", async () => {
+    it("times out a stalled option-value completer on both flag forms", async () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "connect")
         .option("--host <host>", {
           type: "string",
-          autocomplete: () => new Promise<string[]>(() => {}),
+          completer: () => new Promise<string[]>(() => {}),
         })
         .action(() => {});
       const comp = new ShellCompleter(reg, { completionTimeoutMs: 1 });
@@ -411,7 +411,7 @@ describe("ShellCompleter", () => {
     it("tolerates incomplete quotes and isolates custom provider failures", async () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "connect <host>")
-        .complete(() => {
+        .completer(() => {
           throw new Error("provider failed");
         })
         .action(() => {});
@@ -422,7 +422,7 @@ describe("ShellCompleter", () => {
 
       const asyncReg = new CommandRegistry();
       CommandBuilder.create(asyncReg, "connect <host>")
-        .complete(async () => {
+        .completer(async () => {
           throw new Error("provider failed");
         })
         .action(() => {});
@@ -434,7 +434,7 @@ describe("ShellCompleter", () => {
       let observedLine = "";
       CommandBuilder.create(reg, "list").action(() => {});
       CommandBuilder.create(reg, "connect <host>")
-        .complete((ctx) => {
+        .completer((ctx) => {
           observedLine = ctx.line;
           return ["localhost"];
         })
@@ -449,7 +449,7 @@ describe("ShellCompleter", () => {
     it("falls through to a group command completer when no subcommand matches", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "tool")
-        .complete(() => ["custom-target"])
+        .completer(() => ["custom-target"])
         .command("known")
         .action(() => {});
       const comp = new ShellCompleter(reg);
@@ -468,7 +468,7 @@ describe("ShellCompleter", () => {
     it("reports the raw word being replaced when the typed word is escaped", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "book")
-        .option("--city <city>", { autocomplete: ["New York"] })
+        .option("--city <city>", { completer: ["New York"] })
         .action(() => {});
       const comp = new ShellCompleter(reg);
 
@@ -481,7 +481,7 @@ describe("ShellCompleter", () => {
     it("escapes the pipe separator so the inserted word stays one token", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "filter")
-        .option("--expr <expr>", { autocomplete: ["a|b"] })
+        .option("--expr <expr>", { completer: ["a|b"] })
         .action(() => {});
       const comp = new ShellCompleter(reg);
 
@@ -497,7 +497,7 @@ describe("ShellCompleter", () => {
     function regionCompleter(): ShellCompleter {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "deploy <env>")
-        .option("--region <region>", { autocomplete: ["us east", "us west", "eu"] })
+        .option("--region <region>", { completer: ["us east", "us west", "eu"] })
         .action(() => {});
       return new ShellCompleter(reg);
     }
@@ -530,7 +530,7 @@ describe("ShellCompleter", () => {
     it("honours escaped quotes inside double quotes when finding the raw word", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "host <name>")
-        .complete(() => ["alpha"])
+        .completer(() => ["alpha"])
         .action(() => {});
       const comp = new ShellCompleter(reg);
       const [, completeOn] = comp.complete('host "a\\" b') as [string[], string];
@@ -542,8 +542,8 @@ describe("ShellCompleter", () => {
     function completerFor(fn: () => unknown): ShellCompleter {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "connect <host>")
-        .option("--region <region>", { autocomplete: fn as () => string[] })
-        .complete(fn as () => string[])
+        .option("--region <region>", { completer: fn as () => string[] })
+        .completer(fn as () => string[])
         .action(() => {});
       return new ShellCompleter(reg);
     }
