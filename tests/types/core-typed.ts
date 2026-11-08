@@ -48,6 +48,22 @@ files.action((ctx) => {
   ctx.args.files.push("x");
 });
 
+// The documented example: arguments and options typed from one chain.
+cli
+  .command("serve <host>")
+  .option("-p, --port <n>", { type: "number", default: 8080 })
+  .option("--level <l>", { choices: ["debug", "info"] })
+  .option("-v, --verbose")
+  .action((ctx) => {
+    const host: Equal<typeof ctx.args.host, string> = true;
+    const port: Equal<typeof ctx.options.port, number> = true;
+    const level: Equal<typeof ctx.options.level, "debug" | "info" | undefined> = true;
+    const verbose: Equal<typeof ctx.options.verbose, boolean> = true;
+    // @ts-expect-error an undeclared option is a type error
+    void ctx.options.typo;
+    void [host, port, level, verbose];
+  });
+
 // Options accumulate along a literal chain.
 const serve = cli
   .command("serve")
