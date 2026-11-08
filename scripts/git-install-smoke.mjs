@@ -54,7 +54,7 @@ try {
   });
   await writeFile(
     resolve(consumer, "smoke.mjs"),
-    'import { CLI } from "@libraz/node-cli";\nif (typeof CLI !== "function") throw new Error("CLI export missing");\n',
+    'import { createCLI } from "@libraz/node-cli";\nif (typeof createCLI !== "function") throw new Error("createCLI export missing");\n',
   );
   run(process.execPath, [resolve(consumer, "smoke.mjs")], { cwd: consumer });
   process.stdout.write("Git dependency install smoke passed\n");
