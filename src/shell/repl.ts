@@ -1,12 +1,11 @@
-import type { Writable } from "node:stream";
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
 import { presentError } from "../errors.js";
 import { streamIsTTY } from "../output/color.js";
 import { inputExhausted, type LineReader, openLineReader } from "../output/line-reader.js";
 import { releaseAll } from "../output/progress.js";
+import type { Completer, CompletionContext, ModeContext } from "../types.js";
 import { isShellCommand } from "./builtins.js";
-import type { CompletionResult } from "./completion.js";
 import { ShellCompleter } from "./completion.js";
 import { History } from "./history.js";
 
@@ -25,18 +24,14 @@ export interface ModeConfig {
    * SIGTERM during the action, so a long-running mode action (e.g. a slow query)
    * can cancel cooperatively. A second Ctrl-C force-quits the process.
    */
-  action: (
-    input: string,
-    ctx: {
-      stdout: Writable;
-      stderr: Writable;
-      signal: AbortSignal;
-    },
-  ) => void | Promise<void>;
-  /** Message displayed when entering the mode. */
-  message?: string;
-  /** Optional mode-specific tab completer. Top-level command completion is disabled by default. */
-  completer?: (line: string) => CompletionResult | Promise<CompletionResult>;
+  action: (input: string, ctx: ModeContext) => void | Promise<void>;
+  /** Banner printed once when entering the mode. */
+  banner?: string;
+  /**
+   * Optional mode-specific tab completer, called with a {@link CompletionContext}
+   * whose `commandPath` is empty. Top-level command completion is disabled by default.
+   */
+  completer?: Completer;
   /** In-memory mode history policy. Mode input is never persisted to disk. Defaults to `session`. */
   history?: "session" | "none";
 }
@@ -46,7 +41,7 @@ export interface ModeConfig {
  */
 export interface Shell {
   /** Changes the prompt; inside a mode the change applies after leaving it. */
-  setPrompt(text: string): void;
+  setPrompt(text: string): this;
   /** Enters a mode sub-REPL that routes every line to the mode's action. */
   enterMode(config: ModeConfig): void;
   /** Leaves the current mode and returns to the command prompt. */
@@ -136,8 +131,7 @@ export class InteractiveShell implements Shell {
       history: activeHistory,
       completer: mode
         ? modeCompleter
-          ? (line: string) =>
-              Promise.resolve(this.completer.runProvider(() => modeCompleter(line), [[], line]))
+          ? (line: string) => Promise.resolve(this.completer.runModeProvider(modeCompleter, line))
           : undefined
         : (line: string) => this.completer.complete(line),
       terminal: streamIsTTY(process.stdin) && streamIsTTY(process.stdout),
@@ -458,11 +452,12 @@ export class InteractiveShell implements Shell {
    *
    * @param text - The new prompt string.
    */
-  setPrompt(text: string): void {
+  setPrompt(text: string): this {
     this.promptStr = text;
     if (this.reader && !this.mode) {
       this.reader.rl.setPrompt(text);
     }
+    return this;
   }
 
   /**
@@ -475,8 +470,8 @@ export class InteractiveShell implements Shell {
   enterMode(config: ModeConfig): void {
     this.mode = config;
     this.modeHistory = [];
-    if (config.message) {
-      process.stdout.write(`${config.message}\n`);
+    if (config.banner) {
+      process.stdout.write(`${config.banner}\n`);
     }
     this.reader?.rl.setPrompt(config.prompt);
   }

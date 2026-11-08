@@ -137,7 +137,7 @@ Tab を押すと、カーソル位置の単語に対する補完候補をシェ�
 
 ### 補完コンテキスト
 
-コマンドは `.complete(fn)` で独自の候補を提供します。`fn` は `Completer` 型に一致する関数です。
+コマンドは `.completer(fn)` で独自の候補を提供します。`fn` は `Completer` 型に一致する関数です。
 
 ```typescript
 type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
@@ -167,7 +167,7 @@ type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
 3. **インラインのオプション値** — `--opt=value` や `-o=value` の `=` より後ろの部分。
 4. **直前のオプションの値** — `--region <Tab>` のように、値を取るフラグの次に来る単語。
 5. **オプションフラグ** — 一致したコマンドのもの。ブールオプションの `--no-` 形式も含みます。
-6. **コマンド自身の補完関数** — `.complete()` で登録したもの。
+6. **コマンド自身の補完関数** — `.completer()` で登録したもの。
 
 隠しオプションが候補になることはありません。隠しサブコマンドも同じで、親コマンドの位置引数が先に消費してしまうために到達できないサブコマンドも候補になりません。
 
@@ -212,7 +212,7 @@ async function loadKnownHosts(): Promise<string[]> {
 cli
   .command("connect <host>")
   .option("--port <port>", { type: "number" })
-  .complete(async (ctx) => {
+  .completer(async (ctx) => {
     // The framework already offers flags; only host names are left to add.
     if (ctx.current.startsWith("-")) return [];
     const hosts = await loadKnownHosts();
@@ -322,13 +322,11 @@ cli
     }
     ctx.shell.enterMode({
       prompt: "sql> ",
-      message: 'Entering SQL mode. Type "exit" to return.',
+      banner: 'Entering SQL mode. Type "exit" to return.',
       history: "session",
-      completer: (line) => {
+      completer: ({ current }) => {
         const keywords = ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"];
-        const word = line.split(/\s+/).pop() ?? "";
-        const matches = keywords.filter((k) => k.startsWith(word.toUpperCase()));
-        return [matches, word];
+        return keywords.filter((k) => k.startsWith(current.toUpperCase()));
       },
       action: async (input, { stdout, stderr, signal }) => {
         try {
@@ -352,11 +350,11 @@ cli
 |---|---|---|
 | `prompt` | はい | モードが有効な間に表示するプロンプト |
 | `action` | はい | 入力行と小さなコンテキストを受け取って呼ばれます |
-| `message` | いいえ | モードに入ったときに一度だけ表示される文字列 |
+| `banner` | いいえ | モードに入ったときに一度だけ表示される文字列 |
 | `completer` | いいえ | モード内でのタブ補完。**省略すると、モード内で Tab を押しても何も起きません** |
 | `history` | いいえ | `"session"`（既定）または `"none"` |
 
-モードの `completer` は生の行を受け取り、`[candidates, wordBeingCompleted]` というタプルである `CompletionResult` を返します。ほかのプロバイダと同じ 1000 ms の上限が適用され、例外を投げた場合や、返したプロミスが失敗した場合は候補が返りません。
+モードの `completer` はコマンドと同じ `Completer` です。`CompletionContext` を受け取り、候補を同期で、またはプロミスで返します。`line` と `fullLine` は入力行、`current` は最後の単語（空白の直後なら `""`）、`commandPath` は `[]`、`args` と `options` は空です。`iteration` と `signal` はコマンドの場合と同じです。候補は `current` では絞り込まれないため、completer が一致するものだけを返してください。ほかのプロバイダと同じ 1000 ms の上限が適用され、例外を投げた場合や、返したプロミスが失敗した場合は候補が返りません。
 
 `history: "session"` では呼び出し用の履歴をメモリ上だけに保持し、上限は `historySize`、連続する重複は記録しません。どちらの設定でも、モードでの入力が履歴ファイルに書き込まれることはありません。
 
@@ -409,7 +407,7 @@ cli
 | メソッド | 効果 |
 |---|---|
 | `stop()` | 現在のコマンドが戻ったあとにセッションを終了します |
-| `setPrompt(text)` | プロンプトのテキストを置き換えます |
+| `setPrompt(text)` | プロンプトのテキストを置き換え、シェルを返します |
 | `enterMode(config)` | モードサブ REPL に入ります |
 | `exitMode()` | 現在のモードを抜けます |
 

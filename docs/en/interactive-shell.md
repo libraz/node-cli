@@ -137,7 +137,7 @@ Pressing Tab asks the shell for candidate completions of the word under the curs
 
 ### The completion context
 
-A command supplies its own candidates through `.complete(fn)`, where `fn` matches the `Completer` type:
+A command supplies its own candidates through `.completer(fn)`, where `fn` matches the `Completer` type:
 
 ```typescript
 type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
@@ -167,7 +167,7 @@ The shell tries these in order and uses the first that produces candidates:
 3. **An inline option value** — the part after `=` in `--opt=value` or `-o=value`.
 4. **The value of a preceding option** — the word after a value-taking flag, as in `--region <Tab>`.
 5. **Option flags** of the matched command, including `--no-` forms for boolean options.
-6. **The command's own completer**, registered with `.complete()`.
+6. **The command's own completer**, registered with `.completer()`.
 
 Hidden options are never offered. Neither are hidden subcommands, nor subcommands that could never be reached because the parent command's own positional arguments would consume them first.
 
@@ -212,7 +212,7 @@ async function loadKnownHosts(): Promise<string[]> {
 cli
   .command("connect <host>")
   .option("--port <port>", { type: "number" })
-  .complete(async (ctx) => {
+  .completer(async (ctx) => {
     // The framework already offers flags; only host names are left to add.
     if (ctx.current.startsWith("-")) return [];
     const hosts = await loadKnownHosts();
@@ -322,13 +322,11 @@ cli
     }
     ctx.shell.enterMode({
       prompt: "sql> ",
-      message: 'Entering SQL mode. Type "exit" to return.',
+      banner: 'Entering SQL mode. Type "exit" to return.',
       history: "session",
-      completer: (line) => {
+      completer: ({ current }) => {
         const keywords = ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"];
-        const word = line.split(/\s+/).pop() ?? "";
-        const matches = keywords.filter((k) => k.startsWith(word.toUpperCase()));
-        return [matches, word];
+        return keywords.filter((k) => k.startsWith(current.toUpperCase()));
       },
       action: async (input, { stdout, stderr, signal }) => {
         try {
@@ -352,11 +350,11 @@ cli
 |---|---|---|
 | `prompt` | yes | The prompt shown while the mode is active |
 | `action` | yes | Called with each input line and a small context |
-| `message` | no | Printed once, when the mode is entered |
+| `banner` | no | Printed once, when the mode is entered |
 | `completer` | no | Tab completion inside the mode. **When it is omitted, Tab does nothing in the mode** |
 | `history` | no | `"session"` (default) or `"none"` |
 
-A mode `completer` receives the raw line and returns `CompletionResult`, which is the tuple `[candidates, wordBeingCompleted]`. It is bound by the same 1000 ms cap as any other provider, and a throw or a rejection yields no candidates.
+A mode `completer` is the same `Completer` a command uses: it receives a `CompletionContext` and returns candidates, synchronously or as a promise. `line` and `fullLine` are the input line, `current` is the last word (`""` after a space), `commandPath` is `[]`, and `args` and `options` are empty; `iteration` and `signal` behave as for commands. Candidates are not filtered against `current`, so the completer returns only the ones that match. It is bound by the same 1000 ms cap as any other provider, and a throw or a rejection yields no candidates.
 
 `history: "session"` keeps recall in memory only, capped at `historySize`, skipping consecutive duplicates. Mode input is never written to the history file under either setting.
 
@@ -409,7 +407,7 @@ Exit codes are listed in full in [Errors](errors.md).
 | Method | Effect |
 |---|---|
 | `stop()` | Ends the session after the current command returns |
-| `setPrompt(text)` | Replaces the prompt text |
+| `setPrompt(text)` | Replaces the prompt text and returns the shell |
 | `enterMode(config)` | Enters a mode sub-REPL |
 | `exitMode()` | Leaves the current mode |
 

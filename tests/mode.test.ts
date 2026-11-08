@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
+import type { CompletionContext } from "../src/index.js";
 import { InteractiveShell, type ModeConfig } from "../src/shell/repl.js";
 import { createMockTTY } from "./helpers.js";
 
@@ -70,7 +71,7 @@ describe("mode command", () => {
     shell.enterMode({
       prompt: "mode> ",
       action: () => {},
-      completer: async () => results.shift() as [string[], string],
+      completer: async () => results.shift() as string[],
     });
     const internal = shell as unknown as {
       openReader(history: string[]): void;
@@ -99,7 +100,7 @@ describe("mode command", () => {
     shell.enterMode({
       prompt: "mode> ",
       action: () => {},
-      completer: () => new Promise<[string[], string]>(() => {}),
+      completer: () => new Promise<string[]>(() => {}),
     });
     const internal = shell as unknown as {
       openReader(history: string[]): void;
@@ -120,7 +121,7 @@ describe("mode command", () => {
   it("passes mode completion requests to its configured completer", async () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
-    const completer = vi.fn(async (line: string) => [["SELECT"], line] as [string[], string]);
+    const completer = vi.fn(async (_ctx: CompletionContext) => ["SELECT"]);
     const shell = new InteractiveShell({
       router,
       registry,
@@ -137,7 +138,49 @@ describe("mode command", () => {
     internal.openReader([]);
     try {
       await expect(internal.reader?.rl.completer?.("SEL")).resolves.toEqual([["SELECT"], "SEL"]);
-      expect(completer).toHaveBeenCalledWith("SEL");
+      expect(completer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          line: "SEL",
+          fullLine: "SEL",
+          current: "SEL",
+          commandPath: [],
+          args: {},
+          options: {},
+          iteration: 1,
+          signal: expect.any(AbortSignal),
+        }),
+      );
+    } finally {
+      internal.closeReader();
+    }
+  });
+
+  it("returns mode candidates unfiltered and replaces the raw last word", async () => {
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const shell = new InteractiveShell({
+      router,
+      registry,
+      prompt: "> ",
+      historyFile: "mode-history-test",
+    });
+    shell.enterMode({
+      prompt: "sql> ",
+      action: () => {},
+      completer: () => ["users", "orders"],
+    });
+    const internal = shell as unknown as {
+      openReader(history: string[]): void;
+      closeReader(): void;
+      reader?: { rl: { completer?: (line: string) => Promise<[string[], string]> } };
+    };
+
+    internal.openReader([]);
+    try {
+      await expect(internal.reader?.rl.completer?.("SELECT * FROM 'us")).resolves.toEqual([
+        ["users", "orders"],
+        "'us",
+      ]);
     } finally {
       internal.closeReader();
     }
@@ -251,6 +294,20 @@ describe("mode command", () => {
     expect((shell as unknown as { promptStr: string }).promptStr).toBe("myapp> ");
   });
 
+  it("setPrompt returns the shell so calls chain", () => {
+    const registry = new CommandRegistry();
+    const router = new CommandRouter(registry);
+    const shell = new InteractiveShell({
+      router,
+      registry,
+      prompt: "> ",
+      historyFile: "mode-history-test",
+    });
+
+    expect(shell.setPrompt("a> ")).toBe(shell);
+    expect(shell.setPrompt("a> ").setPrompt("b> ")).toBe(shell);
+  });
+
   it("updates an active parent prompt and stops the shell", () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
@@ -316,7 +373,7 @@ describe("mode command", () => {
       ctx.shell?.enterMode({
         prompt: "sql> ",
         action: modeAction,
-        message: "Entering SQL mode",
+        banner: "Entering SQL mode",
       });
     });
 
@@ -348,7 +405,7 @@ describe("mode command", () => {
       seen.push("enter");
       ctx.shell?.enterMode({
         prompt: "sql> ",
-        message: "Entering SQL mode",
+        banner: "Entering SQL mode",
         action(input, modeCtx) {
           seen.push(`mode:${input}`);
           modeCtx.stdout.write(`mode:${input}\n`);

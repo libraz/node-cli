@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { usageError } from "../errors.js";
 import { guardCall } from "../guard.js";
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -107,7 +108,11 @@ export class History {
     this.filePath = options.filePath;
     const maxSize = options.maxSize ?? 1000;
     if (!Number.isSafeInteger(maxSize) || maxSize < 0) {
-      throw new RangeError("History maxSize must be a non-negative safe integer");
+      throw usageError(
+        "range",
+        "ERR_INVALID_ARG_VALUE",
+        "History maxSize must be a non-negative safe integer",
+      );
     }
     this.maxSize = maxSize;
     this.filter = options.filter;
@@ -134,9 +139,9 @@ export class History {
     }
     try {
       const stats = await handle.stat();
-      if (!stats.isFile()) throw new Error("history path is not a regular file");
+      if (!stats.isFile()) throw new Error("history path is not a regular file"); // usage-error-exempt: environment
       if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
-        throw new Error("history file is owned by another user");
+        throw new Error("history file is owned by another user"); // usage-error-exempt: environment
       }
       if ((stats.mode & 0o777) !== PRIVATE_FILE_MODE) {
         await handle.chmod(PRIVATE_FILE_MODE);
@@ -234,7 +239,7 @@ export class History {
         await delay(10);
       }
     }
-    throw new Error(`timed out waiting for history lock ${lockPath}`);
+    throw new Error(`timed out waiting for history lock ${lockPath}`); // usage-error-exempt: environment
   }
 
   /**
@@ -323,9 +328,9 @@ export class History {
         const append = await open(this.filePath, APPEND_FLAGS, PRIVATE_FILE_MODE);
         try {
           const stats = await append.stat();
-          if (!stats.isFile()) throw new Error("history path is not a regular file");
+          if (!stats.isFile()) throw new Error("history path is not a regular file"); // usage-error-exempt: environment
           if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
-            throw new Error("history file is owned by another user");
+            throw new Error("history file is owned by another user"); // usage-error-exempt: environment
           }
           if ((stats.mode & 0o777) !== PRIVATE_FILE_MODE) await append.chmod(PRIVATE_FILE_MODE);
           if (this.pending.length > 0) {

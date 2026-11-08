@@ -311,7 +311,7 @@ describe("Shell error and termination handling", () => {
       const router = new CommandRouter(registry);
       const iterations: number[] = [];
       CommandBuilder.create(registry, "connect [host]")
-        .complete(({ iteration }) => {
+        .completer(({ iteration }) => {
           iterations.push(iteration);
           return ["west", "wide"];
         })

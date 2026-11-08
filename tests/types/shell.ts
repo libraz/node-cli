@@ -1,0 +1,51 @@
+import type {
+  Completer,
+  CompletionContext,
+  ModeConfig,
+  ModeContext,
+  Shell,
+} from "../../src/index.js";
+
+declare const shell: Shell;
+
+// A mode completer is the shared Completer: it receives a CompletionContext
+// and returns plain candidates, sync or async.
+const sync: Completer = (ctx) => [ctx.current];
+const async_: Completer = async (ctx) => [ctx.line, String(ctx.iteration)];
+const config: ModeConfig = {
+  prompt: "sql> ",
+  banner: "Entering SQL mode",
+  completer: sync,
+  action(_input, ctx: ModeContext) {
+    ctx.stdout.write("ok\n");
+  },
+};
+const asyncConfig: ModeConfig = { prompt: "> ", completer: async_, action: () => {} };
+void [config, asyncConfig];
+
+// @ts-expect-error the completer takes a context, not a line
+const lineCompleter: ModeConfig["completer"] = (line: string) => [line];
+void lineCompleter;
+
+// @ts-expect-error a completer returns candidates, not the readline tuple
+const tupleCompleter: Completer = () => [["a"], "a"] as [string[], string];
+void tupleCompleter;
+
+// @ts-expect-error `message` was renamed to `banner`
+const oldName: ModeConfig = { prompt: "> ", message: "hi", action: () => {} };
+void oldName;
+
+// A mode action context carries stdout, stderr and signal, and no stdin.
+declare const modeCtx: ModeContext;
+const signal: AbortSignal = modeCtx.signal;
+void signal;
+// @ts-expect-error modes have no stdin
+void modeCtx.stdin;
+// @ts-expect-error members are readonly
+modeCtx.signal = new AbortController().signal;
+
+// setPrompt returns the shell, so configuration calls chain.
+const chained: Shell = shell.setPrompt("a> ").setPrompt("b> ");
+void chained;
+
+export type { CompletionContext };

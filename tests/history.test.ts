@@ -201,8 +201,11 @@ describe("History", () => {
     await disabled.save();
     expect(disabled.entries()).toEqual([]);
     expect(existsSync(filePath)).toBe(false);
-    expect(() => new History({ filePath, maxSize: -1 })).toThrow(RangeError);
-    expect(() => new History({ filePath, maxSize: Number.NaN })).toThrow(RangeError);
+    for (const maxSize of [-1, Number.NaN]) {
+      expect(() => new History({ filePath, maxSize })).toThrow(
+        expect.objectContaining({ name: "RangeError", code: "ERR_INVALID_ARG_VALUE" }),
+      );
+    }
   });
 
   it("leaves an existing history file untouched when maxSize is 0", async () => {

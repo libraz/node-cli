@@ -12,7 +12,7 @@ cli.command("parent").action((ctx) => ctx.stdout.write("PARENT_ACTION\n"));
 cli.command("mode").action((ctx) => {
   ctx.shell?.enterMode({
     prompt: "mode> ",
-    message: "MODE_ENTER",
+    banner: "MODE_ENTER",
     action(input, modeContext) {
       modeContext.stdout.write(`MODE:${input}\n`);
     },
