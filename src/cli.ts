@@ -422,3 +422,12 @@ export class CLI {
       });
   }
 }
+
+/**
+ * Factory function that creates and returns a new CLI instance.
+ * @param options - Optional configuration options for the CLI application.
+ * @returns A new CLI instance.
+ */
+export function createCLI(options?: CLIOptions): CLI {
+  return new CLI(options);
+}

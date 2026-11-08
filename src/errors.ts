@@ -23,21 +23,25 @@ export type CLIErrorCode =
  */
 export class CLIError extends Error {
   /** Machine-readable error code (e.g. "COMMAND_NOT_FOUND"). */
-  code: CLIErrorCode;
+  readonly code: CLIErrorCode | (string & {});
   /** Suggested process exit code when this error is fatal. Defaults to 1. */
-  exitCode: number;
+  readonly exitCode: number;
 
   /**
    * Creates a new CLIError.
    * @param message - Human-readable error message.
-   * @param code - Machine-readable error code.
-   * @param exitCode - Suggested process exit code. Defaults to 1.
+   * @param options.code - Machine-readable error code.
+   * @param options.exitCode - Suggested process exit code. Defaults to 1.
+   * @param options.cause - The underlying error, forwarded to `Error`.
    */
-  constructor(message: string, code: CLIErrorCode, exitCode = 1) {
-    super(message);
+  constructor(
+    message: string,
+    options: { code: CLIErrorCode | (string & {}); exitCode?: number; cause?: unknown },
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "CLIError";
-    this.code = code;
-    this.exitCode = exitCode;
+    this.code = options.code;
+    this.exitCode = options.exitCode ?? 1;
     // Preserve the prototype chain so `instanceof` works after transpilation.
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -47,6 +51,7 @@ export class CLIError extends Error {
  * Thrown when the user enters a command that does not exist.
  */
 export class CommandNotFoundError extends CLIError {
+  declare readonly code: "COMMAND_NOT_FOUND";
   /** The unrecognized command string. */
   readonly input: string;
   /** Available subcommands at the point the lookup failed, when known. */
@@ -54,12 +59,17 @@ export class CommandNotFoundError extends CLIError {
 
   /**
    * @param input - The unrecognized command string.
+   * @param options.available - Available subcommands at the point the lookup failed.
+   * @param options.cause - The underlying error.
    */
-  constructor(input: string, options: { available?: readonly string[] } = {}) {
+  constructor(input: string, options: { available?: readonly string[]; cause?: unknown } = {}) {
     const available = options.available?.length
       ? `\nAvailable subcommands: ${options.available.join(", ")}`
       : "";
-    super(`Command not found: "${input}"${available}`, "COMMAND_NOT_FOUND");
+    super(`Command not found: "${input}"${available}`, {
+      code: "COMMAND_NOT_FOUND",
+      cause: options.cause,
+    });
     this.name = "CommandNotFoundError";
     this.input = input;
     this.available = options.available;
@@ -70,6 +80,7 @@ export class CommandNotFoundError extends CLIError {
  * Thrown when a required positional argument is missing.
  */
 export class MissingArgumentError extends CLIError {
+  declare readonly code: "MISSING_ARGUMENT";
   /** The name of the missing argument. */
   readonly argName: string;
   /** Usage string shown alongside the error, if available. */
@@ -77,13 +88,15 @@ export class MissingArgumentError extends CLIError {
 
   /**
    * @param argName - The name of the missing argument.
-   * @param usage - Optional usage string to display alongside the error.
+   * @param options.usage - Optional usage string to display alongside the error.
+   * @param options.cause - The underlying error.
    */
-  constructor(argName: string, usage?: string) {
+  constructor(argName: string, options: { usage?: string; cause?: unknown } = {}) {
+    const { usage } = options;
     const msg = usage
       ? `Missing required argument: <${argName}>\n\n  Usage: ${usage}`
       : `Missing required argument: <${argName}>`;
-    super(msg, "MISSING_ARGUMENT");
+    super(msg, { code: "MISSING_ARGUMENT", cause: options.cause });
     this.name = "MissingArgumentError";
     this.argName = argName;
     this.usage = usage;
@@ -91,19 +104,28 @@ export class MissingArgumentError extends CLIError {
 }
 
 /**
- * Thrown when an unexpected extra positional argument is provided.
+ * Thrown when unexpected extra positional arguments are provided.
  */
 export class ExtraArgumentError extends CLIError {
-  /** The unexpected argument value. */
+  declare readonly code: "EXTRA_ARGUMENT";
+  /** The first unexpected argument value. */
   readonly extra: string;
+  /** Every unexpected argument value, in input order. */
+  readonly extras: readonly string[];
 
   /**
-   * @param extra - The unexpected argument value.
+   * @param extras - The unexpected argument values.
+   * @param options.cause - The underlying error.
    */
-  constructor(extra: string) {
-    super(`Unexpected argument: "${extra}"`, "EXTRA_ARGUMENT");
+  constructor(extras: readonly string[], options: { cause?: unknown } = {}) {
+    const quoted = extras.map((value) => `"${value}"`).join(", ");
+    super(`Unexpected argument${extras.length > 1 ? "s" : ""}: ${quoted}`, {
+      code: "EXTRA_ARGUMENT",
+      cause: options.cause,
+    });
     this.name = "ExtraArgumentError";
-    this.extra = extra;
+    this.extra = extras[0];
+    this.extras = extras;
   }
 }
 
@@ -111,14 +133,16 @@ export class ExtraArgumentError extends CLIError {
  * Thrown when a required option is not provided.
  */
 export class MissingOptionError extends CLIError {
+  declare readonly code: "MISSING_OPTION";
   /** The long name of the missing option (without "--"). */
   readonly optionName: string;
 
   /**
    * @param optionName - The long name of the missing option (without "--").
+   * @param options.cause - The underlying error.
    */
-  constructor(optionName: string) {
-    super(`Option --${optionName} is required`, "MISSING_OPTION");
+  constructor(optionName: string, options: { cause?: unknown } = {}) {
+    super(`Option --${optionName} is required`, { code: "MISSING_OPTION", cause: options.cause });
     this.name = "MissingOptionError";
     this.optionName = optionName;
   }
@@ -128,6 +152,7 @@ export class MissingOptionError extends CLIError {
  * Thrown when an option value is invalid (e.g. wrong type or not in choices).
  */
 export class InvalidOptionError extends CLIError {
+  declare readonly code: "INVALID_OPTION";
   /** The long name of the offending option, if known. */
   readonly optionName?: string;
   /** The rejected value, if known. */
@@ -135,13 +160,18 @@ export class InvalidOptionError extends CLIError {
 
   /**
    * @param message - Description of why the option value is invalid.
-   * @param details - Optional structured details about the offending option.
+   * @param options.optionName - The long name of the offending option.
+   * @param options.value - The rejected value.
+   * @param options.cause - The underlying error.
    */
-  constructor(message: string, details?: { optionName?: string; value?: unknown }) {
-    super(message, "INVALID_OPTION");
+  constructor(
+    message: string,
+    options: { optionName?: string; value?: unknown; cause?: unknown } = {},
+  ) {
+    super(message, { code: "INVALID_OPTION", cause: options.cause });
     this.name = "InvalidOptionError";
-    this.optionName = details?.optionName;
-    this.value = details?.value;
+    this.optionName = options.optionName;
+    this.value = options.value;
   }
 }
 
@@ -149,16 +179,21 @@ export class InvalidOptionError extends CLIError {
  * Thrown when an unrecognized option flag is encountered.
  */
 export class UnknownOptionError extends CLIError {
-  /** The unrecognized option flag (with its leading dashes). */
+  declare readonly code: "UNKNOWN_OPTION";
+  /** The unrecognized option flag, exactly as typed (with its leading dashes). */
   readonly flag: string;
+  /** The flag without its leading dashes. */
+  readonly optionName: string;
 
   /**
    * @param flag - The unrecognized option flag.
+   * @param options.cause - The underlying error.
    */
-  constructor(flag: string) {
-    super(`Unknown option: ${flag}`, "UNKNOWN_OPTION");
+  constructor(flag: string, options: { cause?: unknown } = {}) {
+    super(`Unknown option: ${flag}`, { code: "UNKNOWN_OPTION", cause: options.cause });
     this.name = "UnknownOptionError";
     this.flag = flag;
+    this.optionName = flag.replace(/^-+/, "");
   }
 }
 
@@ -166,21 +201,19 @@ export class UnknownOptionError extends CLIError {
  * Thrown when a custom validation check fails.
  */
 export class ValidationError extends CLIError {
-  /** The original error that triggered validation failure, if any. */
-  readonly cause?: unknown;
+  declare readonly code: "VALIDATION_ERROR";
   /** The long option name whose custom parser or validator failed, if known. */
   readonly optionName?: string;
 
   /**
    * @param message - Description of the validation failure.
-   * @param cause - The original error that caused the failure, if any.
-   * @param details - Structured context for the validation failure.
+   * @param options.optionName - The long option name whose parser or validator failed.
+   * @param options.cause - The original error that caused the failure, if any.
    */
-  constructor(message: string, cause?: unknown, details?: { optionName?: string }) {
-    super(message, "VALIDATION_ERROR");
+  constructor(message: string, options: { optionName?: string; cause?: unknown } = {}) {
+    super(message, { code: "VALIDATION_ERROR", cause: options.cause });
     this.name = "ValidationError";
-    this.cause = cause;
-    this.optionName = details?.optionName;
+    this.optionName = options.optionName;
   }
 }
 
@@ -188,22 +221,105 @@ export class ValidationError extends CLIError {
  * Thrown when the user cancels an interactive prompt.
  */
 export class PromptCancelError extends CLIError {
-  constructor() {
-    super("Prompt cancelled", "PROMPT_CANCELLED", 130);
+  declare readonly code: "PROMPT_CANCELLED";
+
+  /**
+   * @param options.cause - What triggered the cancellation (e.g. an abort reason).
+   */
+  constructor(options: { cause?: unknown } = {}) {
+    super("Prompt cancelled", { code: "PROMPT_CANCELLED", exitCode: 130, cause: options.cause });
     this.name = "PromptCancelError";
   }
 }
 
 /** Thrown when a command line cannot be tokenized or split into pipeline stages. */
 export class ParseError extends CLIError {
+  declare readonly code: "PARSE_ERROR";
   /** Quote left open by the input, when applicable. */
   readonly quote?: "single" | "double";
 
-  constructor(message: string, options: { quote?: "single" | "double" } = {}) {
-    super(message, "PARSE_ERROR");
+  /**
+   * @param message - Description of the parse failure.
+   * @param options.quote - Quote left open by the input.
+   * @param options.cause - The underlying error.
+   */
+  constructor(message: string, options: { quote?: "single" | "double"; cause?: unknown } = {}) {
+    super(message, { code: "PARSE_ERROR", cause: options.cause });
     this.name = "ParseError";
     this.quote = options.quote;
   }
+}
+
+/**
+ * Union of the error classes the framework itself throws for user-input
+ * failures. Discriminate on `code` after narrowing with {@link isBuiltinCLIError}.
+ */
+export type BuiltinCLIError =
+  | CommandNotFoundError
+  | MissingArgumentError
+  | ExtraArgumentError
+  | MissingOptionError
+  | InvalidOptionError
+  | UnknownOptionError
+  | ValidationError
+  | ParseError
+  | PromptCancelError;
+
+/**
+ * Reports whether a value is one of the built-in {@link CLIError} subclasses.
+ * Custom subclasses and a bare `CLIError` do not match; test those with
+ * `instanceof`.
+ */
+export function isBuiltinCLIError(e: unknown): e is BuiltinCLIError {
+  return (
+    e instanceof CommandNotFoundError ||
+    e instanceof MissingArgumentError ||
+    e instanceof ExtraArgumentError ||
+    e instanceof MissingOptionError ||
+    e instanceof InvalidOptionError ||
+    e instanceof UnknownOptionError ||
+    e instanceof ValidationError ||
+    e instanceof ParseError ||
+    e instanceof PromptCancelError
+  );
+}
+
+/**
+ * Codes carried by errors that report programmer misuse of the API, as opposed
+ * to a failure caused by user input.
+ */
+export type UsageErrorCode =
+  | "ERR_INVALID_ARG_TYPE"
+  | "ERR_INVALID_ARG_VALUE"
+  | "ERR_INVALID_DEFINITION"
+  | "ERR_DEFINITION_CONFLICT"
+  | "ERR_COMMAND_REMOVED"
+  | "ERR_ALREADY_STARTED"
+  | "ERR_OUTPUT_BUSY"
+  | "ERR_INPUT_BUSY";
+
+/**
+ * Creates an error for programmer misuse, carrying a {@link UsageErrorCode}.
+ *
+ * @param kind - `"type"` yields a `TypeError`, `"range"` a `RangeError`, and
+ * `"state"` a plain `Error`.
+ * @param code - The machine-readable code.
+ * @param message - Human-readable description.
+ */
+export function usageError(
+  kind: "type" | "range" | "state",
+  code: UsageErrorCode,
+  message: string,
+): Error & { readonly code: UsageErrorCode } {
+  let err: Error;
+  if (kind === "type") {
+    err = new TypeError(message); // usage-error-exempt: helper
+  } else if (kind === "range") {
+    err = new RangeError(message); // usage-error-exempt: helper
+  } else {
+    err = new Error(message); // usage-error-exempt: helper
+  }
+  return Object.assign(err, { code });
 }
 
 /**
@@ -223,18 +339,15 @@ export function isAbortError(value: unknown): boolean {
  * message and the conventional 130 exit code instead of an `Error:` line and
  * exit 1.
  */
-export function isCancellationError(err: unknown, signal?: AbortSignal): boolean {
+export function isCancellationError(err: unknown, signal: AbortSignal): boolean {
   if (err instanceof PromptCancelError) return true;
-  return signal?.aborted === true && isAbortError(err);
+  return signal.aborted && isAbortError(err);
 }
 
 /**
  * Formats an unknown error value for user-facing CLI output.
  */
-export function formatErrorMessage(err: unknown, signal?: AbortSignal): string {
-  if (isCancellationError(err, signal)) {
-    return "Cancelled";
-  }
+export function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
@@ -243,7 +356,7 @@ export function formatErrorMessage(err: unknown, signal?: AbortSignal): string {
  * reaches an event listener or a presenter has the same shape.
  */
 export function toError(err: unknown): Error {
-  return err instanceof Error ? err : new Error(String(err));
+  return err instanceof Error ? err : new Error(String(err)); // usage-error-exempt: helper
 }
 
 /**
@@ -273,8 +386,8 @@ export function presentError(
   },
 ): number {
   const { stream, interrupted = false, debugStack = false } = options;
-  if (interrupted || isCancellationError(err)) {
-    writeDiagnostic(stream, interrupted ? "Cancelled" : formatErrorMessage(err));
+  if (interrupted || err instanceof PromptCancelError) {
+    writeDiagnostic(stream, "Cancelled");
     return 130;
   }
   if (debugStack && process.env.NODE_CLI_DEBUG === "1" && err instanceof Error && err.stack) {

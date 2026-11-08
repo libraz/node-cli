@@ -39,16 +39,18 @@ mycli>
 
 | クラス | `code` | `exitCode` | 追加フィールド | 投げられる場面 |
 |---|---|---|---|---|
-| `CLIError(message, code, exitCode = 1)` | 指定どおり | `1` | `code`, `exitCode` | 基底クラス。サブクラス化して差し支えありません |
-| `CommandNotFoundError(input, { available? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | `catch` ハンドラがない状態で認識できない入力が来たとき、コマンドグループに未知の子コマンドが指定されたとき、`help <unknown>` を実行したとき |
-| `MissingArgumentError(argName, usage?)` | `MISSING_ARGUMENT` | `1` | `argName`, `usage?` | 必須の位置引数がないとき。値が 1 つもない必須の可変長引数は `...name` として報告されます |
-| `ExtraArgumentError(extra)` | `EXTRA_ARGUMENT` | `1` | `extra` | コマンドの引数を埋めたあとに位置引数の値が余ったとき |
-| `MissingOptionError(optionName)` | `MISSING_OPTION` | `1` | `optionName` | `required: true` を宣言したオプションがないとき |
-| `InvalidOptionError(message, { optionName?, value? })` | `INVALID_OPTION` | `1` | `optionName?`, `value?` | 型変換に失敗したとき、`choices` の制約に違反したとき、値を取るオプションに値が渡されなかったとき、`--no-x=v` を使ったとき、ブール以外のオプションに `--no-x` を適用したとき、`-abc` のようなまとめ書きの中に値を取る短縮フラグが現れたとき |
-| `UnknownOptionError(flag)` | `UNKNOWN_OPTION` | `1` | `flag` | 認識できないフラグ |
-| `ValidationError(message, cause?, { optionName? })` | `VALIDATION_ERROR` | `1` | `cause?`, `optionName?` | **オプション**の独自の `parse` または `validate` が例外を投げたとき |
-| `ParseError(message, { quote? })` | `PARSE_ERROR` | `1` | `quote?` | 閉じられていない引用符、空のパイプセグメントや末尾のパイプ、`<` / `>` のリダイレクト演算子 |
-| `PromptCancelError()` | `PROMPT_CANCELLED` | **`130`** | — | プロンプトが Ctrl+C、Ctrl+D、入力の終了、中止されたシグナルによってキャンセルされたとき |
+| `CLIError(message, { code, exitCode?, cause? })` | 指定どおり | `1` | `code`, `exitCode`, `cause?` | 基底クラス。サブクラス化して差し支えありません |
+| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | `catch` ハンドラがない状態で認識できない入力が来たとき、コマンドグループに未知の子コマンドが指定されたとき、`help <unknown>` を実行したとき |
+| `MissingArgumentError(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `1` | `argName`, `usage?` | 必須の位置引数がないとき。値が 1 つもない必須の可変長引数は `...name` として報告されます |
+| `ExtraArgumentError(extras, { cause? })` | `EXTRA_ARGUMENT` | `1` | `extras`, `extra`（先頭の 1 件） | コマンドの引数を埋めたあとに位置引数の値が余ったとき |
+| `MissingOptionError(optionName, { cause? })` | `MISSING_OPTION` | `1` | `optionName` | `required: true` を宣言したオプションがないとき |
+| `InvalidOptionError(message, { optionName?, value?, cause? })` | `INVALID_OPTION` | `1` | `optionName?`, `value?` | 型変換に失敗したとき、`choices` の制約に違反したとき、値を取るオプションに値が渡されなかったとき、`--no-x=v` を使ったとき、ブール以外のオプションに `--no-x` を適用したとき、`-abc` のようなまとめ書きの中に値を取る短縮フラグが現れたとき |
+| `UnknownOptionError(flag, { cause? })` | `UNKNOWN_OPTION` | `1` | `flag`, `optionName`（ダッシュを除いた名前） | 認識できないフラグ |
+| `ValidationError(message, { optionName?, cause? })` | `VALIDATION_ERROR` | `1` | `optionName?` | **オプション**の独自の `parse` または `validate` が例外を投げたとき |
+| `ParseError(message, { quote?, cause? })` | `PARSE_ERROR` | `1` | `quote?` | 閉じられていない引用符、空のパイプセグメントや末尾のパイプ、`<` / `>` のリダイレクト演算子 |
+| `PromptCancelError({ cause? })` | `PROMPT_CANCELLED` | **`130`** | — | プロンプトが Ctrl+C、Ctrl+D、入力の終了、中止されたシグナルによってキャンセルされたとき |
+
+どのコンストラクタも `{ cause }` を受け取り、`Error` に渡して `err.cause` として公開します。`ExtraArgumentError` のメッセージは値を引用符で囲みます。1 件なら `Unexpected argument: "a"`、複数なら `Unexpected arguments: "a", "b"` です。`code` と `exitCode` は `readonly` です。
 
 `CLIErrorCode` は 9 つのコード文字列のユニオンです。
 
@@ -64,6 +66,8 @@ type CLIErrorCode =
   | "PARSE_ERROR"
   | "PROMPT_CANCELLED";
 ```
+
+`BuiltinCLIError` は、上に挙げた組み込み 9 クラスのユニオン型です。
 
 `ValidationError` が扱うのは**オプションレベル**の検証だけです。コマンドレベルの `.validate()` が投げたエラーは、そのまま伝播します。ラップされることはありません。
 
@@ -96,6 +100,28 @@ function describe(err: unknown): string {
   return String(err);
 }
 ```
+
+cast なしで組み込みの失敗をすべて扱うには、`unknown` を `isBuiltinCLIError` で絞り込み、`code` で `switch` します。各 case で、そのクラス固有のフィールドに届きます。
+
+```typescript
+import { isBuiltinCLIError } from "@libraz/node-cli";
+
+function hint(err: unknown): string | undefined {
+  if (!isBuiltinCLIError(err)) return undefined;
+  switch (err.code) {
+    case "MISSING_ARGUMENT":
+      return `pass <${err.argName}>`;
+    case "EXTRA_ARGUMENT":
+      return `drop ${err.extras.join(" ")}`;
+    case "UNKNOWN_OPTION":
+      return `no option named ${err.optionName}`;
+    default:
+      return undefined;
+  }
+}
+```
+
+素の `CLIError` と利用者が作ったサブクラスに対して、`isBuiltinCLIError` は `false` を返します。それらは `instanceof CLIError` か自分のクラスで判定してください。
 
 クラスではなく `code` で分岐しても同じように機能し、クラスの同一性が失われる境界を越えたあとでも使えます。
 
@@ -134,7 +160,7 @@ Error: Deploying to prod requires --force
 
 ### `CLIError` の独自サブクラス
 
-失敗に固有の終了コードが必要なときは `CLIError` をサブクラス化します。たとえば、ラッパースクリプトが設定の問題とネットワークの問題を見分けられるようにする場合です。`code` 引数は `CLIErrorCode` の 9 つの値のいずれかでなければなりませんが、終了コードは自由に決められます。
+失敗に固有の終了コードが必要なときは `CLIError` をサブクラス化します。たとえば、ラッパースクリプトが設定の問題とネットワークの問題を見分けられるようにする場合です。`code` は任意の文字列にできます（`CLIErrorCode` の 9 つの値は補完候補に出ます）。終了コードも自由に決められます。元のエラーを残したいときは `{ cause }` を渡します。
 
 ```typescript
 import { access } from "node:fs/promises";
@@ -145,7 +171,7 @@ class ConfigError extends CLIError {
 
   constructor(message: string, path: string) {
     // 78 is the conventional "configuration error" status.
-    super(message, "VALIDATION_ERROR", 78);
+    super(message, { code: "CONFIG_ERROR", exitCode: 78 });
     this.name = "ConfigError";
     this.path = path;
   }
@@ -176,14 +202,14 @@ Cancelled
 
 投げられた値を分類し、整形するためのヘルパーが 2 つエクスポートされています。
 
-### `isCancellationError(err, signal?)`
+### `isCancellationError(err, signal)`
 
 その値が利用者によるキャンセルを表す場合に `true` を返します。
 
 - `PromptCancelError` のすべて
 - `name` が `"AbortError"` の `Error` のうち、**渡された `signal` が中止されている**もの
 
-`signal` 引数には意味があります。渡さずに呼んだ場合、素の `AbortError` は**キャンセルとは見なされない**点に注意してください。無関係なコードが起こした中止を「利用者がキャンセルした」と黙って報告してしまわないためです。
+`signal` 引数は必須です。`signal` が中止されていない限り、素の `AbortError` は**キャンセルとは見なされません**。無関係なコードが起こした中止を「利用者がキャンセルした」と黙って報告してしまわないためです。
 
 ```typescript
 import { isCancellationError } from "@libraz/node-cli";
@@ -204,9 +230,9 @@ cli
   });
 ```
 
-### `formatErrorMessage(err, signal?)`
+### `formatErrorMessage(err)`
 
-キャンセルに対しては `"Cancelled"` を返し、それ以外はエラーのメッセージを返します。`Error` でない値の場合は、文字列に変換した結果を返します。
+エラーのメッセージを返します。`Error` でない値の場合は、文字列に変換した結果を返します。キャンセルの特別扱いはありません。中断や `PromptCancelError` のときに `Cancelled` と表示するのはフレームワーク自身です。
 
 ```typescript
 import { formatErrorMessage } from "@libraz/node-cli";
@@ -217,6 +243,31 @@ cli.on("error", (error) => {
 ```
 
 キャンセルが起きるのは、対話シェルと直接実行モードでの Ctrl+C、利用者が閉じたプロンプト（[プロンプト](prompts.md)を参照）、そして `cli.exec()` に渡した `AbortSignal` です。
+
+## プログラマの誤用
+
+利用者の入力が原因の失敗は、必ず `CLIError` です。プログラムが API を誤って呼んだことが原因の失敗はそうではなく、Node 自身の `ERR_*` エラーと同じ流儀で、`UsageErrorCode` の `code` を持つ素の `TypeError`、`RangeError`、`Error` になります。
+
+| 状況 | エラー | `code` |
+|---|---|---|
+| コマンドやオプションの定義を組み立てる途中で拒否された | `Error` | `ERR_INVALID_DEFINITION`, `ERR_DEFINITION_CONFLICT` |
+| 引数の型が違う | `TypeError` | `ERR_INVALID_ARG_TYPE` |
+| 値が範囲外、または名前が不明（style、border、level、空の `choices`、`min` > `max`、幅、markup の深さ） | `RangeError` | `ERR_INVALID_ARG_VALUE` |
+| 状態が衝突した（削除済みのコマンド、開始済み、出力先や入力が使用中） | `Error` | `ERR_COMMAND_REMOVED`, `ERR_ALREADY_STARTED`, `ERR_OUTPUT_BUSY`, `ERR_INPUT_BUSY` |
+
+```typescript
+type UsageErrorCode =
+  | "ERR_INVALID_ARG_TYPE"
+  | "ERR_INVALID_ARG_VALUE"
+  | "ERR_INVALID_DEFINITION"
+  | "ERR_DEFINITION_CONFLICT"
+  | "ERR_COMMAND_REMOVED"
+  | "ERR_ALREADY_STARTED"
+  | "ERR_OUTPUT_BUSY"
+  | "ERR_INPUT_BUSY";
+```
+
+これらは呼び出し側のコードで直すべきバグであり、実行時に処理する状況ではないため、`CLIError` を継承しません。
 
 ## 終了コード
 

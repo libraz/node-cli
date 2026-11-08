@@ -39,6 +39,7 @@
     "test:pack": "node scripts/pack-smoke.mjs",
     "typecheck:examples": "tsc -p tsconfig.examples.json",
     "typecheck:min-types": "node scripts/typecheck-min-types.mjs",
+    "typecheck:types": "node scripts/typecheck-types.mjs",
     "lint": "biome check src tests examples scripts",
     "lint:fix": "biome check --write src tests examples scripts",
     "format": "biome format --write src tests examples scripts",

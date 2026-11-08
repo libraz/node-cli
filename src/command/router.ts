@@ -636,12 +636,12 @@ export class CommandRouter {
           // Use the canonical command path so the usage matches the help output.
           const usage = formatUsage(this.registry.getCommandPath(command), command);
           const displayName = argDef.variadic ? `...${argDef.name}` : argDef.name;
-          throw new MissingArgumentError(displayName, usage);
+          throw new MissingArgumentError(displayName, { usage });
         }
       }
 
       if (result.extraArgs && result.extraArgs.length > 0) {
-        throw new ExtraArgumentError(result.extraArgs[0]);
+        throw new ExtraArgumentError(result.extraArgs);
       }
 
       // An actionless group with extra input reaches this point only to report

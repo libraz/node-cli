@@ -53,8 +53,9 @@ export function resolveOptions(
             : schema.parse(String(value), ctx);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          throw new ValidationError(`Invalid value for --${long}: ${message}`, err, {
+          throw new ValidationError(`Invalid value for --${long}: ${message}`, {
             optionName: long,
+            cause: err,
           });
         }
       } else {
@@ -109,8 +110,9 @@ export function resolveOptions(
         schema.validate(value, ctx);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        throw new ValidationError(`Invalid value for --${long}: ${message}`, err, {
+        throw new ValidationError(`Invalid value for --${long}: ${message}`, {
           optionName: long,
+          cause: err,
         });
       }
     }

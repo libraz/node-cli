@@ -39,16 +39,18 @@ All of these are exported from the package and all extend `CLIError`.
 
 | Class | `code` | `exitCode` | Extra fields | Thrown when |
 |---|---|---|---|---|
-| `CLIError(message, code, exitCode = 1)` | as given | `1` | `code`, `exitCode` | The base class. Safe to subclass |
-| `CommandNotFoundError(input, { available? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | Unrecognized input with no `catch` handler; an unknown child of a command group; `help <unknown>` |
-| `MissingArgumentError(argName, usage?)` | `MISSING_ARGUMENT` | `1` | `argName`, `usage?` | A required positional argument is absent. A required variadic argument with no values reports `...name` |
-| `ExtraArgumentError(extra)` | `EXTRA_ARGUMENT` | `1` | `extra` | Positional values are left over after the command's arguments are filled |
-| `MissingOptionError(optionName)` | `MISSING_OPTION` | `1` | `optionName` | An option declared `required: true` is absent |
-| `InvalidOptionError(message, { optionName?, value? })` | `INVALID_OPTION` | `1` | `optionName?`, `value?` | Type coercion failed, a `choices` constraint was violated, a value-taking option was given no value, `--no-x=v` was used, `--no-x` was applied to a non-boolean option, or a value-taking short flag appeared inside a cluster such as `-abc` |
-| `UnknownOptionError(flag)` | `UNKNOWN_OPTION` | `1` | `flag` | An unrecognized flag |
-| `ValidationError(message, cause?, { optionName? })` | `VALIDATION_ERROR` | `1` | `cause?`, `optionName?` | An **option's** custom `parse` or `validate` threw |
-| `ParseError(message, { quote? })` | `PARSE_ERROR` | `1` | `quote?` | An unclosed quote, an empty or trailing pipe segment, or a `<` / `>` redirection operator |
-| `PromptCancelError()` | `PROMPT_CANCELLED` | **`130`** | — | A prompt was cancelled by Ctrl+C, Ctrl+D, ended input, or an aborted signal |
+| `CLIError(message, { code, exitCode?, cause? })` | as given | `1` | `code`, `exitCode`, `cause?` | The base class. Safe to subclass |
+| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `1` | `input`, `available?` | Unrecognized input with no `catch` handler; an unknown child of a command group; `help <unknown>` |
+| `MissingArgumentError(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `1` | `argName`, `usage?` | A required positional argument is absent. A required variadic argument with no values reports `...name` |
+| `ExtraArgumentError(extras, { cause? })` | `EXTRA_ARGUMENT` | `1` | `extras`, `extra` (the first) | Positional values are left over after the command's arguments are filled |
+| `MissingOptionError(optionName, { cause? })` | `MISSING_OPTION` | `1` | `optionName` | An option declared `required: true` is absent |
+| `InvalidOptionError(message, { optionName?, value?, cause? })` | `INVALID_OPTION` | `1` | `optionName?`, `value?` | Type coercion failed, a `choices` constraint was violated, a value-taking option was given no value, `--no-x=v` was used, `--no-x` was applied to a non-boolean option, or a value-taking short flag appeared inside a cluster such as `-abc` |
+| `UnknownOptionError(flag, { cause? })` | `UNKNOWN_OPTION` | `1` | `flag`, `optionName` (the flag without dashes) | An unrecognized flag |
+| `ValidationError(message, { optionName?, cause? })` | `VALIDATION_ERROR` | `1` | `optionName?` | An **option's** custom `parse` or `validate` threw |
+| `ParseError(message, { quote?, cause? })` | `PARSE_ERROR` | `1` | `quote?` | An unclosed quote, an empty or trailing pipe segment, or a `<` / `>` redirection operator |
+| `PromptCancelError({ cause? })` | `PROMPT_CANCELLED` | **`130`** | — | A prompt was cancelled by Ctrl+C, Ctrl+D, ended input, or an aborted signal |
+
+Every constructor accepts `{ cause }`, which is forwarded to `Error` and exposed as `err.cause`. `ExtraArgumentError`'s message quotes each value: `Unexpected argument: "a"` for one, `Unexpected arguments: "a", "b"` for several. `code` and `exitCode` are `readonly`.
 
 `CLIErrorCode` is the union of the nine code strings:
 
@@ -64,6 +66,8 @@ type CLIErrorCode =
   | "PARSE_ERROR"
   | "PROMPT_CANCELLED";
 ```
+
+`BuiltinCLIError` is the union of the nine built-in subclasses above.
 
 `ValidationError` covers **option-level** validation only. A command-level `.validate()` that throws propagates its own error unchanged — it is not wrapped.
 
@@ -96,6 +100,28 @@ function describe(err: unknown): string {
   return String(err);
 }
 ```
+
+To handle every built-in failure without casts, narrow an `unknown` with `isBuiltinCLIError` and switch on `code`. Each case reaches its own fields:
+
+```typescript
+import { isBuiltinCLIError } from "@libraz/node-cli";
+
+function hint(err: unknown): string | undefined {
+  if (!isBuiltinCLIError(err)) return undefined;
+  switch (err.code) {
+    case "MISSING_ARGUMENT":
+      return `pass <${err.argName}>`;
+    case "EXTRA_ARGUMENT":
+      return `drop ${err.extras.join(" ")}`;
+    case "UNKNOWN_OPTION":
+      return `no option named ${err.optionName}`;
+    default:
+      return undefined;
+  }
+}
+```
+
+`isBuiltinCLIError` is `false` for a bare `CLIError` and for your own subclasses; test those with `instanceof CLIError` or your own class.
 
 Matching on `code` instead of on the class works equally well, and survives being passed across a boundary where the class identity is lost:
 
@@ -134,7 +160,7 @@ Error: Deploying to prod requires --force
 
 ### A custom `CLIError` subclass
 
-Subclass `CLIError` when a failure needs its own exit code — for instance so a wrapper script can distinguish a configuration problem from a network problem. The `code` argument must be one of the nine values in `CLIErrorCode`; the exit code is free.
+Subclass `CLIError` when a failure needs its own exit code — for instance so a wrapper script can distinguish a configuration problem from a network problem. The `code` may be any string (the nine `CLIErrorCode` values autocomplete); the exit code is free. Pass `{ cause }` to keep the original error attached.
 
 ```typescript
 import { access } from "node:fs/promises";
@@ -145,7 +171,7 @@ class ConfigError extends CLIError {
 
   constructor(message: string, path: string) {
     // 78 is the conventional "configuration error" status.
-    super(message, "VALIDATION_ERROR", 78);
+    super(message, { code: "CONFIG_ERROR", exitCode: 78 });
     this.name = "ConfigError";
     this.path = path;
   }
@@ -176,14 +202,14 @@ Cancelled
 
 Two exported helpers classify and format a thrown value.
 
-### `isCancellationError(err, signal?)`
+### `isCancellationError(err, signal)`
 
 Returns `true` when the value represents a user-initiated cancellation:
 
 - any `PromptCancelError`, or
 - an `Error` whose `name` is `"AbortError"` **when the supplied `signal` is aborted**.
 
-The signal argument matters. Called without one, a bare `AbortError` is **not** treated as a cancellation — an abort raised by unrelated code should not be silently reported as "the user cancelled".
+The signal argument is required. A bare `AbortError` is **not** treated as a cancellation unless the signal is aborted — an abort raised by unrelated code should not be silently reported as "the user cancelled".
 
 ```typescript
 import { isCancellationError } from "@libraz/node-cli";
@@ -204,9 +230,9 @@ cli
   });
 ```
 
-### `formatErrorMessage(err, signal?)`
+### `formatErrorMessage(err)`
 
-Returns `"Cancelled"` for a cancellation, and otherwise the error's message — or the value converted to a string when it is not an `Error`.
+Returns the error's message, or the value converted to a string when it is not an `Error`. It has no cancellation special case; the framework itself prints `Cancelled` for an interrupt or a `PromptCancelError`.
 
 ```typescript
 import { formatErrorMessage } from "@libraz/node-cli";
@@ -217,6 +243,31 @@ cli.on("error", (error) => {
 ```
 
 Cancellation is raised by Ctrl+C in the interactive shell and in direct mode, by a prompt the user dismisses (see [Prompts](prompts.md)), and by an `AbortSignal` passed to `cli.exec()`.
+
+## Programmer misuse
+
+A failure caused by user input is always a `CLIError`. A failure caused by the program calling the API wrongly is not: it is a plain `TypeError`, `RangeError` or `Error` with a `code` from `UsageErrorCode`, in the style of Node's own `ERR_*` errors.
+
+| Situation | Error | `code` |
+|---|---|---|
+| A command or option definition is rejected while being built | `Error` | `ERR_INVALID_DEFINITION`, `ERR_DEFINITION_CONFLICT` |
+| An argument has the wrong type | `TypeError` | `ERR_INVALID_ARG_TYPE` |
+| A value is out of range or a name is unknown (style, border, level, empty `choices`, `min` > `max`, width, markup depth) | `RangeError` | `ERR_INVALID_ARG_VALUE` |
+| The state conflicts (removed command, already started, output or input in use) | `Error` | `ERR_COMMAND_REMOVED`, `ERR_ALREADY_STARTED`, `ERR_OUTPUT_BUSY`, `ERR_INPUT_BUSY` |
+
+```typescript
+type UsageErrorCode =
+  | "ERR_INVALID_ARG_TYPE"
+  | "ERR_INVALID_ARG_VALUE"
+  | "ERR_INVALID_DEFINITION"
+  | "ERR_DEFINITION_CONFLICT"
+  | "ERR_COMMAND_REMOVED"
+  | "ERR_ALREADY_STARTED"
+  | "ERR_OUTPUT_BUSY"
+  | "ERR_INPUT_BUSY";
+```
+
+These are bugs to fix in the calling code, not conditions to handle at run time, so they do not extend `CLIError`.
 
 ## Exit codes
 
