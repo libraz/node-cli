@@ -465,11 +465,11 @@ export function parseOptionFlags(flags: string): {
  * @param registry - The command registry used to resolve command paths.
  * @returns The fully parsed result including command path, arguments, and options.
  */
-export function parse(input: string | string[], registry: CommandRegistry): ParseResult {
+export function parse(input: string | readonly string[], registry: CommandRegistry): ParseResult {
   if (typeof input === "string") assertNoRedirection(input);
-  const rawInput = Array.isArray(input) ? input.join(" ") : input;
-  const tokens = Array.isArray(input) ? input : tokenize(input);
-  const rawArgv = Array.isArray(input) ? [...input] : undefined;
+  const rawInput = typeof input === "string" ? input : input.join(" ");
+  const tokens = typeof input === "string" ? tokenize(input) : [...input];
+  const rawArgv = typeof input === "string" ? null : [...input];
 
   if (tokens.length === 0) {
     return {

@@ -1,7 +1,9 @@
+import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
+import { createCLI, type FallbackContext } from "../src/index.js";
 import { createMockStdout } from "./helpers.js";
 
 describe("catch/fallback command", () => {
@@ -70,18 +72,45 @@ describe("catch/fallback command", () => {
     expect(stream.getOutput()).toContain("deployed");
   });
 
-  it("CLI.catch() sets the handler", async () => {
-    const { CLI } = await import("../src/cli.js");
-    const cli = new CLI();
+  it("CLI.fallback() sets the handler and returns the CLI", async () => {
+    const cli = createCLI();
     const stream = createMockStdout();
     const caught: string[] = [];
 
-    cli.catch((input) => {
+    const result = cli.fallback((input) => {
       caught.push(input);
     });
 
-    // Use exec to test
+    expect(result).toBe(cli);
     await cli.exec("unknowncmd", { stdout: stream, stderr: stream });
     expect(caught).toEqual(["unknowncmd"]);
+  });
+
+  it("hands the execution's streams and signal to the fallback", async () => {
+    const cli = createCLI();
+    const stdin = Readable.from([]);
+    const stdout = createMockStdout();
+    const stderr = createMockStdout();
+    const controller = new AbortController();
+    let received: FallbackContext | undefined;
+    cli.fallback((_input, ctx) => {
+      received = ctx;
+    });
+
+    await cli.exec("unknowncmd", { stdin, stdout, stderr, signal: controller.signal });
+    expect(received).toEqual({ stdin, stdout, stderr, signal: controller.signal });
+  });
+
+  it("gives the fallback a live signal when exec supplies none", async () => {
+    const cli = createCLI();
+    let received: FallbackContext | undefined;
+    cli.fallback((_input, ctx) => {
+      received = ctx;
+    });
+
+    await cli.exec("unknowncmd", { stdout: createMockStdout() });
+    expect(received?.stdin).toBeNull();
+    expect(received?.signal).toBeInstanceOf(AbortSignal);
+    expect(received?.signal.aborted).toBe(false);
   });
 });

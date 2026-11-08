@@ -1,6 +1,6 @@
-import { CLI } from "../../dist/index.js";
+import { createCLI } from "../../dist/index.js";
 
-const cli = new CLI({ name: "concurrent-sigint-fixture" });
+const cli = createCLI({ name: "concurrent-sigint-fixture" });
 
 // Two commands running at once. A single Ctrl-C must cancel both cooperatively;
 // neither may read the other's cancellation as "nothing happened" and force quit.

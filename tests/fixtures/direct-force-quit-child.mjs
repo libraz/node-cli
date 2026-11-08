@@ -1,8 +1,8 @@
-import { CLI } from "../../dist/index.js";
+import { createCLI } from "../../dist/index.js";
 
 // argv[2] selects the scenario; the rest of argv is the command line to run.
 const scenario = process.argv[2];
-const cli = new CLI({ name: "direct-force-quit-fixture" });
+const cli = createCLI({ name: "direct-force-quit-fixture" });
 
 cli.on("exit", () => process.stdout.write("EXIT_FIRST\n"));
 cli.on("exit", async () => {

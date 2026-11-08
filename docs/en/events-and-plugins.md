@@ -89,7 +89,7 @@ Error in error handler: <message>
 
 - unbalanced quoting or another parse failure,
 - an unrecognized command,
-- a `catch` handler throwing,
+- a `fallback` handler throwing,
 - a `cancel` handler rejecting,
 - another event handler throwing.
 
@@ -134,23 +134,23 @@ cli.on("exit", async () => {
 
 During a force-quit or the shell's SIGTERM teardown, `exit` handlers are given 2000 ms in total; a handler that has not finished by then does not delay termination.
 
-## The `catch` fallback
+## The `fallback` handler
 
-`cli.catch(handler)` handles input that matches no command, instead of raising `CommandNotFoundError`.
+`cli.fallback(handler)` handles input that matches no command, instead of raising `CommandNotFoundError`.
 
 ```typescript
-cli.catch((input, { stdout }) => {
+cli.fallback((input, { stdout }) => {
   stdout.write(`Unknown command: ${input}\nType "help" to list commands.\n`);
 });
 ```
 
 Three properties matter:
 
-- **There is one handler.** A later `catch()` call replaces the previous one.
-- **The context is minimal.** `CatchContext` is exactly `{ stdout, stderr }` — no `args`, no `signal`, no `shell`, because no command was resolved.
+- **There is one handler.** A later `fallback()` call replaces the previous one.
+- **The context carries only the streams.** `FallbackContext` is exactly `{ stdin, stdout, stderr, signal }`, the same four members every `CommandContext` has. There are no `args` and no `shell`, because no command was resolved. `signal` is the one passed to `cli.exec()`, or a signal that never aborts when none was passed.
 - **It also receives unparseable input.** Input that fails to tokenize or split into pipe stages goes to the handler rather than raising a `ParseError`.
 
-Without a `catch` handler, unrecognized input raises `CommandNotFoundError`. See [Errors](errors.md).
+Without a `fallback` handler, unrecognized input raises `CommandNotFoundError`. See [Errors](errors.md).
 
 ## Plugins
 
@@ -167,11 +167,13 @@ type Plugin = (ctx: PluginContext) => void | Promise<void>;
 ```typescript
 interface PluginContext {
   command(definition: string): CommandBuilder;
-  on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
-  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
-  catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void;
+  on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  fallback(handler: FallbackHandler): this;
 }
 ```
+
+`on`, `off` and `fallback` return the context, so registrations chain. `command` returns the new command's builder instead.
 
 There is no `use` (a plugin cannot register another plugin), no access to the command registry, and no logger or configuration object. A plugin that needs those takes them as its own parameters.
 
@@ -237,7 +239,9 @@ cli.use(metricsPlugin("https://metrics.example.com"));
 
 ### Ordering and async plugins
 
-Plugin bodies run through **one serial queue**. The second plugin's body does not begin until the first one's promise settles, so registration order is deterministic even when a plugin awaits input or output. Two plugins registering a command of the same name resolve the same way every run: the later `use()` wins.
+When no earlier asynchronous plugin is still pending, `use()` runs the plugin body immediately, inside the call. A synchronous plugin has finished registering by the time `use()` returns.
+
+A plugin body that returns a promise, and every plugin registered while one is pending, goes through **one serial queue**. A queued body does not begin until the previous one's promise settles, so registration order is deterministic even when a plugin awaits input or output. Two plugins registering a command of the same name resolve the same way every run: the later `use()` wins.
 
 Plugins are awaited at three points:
 
@@ -249,7 +253,9 @@ The third point means a plugin registered in the middle of a session — by an e
 
 ### When a plugin fails
 
-A plugin failure is **sticky**. Once a plugin has thrown or rejected:
+A synchronous throw from a plugin body that `use()` ran immediately is thrown from that `use()` call, so the caller can catch it. Whatever the plugin registered before throwing stays registered, and the CLI remains usable.
+
+An asynchronous failure is **sticky**. Once a queued plugin has thrown or rejected:
 
 - every later `cli.use()` call re-throws that same error,
 - every later `cli.exec()` call re-throws it.
@@ -258,7 +264,7 @@ At the `cli.start()` boundary the failure is fatal: the error is reported on the
 
 ## Programmatic execution
 
-`cli.exec(input, options?)` runs a command string as if it had been typed.
+`cli.exec(input, options?)` runs a command string as if it had been typed. It also accepts an array of arguments, which is used as argv as is: no tokenizing and no pipe splitting. `""` and `[]` resolve without doing anything. Any other input — a value that is neither a string nor an array of strings — rejects with a `TypeError` whose `code` is `ERR_INVALID_ARG_TYPE`.
 
 ```typescript
 await cli.exec("deploy prod --force");
@@ -268,9 +274,12 @@ Because the input is a string, it is split into pipe stages the same way shell i
 
 ```typescript
 await cli.exec("produce | transform | consume");
+await cli.exec(["note", "add", "a | b"]); // one argument, not a pipe
 ```
 
-### `ExecOptions`
+Inside the action, `ctx.rawArgv` is the array for array input and `null` for string input.
+
+### `StdioOptions`
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -278,6 +287,8 @@ await cli.exec("produce | transform | consume");
 | `stdout` | `process.stdout` | Writable stream the command writes to |
 | `stderr` | `process.stderr` | Writable stream for diagnostics |
 | `signal` | none | An `AbortSignal` (see [Glossary](glossary.md)) that cancels the run |
+
+Every field is optional. A `CommandContext` is itself a valid `StdioOptions`, so an action can run another command on its own streams and signal with `cli.exec(line, ctx)`.
 
 `cli.exec()` passes no shell, so `ctx.shell` is `null` inside the action and `ctx.shell?.enterMode(...)` does nothing. It also does not fire the `exit` event on the normal path.
 

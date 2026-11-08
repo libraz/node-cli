@@ -1,6 +1,6 @@
-import { CLI } from "../../dist/index.js";
+import { createCLI } from "../../dist/index.js";
 
-const cli = new CLI();
+const cli = createCLI();
 cli
   .command("wait")
   .cancel((ctx) => {

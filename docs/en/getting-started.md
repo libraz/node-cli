@@ -64,12 +64,12 @@ await cli.start();
 Line by line:
 
 - `#!/usr/bin/env node` is the **shebang**, explained in the next section.
-- `createCLI({ ... })` builds the application object. `name` is used in help output and to derive the history file path; `version` is what `--version` prints. Both are optional — without `version`, the `--version` and `-V` flags are not intercepted by the library at all.
+- `createCLI({ ... })` builds the application object. `name` is used in help output and to derive the history file path; `version` is what `--version` prints. Both are optional — without `version`, the `--version` and `-V` flags are not intercepted by the library at all. Every setting goes into this object; none can be changed after construction, and an invalid history setting throws here.
 - `cli.command("greet <name>")` declares a command called `greet` that takes one required positional argument named `name`. Angle brackets mark it required; square brackets, as in `[name]`, would make it optional.
 - `.description(...)` supplies the text that appears next to the command in generated help.
 - `.action((ctx) => { ... })` registers the function that runs when the command is invoked. `ctx` is the [command context](commands.md): `ctx.args` holds the positional arguments keyed by name, `ctx.options` holds the parsed options, and `ctx.stdout` is the stream to write results to.
 - `ctx.args.name` is typed `unknown`, because argument names are only known at runtime. Positional arguments are always strings, so it interpolates into a template string directly; a value used as a `string` elsewhere needs a cast or a runtime check.
-- `await cli.start()` hands control to the library. It reads the terminal arguments, picks an execution mode, and runs the matching command.
+- `await cli.start()` hands control to the library. It reads the terminal arguments, picks an execution mode, runs the matching command, and resolves to the exit code.
 
 Write to `ctx.stdout` rather than calling `console.log`. `ctx.stdout` is the stream belonging to the current execution, which is what makes the same command work when its output is piped into another command inside the interactive shell, and what makes it testable by passing a substitute stream.
 
@@ -173,12 +173,12 @@ In order:
 
 1. Any registered plugins are awaited. A plugin that throws is fatal: the error is reported, the `exit` event fires, and no command runs.
 2. The argument list is `process.argv.slice(2)` — everything typed after the command name — unless an array was passed to `start()` explicitly.
-3. If arguments were supplied but none of them carries content (all empty strings, or exactly the end-of-options marker `--`), the help index is printed and `start()` returns.
+3. If arguments were supplied but none of them carries content (all empty strings, or exactly the end-of-options marker `--`), the help index is printed and `start()` resolves to 0.
 4. If there is at least one argument, that one command runs. This is **direct mode**.
 5. If there are no arguments and both standard input and standard output are terminals, the **interactive shell** opens.
-6. Otherwise — no arguments, with output piped or input redirected — the help index is printed and `start()` returns. No prompt is opened, because there is no terminal to prompt on.
+6. Otherwise — no arguments, with output piped or input redirected — the help index is printed and `start()` resolves to 0. No prompt is opened, because there is no terminal to prompt on.
 
-For a direct-mode failure or interruption, the library sets `process.exitCode` rather than calling `process.exit()`, so pending output is flushed and any `exit` event handler gets to run. A successful direct-mode command leaves the exit code unchanged. The exceptions are a force-quit (a second interrupt, exit code 130) and the interactive shell's shutdown on a termination signal (exit code 143). A direct-mode command interrupted with Ctrl-C exits with code 130. See [Errors](errors.md) for the full list.
+For a direct-mode failure or interruption, the library sets `process.exitCode` rather than calling `process.exit()`, so pending output is flushed and any `exit` event handler gets to run. A successful direct-mode command leaves the exit code unchanged. Either way, `start()` resolves to the code the process will exit with (0 when none is set), so a caller can read it without inspecting `process.exitCode`. The exceptions are a force-quit (a second interrupt, exit code 130) and the interactive shell's shutdown on a termination signal (exit code 143). A direct-mode command interrupted with Ctrl-C exits with code 130. See [Errors](errors.md) for the full list.
 
 ### Direct mode
 

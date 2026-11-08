@@ -89,7 +89,7 @@ Error in error handler: <message>
 
 - 引用符の対応が取れていないなど、解析の失敗
 - 認識できないコマンド
-- `catch` ハンドラが投げた例外
+- `fallback` ハンドラが投げた例外
 - `cancel` ハンドラのプロミスの失敗
 - 別のイベントハンドラが投げた例外
 
@@ -134,23 +134,23 @@ cli.on("exit", async () => {
 
 強制終了のときとシェルが SIGTERM で終了処理をするときは、`exit` ハンドラ全体で 2000 ms が与えられます。それまでに終わらなかったハンドラが終了処理を遅らせることはありません。
 
-## `catch` フォールバック
+## `fallback` ハンドラ
 
-`cli.catch(handler)` は、どのコマンドにも一致しない入力を、`CommandNotFoundError` を投げる代わりに処理します。
+`cli.fallback(handler)` は、どのコマンドにも一致しない入力を、`CommandNotFoundError` を投げる代わりに処理します。
 
 ```typescript
-cli.catch((input, { stdout }) => {
+cli.fallback((input, { stdout }) => {
   stdout.write(`Unknown command: ${input}\nType "help" to list commands.\n`);
 });
 ```
 
 押さえておきたい性質が 3 つあります。
 
-- **ハンドラは 1 つだけです。** あとから `catch()` を呼ぶと、前のハンドラを置き換えます。
-- **コンテキストは最小限です。** `CatchContext` はちょうど `{ stdout, stderr }` だけで、コマンドが解決されていないため `args` も `signal` も `shell` もありません。
+- **ハンドラは 1 つだけです。** あとから `fallback()` を呼ぶと、前のハンドラを置き換えます。
+- **コンテキストはストリームだけを持ちます。** `FallbackContext` はちょうど `{ stdin, stdout, stderr, signal }` で、どの `CommandContext` も持つ 4 つのメンバーと同じです。コマンドが解決されていないため、`args` も `shell` もありません。`signal` は `cli.exec()` に渡したもので、渡していなければ中断されることのない signal です。
 - **解析できない入力も届きます。** トークン分割やパイプステージへの分割に失敗した入力は、`ParseError` を投げる代わりにハンドラへ渡されます。
 
-`catch` ハンドラがない場合、認識できない入力は `CommandNotFoundError` を投げます。[エラー](errors.md)を参照してください。
+`fallback` ハンドラがない場合、認識できない入力は `CommandNotFoundError` を投げます。[エラー](errors.md)を参照してください。
 
 ## プラグイン
 
@@ -167,11 +167,13 @@ type Plugin = (ctx: PluginContext) => void | Promise<void>;
 ```typescript
 interface PluginContext {
   command(definition: string): CommandBuilder;
-  on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
-  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void;
-  catch(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void;
+  on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  fallback(handler: FallbackHandler): this;
 }
 ```
+
+`on`、`off`、`fallback` はコンテキスト自身を返すので、登録をつなげて書けます。`command` だけは、新しいコマンドの builder を返します。
 
 `use` はありません（プラグインが別のプラグインを登録することはできません）。コマンドレジストリへのアクセスもなく、ロガーや設定オブジェクトもありません。それらが必要なプラグインは、自分のパラメータとして受け取ってください。
 
@@ -237,7 +239,9 @@ cli.use(metricsPlugin("https://metrics.example.com"));
 
 ### 順序と非同期プラグイン
 
-プラグインの本体は**1 本の直列キュー**を通ります。2 つ目のプラグインの本体は、1 つ目のプロミスが確定するまで始まりません。そのため、プラグインが入出力を待つ場合でも登録の順序は決まります。同じ名前のコマンドを 2 つのプラグインが登録した場合も、毎回同じ結果に落ち着きます。あとから `use()` したほうが勝ちます。
+先に登録した非同期のプラグインが保留中でなければ、`use()` はプラグインの本体をその呼び出しの中ですぐに実行します。同期的なプラグインは、`use()` から戻った時点で登録を終えています。
+
+プロミスを返したプラグインの本体と、それが保留中の間に登録されたプラグインは、**1 本の直列キュー**を通ります。キューに入った本体は、ひとつ前のプロミスが確定するまで始まりません。そのため、プラグインが入出力を待つ場合でも登録の順序は決まります。同じ名前のコマンドを 2 つのプラグインが登録した場合も、毎回同じ結果に落ち着きます。あとから `use()` したほうが勝ちます。
 
 プラグインが await されるのは次の 3 か所です。
 
@@ -249,7 +253,9 @@ cli.use(metricsPlugin("https://metrics.example.com"));
 
 ### プラグインが失敗した場合
 
-プラグインの失敗は**後を引く**性質を持ちます。プラグインが例外を投げるか、プロミスが失敗すると、それ以降はこうなります。
+`use()` がその場で実行したプラグインの本体が同期的に例外を投げると、その例外は当の `use()` の呼び出しからそのまま投げられるので、呼び出し側で捕まえられます。例外の前にプラグインが登録したものは残り、CLI もそのまま使えます。
+
+非同期の失敗は**後を引く**性質を持ちます。キューに入ったプラグインが例外を投げるか、プロミスが失敗すると、それ以降はこうなります。
 
 - 以降の `cli.use()` の呼び出しは、いずれも同じエラーを投げ直します
 - 以降の `cli.exec()` の呼び出しも、同じエラーを投げ直します
@@ -258,7 +264,7 @@ cli.use(metricsPlugin("https://metrics.example.com"));
 
 ## プログラムからの実行
 
-`cli.exec(input, options?)` は、コマンド文字列を、あたかも入力されたかのように実行します。
+`cli.exec(input, options?)` は、コマンド文字列を、あたかも入力されたかのように実行します。引数の配列も受け付け、その場合は配列をそのまま argv として使います。トークン分割もパイプ分割もしません。`""` と `[]` は何もせずに resolve します。それ以外の入力、つまり文字列でも文字列の配列でもない値は、`code` が `ERR_INVALID_ARG_TYPE` の `TypeError` で reject します。
 
 ```typescript
 await cli.exec("deploy prod --force");
@@ -268,9 +274,12 @@ await cli.exec("deploy prod --force");
 
 ```typescript
 await cli.exec("produce | transform | consume");
+await cli.exec(["note", "add", "a | b"]); // パイプではなく 1 つの引数
 ```
 
-### `ExecOptions`
+アクションの中の `ctx.rawArgv` は、配列を渡した場合はその配列、文字列を渡した場合は `null` です。
+
+### `StdioOptions`
 
 | フィールド | 既定値 | 意味 |
 |---|---|---|
@@ -278,6 +287,8 @@ await cli.exec("produce | transform | consume");
 | `stdout` | `process.stdout` | コマンドが書き込む書き込み可能ストリーム |
 | `stderr` | `process.stderr` | 診断出力用の書き込み可能ストリーム |
 | `signal` | なし | 実行をキャンセルする `AbortSignal`（[用語集](glossary.md)を参照） |
+
+どのフィールドも省略できます。`CommandContext` もそのまま `StdioOptions` として渡せるので、アクションの中から `cli.exec(line, ctx)` と書けば、自分のストリームと signal のまま別のコマンドを実行できます。
 
 `cli.exec()` はシェルを渡さないため、アクションの中では `ctx.shell` が `null` になり、`ctx.shell?.enterMode(...)` は何もしません。通常の経路では `exit` イベントも発生しません。
 

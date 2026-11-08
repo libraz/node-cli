@@ -1,5 +1,5 @@
 import { InvalidOptionError, MissingOptionError, ValidationError } from "../errors.js";
-import type { CommandContext, OptionDef } from "../types.js";
+import type { MutableCommandContext, OptionDef } from "../types.js";
 
 /**
  * Resolves raw parsed option values against their definitions.
@@ -20,7 +20,7 @@ import type { CommandContext, OptionDef } from "../types.js";
 export function resolveOptions(
   raw: Record<string, unknown>,
   defs: Map<string, OptionDef>,
-  ctx: CommandContext,
+  ctx: MutableCommandContext,
 ): Record<string, unknown> {
   const resolved: Record<string, unknown> = Object.create(null);
 

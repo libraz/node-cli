@@ -1,9 +1,9 @@
-import { CLI, progress } from "../../dist/index.js";
+import { createCLI, progress } from "../../dist/index.js";
 
 const historyFile = process.argv[2];
 if (!historyFile) throw new Error("history file argument is required");
 
-const cli = new CLI({
+const cli = createCLI({
   name: "force-quit-fixture",
   banner: "FORCE_QUIT_READY",
   historyFile,

@@ -1,5 +1,5 @@
-import { CLI } from "../../dist/index.js";
+import { createCLI } from "../../dist/index.js";
 
-const cli = new CLI({ name: "redirect-fixture", prompt: "HIDDEN_PROMPT> " });
+const cli = createCLI({ name: "redirect-fixture", prompt: "HIDDEN_PROMPT> " });
 cli.command("fresh").action(() => {});
 await cli.start([]);

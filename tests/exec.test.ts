@@ -1,11 +1,11 @@
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { CLI, ExtraArgumentError, progress, UnknownOptionError } from "../src/index.js";
+import { createCLI, ExtraArgumentError, progress, UnknownOptionError } from "../src/index.js";
 import { createMockStdout, createMockTTY } from "./helpers.js";
 
 describe("programmatic exec", () => {
   it("executes a command programmatically", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
 
     cli.command("echo <message>").action((ctx) => {
@@ -17,7 +17,7 @@ describe("programmatic exec", () => {
   });
 
   it("executes multiple commands in sequence", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
 
     cli.command("count <n>").action((ctx) => {
@@ -31,7 +31,7 @@ describe("programmatic exec", () => {
   });
 
   it("throws on unknown command", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
 
     await expect(cli.exec("nonexistent", { stdout: stream, stderr: stream })).rejects.toThrow(
@@ -40,7 +40,7 @@ describe("programmatic exec", () => {
   });
 
   it("throws exported errors for invalid user input", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     cli
       .command("deploy <env>")
       .option("--force")
@@ -50,8 +50,47 @@ describe("programmatic exec", () => {
     await expect(cli.exec("deploy prod extra")).rejects.toThrow(ExtraArgumentError);
   });
 
+  it("runs an array as argv without tokenizing or splitting pipes", async () => {
+    const cli = createCLI();
+    const seen: Array<{ args: unknown; rawArgv: readonly string[] | null }> = [];
+    cli.command("say <text>").action((ctx) => {
+      seen.push({ args: ctx.args.text, rawArgv: ctx.rawArgv });
+    });
+
+    await cli.exec(["say", "a | b 'c'"] as const);
+    await cli.exec("say plain");
+    expect(seen).toEqual([
+      { args: "a | b 'c'", rawArgv: ["say", "a | b 'c'"] },
+      { args: "plain", rawArgv: null },
+    ]);
+  });
+
+  it("resolves without doing anything for empty input", async () => {
+    const cli = createCLI();
+    const stream = createMockStdout();
+    await expect(cli.exec("", { stdout: stream, stderr: stream })).resolves.toBeUndefined();
+    await expect(cli.exec([], { stdout: stream, stderr: stream })).resolves.toBeUndefined();
+    expect(stream.getOutput()).toBe("");
+  });
+
+  it.each([
+    ["a number", 42],
+    ["null", null],
+    ["undefined", undefined],
+    ["an array with a number", ["say", 1]],
+    ["an array with undefined", ["say", undefined]],
+  ])("rejects %s as input with ERR_INVALID_ARG_TYPE", async (_label, input) => {
+    const cli = createCLI();
+    const action = vi.fn();
+    cli.command("say [text]").action(action);
+    const error = await cli.exec(input as string).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
+    expect(action).not.toHaveBeenCalled();
+  });
+
   it("events fire during exec", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
     const events: string[] = [];
 
@@ -71,7 +110,7 @@ describe("programmatic exec", () => {
   });
 
   it("injects stdin into programmatic commands", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
     cli.command("read").action(async (ctx) => {
       let input = "";
@@ -87,7 +126,7 @@ describe("programmatic exec", () => {
   });
 
   it("links an external AbortSignal and removes its listener", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const controller = new AbortController();
     const add = vi.spyOn(controller.signal, "addEventListener");
     const remove = vi.spyOn(controller.signal, "removeEventListener");
@@ -116,7 +155,7 @@ describe("programmatic exec", () => {
   });
 
   it("passes an already-aborted signal to the action", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const controller = new AbortController();
     controller.abort();
     let aborted = false;
@@ -128,7 +167,7 @@ describe("programmatic exec", () => {
   });
 
   it("restores the outer diagnostic stream after a nested execution", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const outerErr = createMockStdout();
     const innerErr = createMockStdout();
     cli.command("inner").action(() => {});
@@ -146,7 +185,7 @@ describe("programmatic exec", () => {
   });
 
   it("releases abandoned progress indicators after a command failure", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const tty = createMockTTY();
     cli.command("broken").action(() => {
       progress.spinner({ stream: tty, label: "working" }).start();

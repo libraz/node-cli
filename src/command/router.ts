@@ -15,7 +15,14 @@ import { resolveOptions } from "../option/resolver.js";
 import { releaseAll, restoreCursor } from "../output/progress.js";
 import { writeThrough } from "../output/region.js";
 import type { Shell } from "../shell/repl.js";
-import type { CatchContext, CLIEventMap, CommandContext, CommandDefinition } from "../types.js";
+import type {
+  CLIEventMap,
+  CommandContext,
+  CommandDefinition,
+  FallbackContext,
+  FallbackHandler,
+  MutableCommandContext,
+} from "../types.js";
 import { parse, splitPipes, tokenize } from "./parser.js";
 import { type CommandRegistry, visibleSubcommands } from "./registry.js";
 
@@ -198,7 +205,7 @@ export class CommandRouter {
   }
 
   /** Fallback action for unrecognized commands. */
-  private catchHandler?: (input: string, ctx: CatchContext) => void | Promise<void>;
+  private catchHandler?: FallbackHandler;
 
   /**
    * Assigns a help generator used to produce help text when needed.
@@ -219,11 +226,11 @@ export class CommandRouter {
   }
 
   /**
-   * Sets a catch/fallback handler invoked when no command matches.
+   * Sets the fallback handler invoked when no command matches.
    *
    * @param handler - The fallback handler.
    */
-  setCatchHandler(handler: (input: string, ctx: CatchContext) => void | Promise<void>): void {
+  setCatchHandler(handler: FallbackHandler): void {
     this.catchHandler = handler;
   }
 
@@ -237,13 +244,13 @@ export class CommandRouter {
     command: CommandDefinition;
     args?: Record<string, unknown>;
     rawInput: string;
-    rawArgv?: string[];
+    rawArgv: readonly string[] | null;
     shell: Shell | null;
     stdin: Readable | null;
     stdout: Writable;
     stderr: Writable;
     signal: AbortSignal;
-  }): CommandContext {
+  }): MutableCommandContext {
     return {
       args: init.args ?? Object.create(null),
       options: Object.create(null),
@@ -265,9 +272,9 @@ export class CommandRouter {
    * pipe-splitting and tokenizing paths.
    */
   private async runCatchHandler(
-    handler: (input: string, ctx: CatchContext) => void | Promise<void>,
+    handler: FallbackHandler,
     input: string,
-    ctx: CatchContext,
+    ctx: FallbackContext,
   ): Promise<void> {
     try {
       await handler(input, ctx);
@@ -424,7 +431,7 @@ export class CommandRouter {
    * @throws {MissingArgumentError} If a required argument is not provided.
    */
   async execute(
-    input: string | string[],
+    input: string | readonly string[],
     options: {
       shell?: Shell | null;
       stdin?: Readable | null;
@@ -442,7 +449,7 @@ export class CommandRouter {
   }
 
   private async executeInternal(
-    input: string | string[],
+    input: string | readonly string[],
     options: {
       shell?: Shell | null;
       stdin?: Readable | null;
@@ -462,6 +469,13 @@ export class CommandRouter {
       cancellationScope,
       expectedCancellation,
     } = options;
+    // No command is resolved for a fallback, so it gets the execution's own streams and signal.
+    const fallbackContext = (): FallbackContext => ({
+      stdin,
+      stdout,
+      stderr,
+      signal: signal ?? new AbortController().signal,
+    });
     // Check for pipe chains (only for string input)
     if (typeof input === "string") {
       let segments: string[];
@@ -470,7 +484,7 @@ export class CommandRouter {
       } catch (err) {
         const error = toError(err);
         if (error instanceof ParseError && this.catchHandler) {
-          await this.runCatchHandler(this.catchHandler, input, { stdout, stderr });
+          await this.runCatchHandler(this.catchHandler, input, fallbackContext());
           return;
         }
         await this.emit("error", error);
@@ -485,14 +499,14 @@ export class CommandRouter {
     // Built-in --version / -V interception (before command resolution).
     let tokens: string[];
     try {
-      tokens = Array.isArray(input) ? input : tokenize(input);
+      tokens = typeof input === "string" ? tokenize(input) : [...input];
     } catch (err) {
       const error = toError(err);
       if (error instanceof ParseError && this.catchHandler) {
         await this.runCatchHandler(
           this.catchHandler,
-          Array.isArray(input) ? input.join(" ") : input,
-          { stdout, stderr },
+          typeof input === "string" ? input : input.join(" "),
+          fallbackContext(),
         );
         return;
       }
@@ -528,8 +542,8 @@ export class CommandRouter {
         const command = preliminaryMatch.command;
         const ctx = this.createContext({
           command,
-          rawInput: Array.isArray(input) ? input.join(" ") : input,
-          rawArgv: Array.isArray(input) ? [...input] : undefined,
+          rawInput: typeof input === "string" ? input : input.join(" "),
+          rawArgv: typeof input === "string" ? null : [...input],
           shell,
           stdin,
           stdout,
@@ -544,10 +558,10 @@ export class CommandRouter {
 
     // Empty input
     if (result.commandPath.length === 0) {
-      const rawInput = Array.isArray(input) ? input.join(" ") : input;
+      const rawInput = typeof input === "string" ? input : input.join(" ");
       if (rawInput.trim().length > 0) {
         if (this.catchHandler) {
-          await this.runCatchHandler(this.catchHandler, rawInput, { stdout, stderr });
+          await this.runCatchHandler(this.catchHandler, rawInput, fallbackContext());
           return;
         }
         const err = new CommandNotFoundError(tokens[0] ?? rawInput.trim().split(/\s+/)[0]);
@@ -565,9 +579,9 @@ export class CommandRouter {
     // current child count does not change that: a group registered before its
     // children, or a placeholder that has none yet, is still a group.
     if (!command.action && result.extraArgs?.length) {
-      const rawInput = Array.isArray(input) ? input.join(" ") : input;
+      const rawInput = typeof input === "string" ? input : input.join(" ");
       if (this.catchHandler) {
-        await this.runCatchHandler(this.catchHandler, rawInput, { stdout, stderr });
+        await this.runCatchHandler(this.catchHandler, rawInput, fallbackContext());
         return;
       }
       const path = [...this.registry.getCommandPath(command), result.extraArgs[0]].join(" ");

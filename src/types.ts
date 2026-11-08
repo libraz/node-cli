@@ -1,4 +1,5 @@
 import type { Readable, Writable } from "node:stream";
+import type { CommandBuilder } from "./command/builder.js";
 import type { Shell } from "./shell/repl.js";
 
 // ── Argument ──
@@ -81,6 +82,31 @@ export type Action = (ctx: CommandContext) => void | Promise<void>;
 export type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
 
 /**
+ * A command-level validator run after option resolution and before the action.
+ * Throw (or reject) to stop execution.
+ */
+export type CommandValidator = (ctx: CommandContext) => void | Promise<void>;
+
+/**
+ * A handler invoked when a running command is interrupted: Ctrl-C, an aborted
+ * exec signal, or SIGTERM in the shell. It is not awaited; a rejection is
+ * reported through the `error` event.
+ */
+export type CancelHandler = (ctx: CommandContext) => void;
+
+/**
+ * A fallback handler invoked with the raw input when no command matches it.
+ */
+export type FallbackHandler = (input: string, ctx: FallbackContext) => void | Promise<void>;
+
+/**
+ * Redacts or rejects a line before it is persisted to shell history. Return
+ * `null` to omit the line entirely. It stays synchronous because history is
+ * written with synchronous I/O.
+ */
+export type HistoryFilter = (line: string) => string | null;
+
+/**
  * Full definition of a CLI command, including its arguments, options,
  * subcommands, and action handler.
  */
@@ -106,9 +132,9 @@ export interface CommandDefinition {
   /** Alternative names that can be used to invoke this command. */
   aliases?: string[];
   /** Pre-action validator. Throw to reject execution. */
-  validate?: (ctx: CommandContext) => void | Promise<void>;
+  validate?: CommandValidator;
   /** Handler invoked when this command is interrupted: Ctrl-C, an aborted exec signal, or SIGTERM in the shell. */
-  cancelHandler?: (ctx: CommandContext) => void;
+  cancelHandler?: CancelHandler;
 }
 
 // ── Events ──
@@ -152,21 +178,49 @@ export type CLIEventHandler<K extends keyof CLIEventMap> = CLIEventMap[K];
 // ── Context ──
 
 /**
+ * The standard streams and cancellation signal of one execution. The signal
+ * travels with the streams: whoever supplies a command's I/O also supplies the
+ * signal that cancels it.
+ */
+export interface CommandStreams {
+  /** Readable stream supplied by the current execution surface, or null when none is available. */
+  readonly stdin: Readable | null;
+  /** Writable stream for standard output. */
+  readonly stdout: Writable;
+  /** Writable stream for standard error. */
+  readonly stderr: Writable;
+  /** Signal that is aborted when the execution is cancelled. */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Streams and cancellation accepted by `CLI.exec()`. Omitted members fall back
+ * to no stdin, `process.stdout`, `process.stderr`, and no external signal. A
+ * {@link CommandContext} is assignable, so an action can run a nested command
+ * on its own streams.
+ */
+export type StdioOptions = Partial<CommandStreams>;
+
+/**
  * Context passed to a command's action handler at execution time.
  */
-export interface CommandContext {
+export interface CommandContext extends CommandStreams {
   /** Parsed positional arguments keyed by argument name. This is a null-prototype record. */
-  args: Record<string, unknown>;
+  readonly args: Record<string, unknown>;
   /** Parsed options keyed by option long-name. This is a null-prototype record. */
-  options: Record<string, unknown>;
+  readonly options: Record<string, unknown>;
   /** The original raw input string. */
-  rawInput: string;
-  /** Exact argv elements for direct argv execution, when available. */
-  rawArgv?: string[];
+  readonly rawInput: string;
+  /**
+   * The exact argv elements when the input was an array (`start()`, or `exec()`
+   * with an array); `null` when the input was a string. Unlike `rawInput`, this
+   * is reversible.
+   */
+  readonly rawArgv: readonly string[] | null;
   /** The resolved command path (e.g. ["git", "commit"]). */
-  commandPath: string[];
+  readonly commandPath: readonly string[];
   /** The interactive shell instance, or null if running non-interactively. */
-  shell: Shell | null;
+  readonly shell: Shell | null;
   /**
    * Signal that is aborted when the command is cancelled (e.g. SIGINT in the
    * interactive shell or direct mode). Async actions can pass it to
@@ -174,25 +228,48 @@ export interface CommandContext {
    * cooperatively. It is the signal-based counterpart to `cli.command().cancel()`:
    * both fire on the same cancellation, so a command may use either or both.
    */
-  signal: AbortSignal;
-  /** Readable stream supplied by the current execution surface, or null when none is available. */
-  stdin: Readable | null;
-  /** Writable stream for standard output. */
-  stdout: Writable;
-  /** Writable stream for standard error. */
-  stderr: Writable;
+  readonly signal: AbortSignal;
 }
 
 /**
- * Minimal context passed to a catch/fallback handler invoked when no command
- * matches the input. Only output streams are available since no command was resolved.
+ * {@link CommandContext} with its members writable, for the router and option
+ * resolver while they assemble a context.
  */
-export interface CatchContext {
-  /** Writable stream for standard output. */
-  stdout: Writable;
-  /** Writable stream for standard error. */
-  stderr: Writable;
+export type MutableCommandContext = { -readonly [K in keyof CommandContext]: CommandContext[K] };
+
+/**
+ * Context passed to a fallback handler invoked when no command matches the
+ * input. It carries the execution's streams and signal; no command was
+ * resolved, so there are no arguments or options.
+ */
+export interface FallbackContext extends CommandStreams {}
+
+/**
+ * Context passed to a shell mode's action. A mode never reads stdin, so only
+ * the output streams and the signal are present.
+ */
+export type ModeContext = Pick<CommandStreams, "stdout" | "stderr" | "signal">;
+
+/**
+ * Context object passed to a plugin for extending the CLI. Its setters return
+ * the context so registrations can be chained.
+ */
+export interface PluginContext {
+  /** Registers a new command and returns its builder. */
+  command(definition: string): CommandBuilder;
+  /** Registers an event listener. A repeated call adds another listener. */
+  on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  /** Removes a previously registered event listener. */
+  off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
+  /** Sets the fallback handler. A repeated call replaces the previous handler. */
+  fallback(handler: FallbackHandler): this;
 }
+
+/**
+ * A plugin body. A synchronous plugin runs inside `use()`; an asynchronous one
+ * is awaited before the first command runs.
+ */
+export type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
 /**
  * Context passed to a command's completion provider.
@@ -219,7 +296,9 @@ export interface CompletionContext {
 // ── CLI Options ──
 
 /**
- * Top-level configuration options for the CLI application.
+ * Top-level configuration options for the CLI application. Every value is set
+ * at construction only; there is no way to change it afterwards (use
+ * `ctx.shell?.setPrompt()` to change the prompt of a running shell).
  */
 export interface CLIOptions {
   /** The name of the CLI application. */
@@ -232,15 +311,25 @@ export interface CLIOptions {
   description?: string;
   /** Banner text displayed when the interactive shell starts. Set to "" to suppress. */
   banner?: string;
-  /** File path used to persist command history. */
+  /**
+   * File path used to persist command history. A lone `~` and a leading `~/`
+   * expand to the home directory. Defaults to `~/.<name>_history`. An empty
+   * string or a non-string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
+   */
   historyFile?: string;
-  /** Maximum number of history entries to retain. */
+  /**
+   * Maximum number of history entries to retain. Defaults to 1000. A
+   * non-number throws a `TypeError`
+   * (`ERR_INVALID_ARG_TYPE`); a value that is not a non-negative safe integer
+   * throws a `RangeError` (`ERR_INVALID_ARG_VALUE`).
+   */
   historySize?: number;
   /**
    * Redacts or rejects a line before it is persisted to shell history. Return
-   * `null` to omit sensitive commands entirely.
+   * `null` to omit sensitive commands entirely. A non-function throws a
+   * `TypeError` with code `ERR_INVALID_ARG_TYPE`.
    */
-  historyFilter?: (line: string) => string | null;
+  historyFilter?: HistoryFilter;
 }
 
 // ── Parse Result ──
@@ -259,8 +348,8 @@ export interface ParseResult {
   extraArgs?: string[];
   /** The original raw input string. */
   rawInput: string;
-  /** Exact argv elements when parsing an argv array; unlike `rawInput`, this is reversible. */
-  rawArgv?: string[];
+  /** Exact argv elements when parsing an argv array, `null` for string input; unlike `rawInput`, this is reversible. */
+  rawArgv: readonly string[] | null;
   /** True only when the parser supplied the implicit `--help`/`-h` flag. */
   builtInHelp?: boolean;
   /** The matched command definition, if found. */

@@ -1,22 +1,25 @@
-export type { ExecOptions, PluginContext } from "../cli.js";
-export { CLI, createCLI } from "../cli.js";
-export { CommandBuilder } from "../command/builder.js";
-export {
-  activePipeSegment,
-  splitPipes,
-  stripOptionPrefix,
-  tokenize,
-} from "../command/parser.js";
-export type { CompletionResult } from "../shell/completion.js";
+export type { CLI } from "../cli.js";
+export { createCLI } from "../cli.js";
+export type { CommandBuilder } from "../command/builder.js";
+export { tokenize } from "../command/parser.js";
 export type { ModeConfig, Shell } from "../shell/repl.js";
 export type {
   Action,
-  CatchContext,
+  CancelHandler,
   CLIEventHandler,
   CLIEventMap,
   CLIOptions,
   CommandContext,
+  CommandStreams,
+  CommandValidator,
   Completer,
   CompletionContext,
+  FallbackContext,
+  FallbackHandler,
+  HistoryFilter,
+  ModeContext,
   OptionSchema,
+  Plugin,
+  PluginContext,
+  StdioOptions,
 } from "../types.js";

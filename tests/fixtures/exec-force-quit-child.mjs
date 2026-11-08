@@ -1,6 +1,6 @@
-import { CLI } from "../../dist/index.js";
+import { createCLI } from "../../dist/index.js";
 
-const cli = new CLI({ name: "exec-force-quit-fixture" });
+const cli = createCLI({ name: "exec-force-quit-fixture" });
 
 cli.on("exit", () => process.stdout.write("EXIT_FIRST\n"));
 cli.on("exit", async () => {

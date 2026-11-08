@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -185,12 +185,6 @@ describe("CLI (integration)", () => {
     expect(stderr.getOutput()).toContain("Token too short");
   });
 
-  it("prompt and history methods are chainable", () => {
-    const cli = createCLI({ name: "test" });
-    const result = cli.prompt("$ ").history("test-history");
-    expect(result).toBe(cli);
-  });
-
   it("passes historyFilter from CLI through Shell to persisted history", async () => {
     const directory = await mkdtemp(join(tmpdir(), "node-cli-history-filter-"));
     const historyFile = join(directory, "history");
@@ -201,9 +195,11 @@ describe("CLI (integration)", () => {
     stdin.isTTY = true;
     const stdout = createMockTTY();
     const stderr = createMockTTY();
-    const cli = createCLI({ historyFile });
+    const cli = createCLI({
+      historyFile,
+      historyFilter: (line) => line.replace(/secret/g, "[redacted]"),
+    });
     cli.command("login <token>").action(() => {});
-    cli.historyFilter((line) => line.replace(/secret/g, "[redacted]"));
 
     Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
     Object.defineProperty(process, "stdout", { configurable: true, value: stdout });
@@ -224,3 +220,92 @@ describe("CLI (integration)", () => {
     }
   });
 });
+
+describe("createCLI option validation", () => {
+  function historyFileOf(cli: ReturnType<typeof createCLI>): string {
+    return (cli as unknown as { historyFile: string }).historyFile;
+  }
+
+  it.each([0, -0, 1, 2 ** 31, 2 ** 32, Number.MAX_SAFE_INTEGER])(
+    "accepts historySize %s",
+    (historySize) => {
+      expect(() => createCLI({ historySize })).not.toThrow();
+    },
+  );
+
+  it.each([Number.NaN, Infinity, -Infinity, -1, Number.MAX_SAFE_INTEGER + 1, 1.5])(
+    "rejects historySize %s with ERR_INVALID_ARG_VALUE",
+    (historySize) => {
+      const error = captureThrow(() => createCLI({ historySize }));
+      expect(error).toBeInstanceOf(RangeError);
+      expect(error).toHaveProperty("code", "ERR_INVALID_ARG_VALUE");
+    },
+  );
+
+  it.each([null, true, "10"])("rejects historySize %s with ERR_INVALID_ARG_TYPE", (value) => {
+    const error = captureThrow(() => createCLI({ historySize: value as number }));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
+  });
+
+  it.each([null, "redact", 1])("rejects historyFilter %s with ERR_INVALID_ARG_TYPE", (value) => {
+    const error = captureThrow(() =>
+      createCLI({ historyFilter: value as unknown as (line: string) => string }),
+    );
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
+  });
+
+  it.each(["", null, 42])("rejects historyFile %s with ERR_INVALID_ARG_TYPE", (value) => {
+    const error = captureThrow(() => createCLI({ historyFile: value as string }));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
+  });
+
+  it.each([
+    ["~", homedir()],
+    ["~/history", join(homedir(), "history")],
+    ["~other/history", "~other/history"],
+    ["/var/tmp/~/history", "/var/tmp/~/history"],
+  ])("resolves historyFile %s to %s", (historyFile, expected) => {
+    expect(historyFileOf(createCLI({ historyFile }))).toBe(expected);
+  });
+
+  it("defaults historyFile to the name in the home directory", () => {
+    expect(historyFileOf(createCLI({ name: "app" }))).toBe(join(homedir(), ".app_history"));
+  });
+});
+
+describe("start() argument checks", () => {
+  restoreProcessStateAfterEach();
+
+  it.each([
+    ["null", null],
+    ["a string", "help"],
+    ["an array with a number", ["help", 1]],
+    ["an array with undefined", ["help", undefined]],
+  ])("rejects %s as argv with ERR_INVALID_ARG_TYPE", async (_label, argv) => {
+    const cli = createCLI();
+    const error = await cli.start(argv as string[]).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toHaveProperty("code", "ERR_INVALID_ARG_TYPE");
+  });
+
+  it("rejects a second start with ERR_ALREADY_STARTED", async () => {
+    const cli = createCLI();
+    cli.command("run").action(() => {});
+    await cli.start(["run"]);
+    const error = await cli.start(["run"]).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty("code", "ERR_ALREADY_STARTED");
+  });
+});
+
+function captureThrow(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (err) {
+    return err;
+  }
+  throw new Error("expected the call to throw");
+}

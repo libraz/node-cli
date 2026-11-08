@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CLI } from "../src/cli.js";
+import { createCLI, type PluginContext } from "../src/index.js";
 import { createMockStdout, restoreProcessStateAfterEach } from "./helpers.js";
 
 describe("plugin system", () => {
@@ -8,7 +8,7 @@ describe("plugin system", () => {
     vi.restoreAllMocks();
   });
   it("registers commands via plugin", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
 
     cli.use((ctx) => {
@@ -25,7 +25,7 @@ describe("plugin system", () => {
   });
 
   it("registers events via plugin", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
     const events: string[] = [];
 
@@ -44,7 +44,7 @@ describe("plugin system", () => {
   });
 
   it("multiple plugins compose", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
     const order: string[] = [];
 
@@ -66,7 +66,7 @@ describe("plugin system", () => {
   });
 
   it("async plugins are awaited on start", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     let registered = false;
 
     cli.use(async (ctx) => {
@@ -84,7 +84,7 @@ describe("plugin system", () => {
   });
 
   it("runs asynchronous plugin bodies in use() order", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const order: string[] = [];
     let releaseFirst: () => void = () => {};
     const first = new Promise<void>((resolve) => {
@@ -106,17 +106,85 @@ describe("plugin system", () => {
     expect(order).toEqual(["first", "second"]);
   });
 
-  it("surfaces a synchronous plugin throw through the initialization boundary", async () => {
-    const cli = new CLI();
+  it("runs a synchronous plugin inside use()", () => {
+    const cli = createCLI();
+    let ran = false;
     cli.use(() => {
-      throw new Error("sync plugin failed");
+      ran = true;
+    });
+    expect(ran).toBe(true);
+  });
+
+  it("throws a synchronous plugin failure at the use() call site", async () => {
+    const cli = createCLI();
+    const failure = new Error("sync plugin failed");
+    const stream = createMockStdout();
+    const caught: string[] = [];
+
+    expect(() =>
+      cli.use((ctx) => {
+        ctx.command("early").action((command) => command.stdout.write("early"));
+        ctx.fallback((input) => {
+          caught.push(input);
+        });
+        throw failure;
+      }),
+    ).toThrow(failure);
+
+    // Registrations made before the throw remain, and the instance is not failed.
+    expect(() => cli.use(() => {})).not.toThrow();
+    await cli.exec("early", { stdout: stream, stderr: stream });
+    await cli.exec("missing", { stdout: stream, stderr: stream });
+    expect(stream.getOutput()).toBe("early");
+    expect(caught).toEqual(["missing"]);
+  });
+
+  it("queues a synchronous plugin behind a pending one and fails initialization", async () => {
+    const cli = createCLI();
+    let release: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    cli.use(async () => {
+      await barrier;
     });
 
-    await expect(cli.exec("help")).rejects.toThrow("sync plugin failed");
+    expect(() =>
+      cli.use(() => {
+        throw new Error("queued plugin failed");
+      }),
+    ).not.toThrow();
+    release();
+    await expect(cli.exec("help")).rejects.toThrow("queued plugin failed");
+  });
+
+  it("chains PluginContext setters", async () => {
+    const cli = createCLI();
+    const stream = createMockStdout();
+    const events: string[] = [];
+    const removed = () => {
+      events.push("removed");
+    };
+    let returned: PluginContext[] = [];
+
+    cli.use((ctx) => {
+      returned = [
+        ctx.on("afterExecute", removed),
+        ctx.off("afterExecute", removed),
+        ctx.fallback((input) => {
+          events.push(`fallback:${input}`);
+        }),
+      ];
+      expect(returned).toEqual([ctx, ctx, ctx]);
+    });
+
+    await cli.exec("nothing", { stdout: stream, stderr: stream });
+    expect(returned).toHaveLength(3);
+    expect(events).toEqual(["fallback:nothing"]);
   });
 
   it("shares one initialization barrier across concurrent exec calls", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
     let release: () => void = () => {};
     const barrier = new Promise<void>((resolve) => {
@@ -135,7 +203,7 @@ describe("plugin system", () => {
   });
 
   it("shares the initialization barrier between start and exec", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     let release: () => void = () => {};
     const barrier = new Promise<void>((resolve) => {
       release = resolve;
@@ -154,7 +222,7 @@ describe("plugin system", () => {
   });
 
   it("drains plugins registered while another plugin is initializing", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
     cli.use(async () => {
       await Promise.resolve();
@@ -168,7 +236,7 @@ describe("plugin system", () => {
   });
 
   it("keeps plugin initialization failures sticky", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const failure = new Error("plugin failed");
     cli.use(async () => {
       throw failure;
@@ -180,11 +248,11 @@ describe("plugin system", () => {
 
   it("reports start initialization failures through stderr and exitCode", async () => {
     const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const cli = new CLI();
+    const cli = createCLI();
     cli.use(async () => {
       throw new Error("startup plugin failed");
     });
-    await expect(cli.start(["help"])).resolves.toBeUndefined();
+    await expect(cli.start(["help"])).resolves.toBe(1);
     expect(write).toHaveBeenCalledWith("Error: startup plugin failed\n");
     expect(process.exitCode).toBe(1);
   });
@@ -192,7 +260,7 @@ describe("plugin system", () => {
 
 describe("plugin initialization barrier under concurrency", () => {
   it("runs plugin bodies once for concurrent executions", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     let initializations = 0;
     cli.use(async (ctx) => {
       initializations++;
@@ -206,7 +274,7 @@ describe("plugin initialization barrier under concurrency", () => {
   });
 
   it("fails every concurrent execution with the same sticky error", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     cli.command("ready").action(() => {});
     cli.use(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -227,7 +295,7 @@ describe("plugin initialization barrier under concurrency", () => {
   });
 
   it("keeps registration order when an earlier plugin awaits", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const order: string[] = [];
     cli.use(async (ctx) => {
       await new Promise((resolve) => setTimeout(resolve, 20));

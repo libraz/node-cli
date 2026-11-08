@@ -1,8 +1,8 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLI } from "../../dist/index.js";
+import { createCLI } from "../../dist/index.js";
 
-const cli = new CLI({
+const cli = createCLI({
   name: "tty-fixture",
   banner: "TTY_REPL_READY",
   historyFile: process.argv[2] ?? join(tmpdir(), `node-cli-tty-${process.pid}.history`),
