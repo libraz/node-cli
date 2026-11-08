@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { extractChangelogSection, releaseMetadata } from "../scripts/release-metadata.mjs";
 
@@ -43,10 +44,28 @@ describe("release metadata", () => {
     expect("Shell" in api).toBe(false);
   });
 
-  it("does not expose internal command definitions in its type declarations", async () => {
-    const declarations = await readFile("dist/index.d.ts", "utf8");
+  it("does not expose internal command definitions in the public barrels", async () => {
+    const barrels = await readdir("dist/public");
+    const declarations = await Promise.all(
+      barrels
+        .filter((file) => file.endsWith(".d.ts"))
+        .map((file) => readFile(join("dist/public", file), "utf8")),
+    );
+    expect(declarations.length).toBeGreaterThan(0);
     for (const typeName of ["ArgDef", "CommandDefinition", "OptionDef", "ParseResult"]) {
-      expect(declarations).not.toMatch(new RegExp(`\\b${typeName}\\b`));
+      for (const text of declarations) expect(text).not.toMatch(new RegExp(`\\b${typeName}\\b`));
     }
+  });
+
+  it("leaves no @internal tag in any declaration file", async () => {
+    const files = (await readdir("dist", { recursive: true })).filter((file) =>
+      file.endsWith(".d.ts"),
+    );
+    expect(files.length).toBeGreaterThan(0);
+    const tagged: string[] = [];
+    for (const file of files) {
+      if ((await readFile(join("dist", file), "utf8")).includes("@internal")) tagged.push(file);
+    }
+    expect(tagged).toEqual([]);
   });
 });

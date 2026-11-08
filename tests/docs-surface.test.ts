@@ -3,18 +3,31 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Names exported as types, read from the built declaration file. Runtime
- * exports are read from the module itself; types have no runtime presence.
+ * Names the root entry point exports, read from the built declarations: the
+ * barrel's `export *` lines lead to `dist/public/<area>.d.ts`, whose explicit
+ * `export { … }` and `export type { … }` lists are the root export set.
  */
-function exportedTypeNames(declarations: string): string[] {
-  const names: string[] = [];
-  for (const match of declarations.matchAll(/export type \{([^}]*)\}/g)) {
-    for (const entry of match[1].split(",")) {
-      const name = entry.trim();
-      if (name) names.push(name);
+async function rootExports(): Promise<{ values: string[]; types: string[] }> {
+  const barrel = await readFile("dist/index.d.ts", "utf8");
+  const areas = [...barrel.matchAll(/^export \* from "\.\/(public\/[\w-]+)\.js";$/gm)].map(
+    (match) => match[1],
+  );
+  const values: string[] = [];
+  const types: string[] = [];
+  for (const area of areas) {
+    const declarations = await readFile(`dist/${area}.d.ts`, "utf8");
+    for (const match of declarations.matchAll(/^export (type )?\{([^}]*)\}/gm)) {
+      for (const entry of match[2].split(",")) {
+        const name =
+          entry
+            .trim()
+            .split(/\s+as\s+/)
+            .pop() ?? "";
+        if (name) (match[1] ? types : values).push(name);
+      }
     }
   }
-  return names;
+  return { values, types };
 }
 
 /** Headings that are a single backticked identifier, in document order. */
@@ -69,17 +82,28 @@ async function declaredTypes(directory: string): Promise<Map<string, Set<string>
 
 async function loadSurface() {
   // `pretest` builds before vitest runs, so the declaration files are present.
-  const [api, declarations, reference, declared] = await Promise.all([
+  const [api, roots, reference, declared] = await Promise.all([
     import("../src/index.js"),
-    readFile("dist/index.d.ts", "utf8"),
+    rootExports(),
     readFile("docs/en/api-reference.md", "utf8"),
     declaredTypes("dist"),
   ]);
-  const exported = new Set([...Object.keys(api), ...exportedTypeNames(declarations)]);
-  return { exported, reference, declared };
+  const exported = new Set([...roots.values, ...roots.types]);
+  return { api, roots, exported, reference, declared };
 }
 
+/** Type-level helpers reachable only through builder signatures, never named by consumers. */
+const TRANSITIVE_ONLY = new Set(["AddOption", "CheckedOptionSchema", "CommandBuilderFor"]);
+
 describe("public surface and documentation agree", () => {
+  it("reads the same runtime exports from the barrel and the module", async () => {
+    const { api, roots } = await loadSurface();
+
+    expect(roots.values.length).toBeGreaterThan(0);
+    expect(roots.types.length).toBeGreaterThan(0);
+    expect(roots.values.slice().sort()).toEqual(Object.keys(api).sort());
+  });
+
   it("documents every export as a code span or an export-index row", async () => {
     const { exported, reference } = await loadSurface();
     const documented = codeSpans(reference);
@@ -104,7 +128,12 @@ describe("public surface and documentation agree", () => {
     const missing: string[] = [];
     for (const name of exported) {
       for (const used of declared.get(name) ?? []) {
-        if (used !== name && declared.has(used) && !exported.has(used)) {
+        if (
+          used !== name &&
+          declared.has(used) &&
+          !exported.has(used) &&
+          !TRANSITIVE_ONLY.has(used)
+        ) {
           missing.push(`${name} -> ${used}`);
         }
       }
@@ -145,4 +174,21 @@ describe("public surface and documentation agree", () => {
 
     expect(missing).toEqual([]);
   });
+
+  it.each(["en", "ja"])(
+    "gives every migration-v2 section (%s) a before and an after",
+    async (lang) => {
+      const markdown = await readFile(`docs/${lang}/migration-v2.md`, "utf8");
+      const sections = markdown.split(/^### (?=\d+\.)/m).slice(1);
+      const blocks = new Map<number, number>();
+      for (const section of sections) {
+        const number = Number.parseInt(section, 10);
+        blocks.set(number, (section.match(/^```/gm) ?? []).length / 2);
+      }
+
+      const numbers = Array.from({ length: 19 }, (_, index) => index + 1);
+      expect([...blocks.keys()].sort((a, b) => a - b)).toEqual(numbers);
+      expect(numbers.filter((number) => (blocks.get(number) ?? 0) < 2)).toEqual([]);
+    },
+  );
 });

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CLI } from "../src/cli.js";
+import { createCLI } from "../src/index.js";
 import { createMockStdout } from "./helpers.js";
 
 describe("documented example patterns", () => {
   it("uses hyphenated long option names exactly as parsed", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
 
     cli
@@ -20,7 +20,7 @@ describe("documented example patterns", () => {
   });
 
   it("supports advanced example patterns for parse, hidden, negation, and removal", async () => {
-    const cli = new CLI();
+    const cli = createCLI();
     const stream = createMockStdout();
     const removed = cli.command("removed").action((ctx) => {
       ctx.stdout.write("removed\n");

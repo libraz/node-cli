@@ -59,7 +59,7 @@ try {
   }
   await writeFile(
     resolve(fixture, "smoke.mjs"),
-    'import { CLI } from "@libraz/node-cli";\nif (typeof CLI !== "function") throw new Error("CLI export missing");\n',
+    'import { createCLI } from "@libraz/node-cli";\nif (typeof createCLI !== "function") throw new Error("createCLI export missing");\n',
   );
   run(process.execPath, [resolve(fixture, "smoke.mjs")], { cwd: fixture });
 
@@ -106,7 +106,7 @@ const cli = createCLI({ name: "myapp", version: "1.0.0" });
 cli.command("greet <name>")
   .option("-u, --uppercase", { type: "boolean" })
   .action((ctx) => {
-    const name = ctx.args.name as string;
+    const name = ctx.args.name;
     ctx.stdout.write(\`Hello, \${ctx.options.uppercase ? name.toUpperCase() : name}!\\n\`);
   });
 await cli.start();

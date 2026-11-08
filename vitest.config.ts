@@ -6,7 +6,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts", "src/types.ts", "src/option/schema.ts"],
+      exclude: ["src/index.ts", "src/public/**", "src/types.ts", "src/option/schema.ts"],
       thresholds: {
         perFile: true,
         statements: 80,
