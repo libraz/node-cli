@@ -1,6 +1,6 @@
 # カラー
 
-`color` は文字列に端末のカラーとテキストスタイルを適用し、`c` はテンプレートリテラルの中で同じことを行います。加えて、エスケープシーケンスを含むテキストを測定・切り詰め・無害化する文字列ユーティリティ群があります。いずれもパッケージが公開する素の関数で、`CLI` インスタンスは要りません。どの Node スクリプトからでも import できます。
+`color` は文字列に端末のカラーとテキストスタイルを適用し、`c` はテンプレートリテラルの中で同じことを行います（`createTemplateTag` はそのタグを別のストリームに結び付けます）。加えて、エスケープシーケンスを含むテキストを測定・切り詰め・無害化する文字列ユーティリティ群があります。いずれもパッケージが公開する素の関数で、`CLI` インスタンスは要りません。どの Node スクリプトからでも import できます。
 
 ![太字の緑の成功行、太字の赤のエラー表示、各前景色の名前をその色自身で描画した行、bold・dim・underline の修飾を並べた端末](../assets/color.svg)
 
@@ -44,7 +44,7 @@ console.log(color.bold.underline("Title"));
 console.log(color.bgYellow.black("  WARNING  "));
 ```
 
-スタイルではない名前にアクセスすると `Error: Unknown style: <name>` を投げるため、打ち間違いは黙って素のテキストを返すのではなく、その場で失敗します。`then`、`toString`、`valueOf`、`toJSON`、`constructor`、およびあらゆるシンボルはそのまま素通りするので、カラライザを await したり、文字列化やシリアライズをしたりしても例外にはなりません。
+スタイルではない名前にアクセスすると、TypeScript では型エラーになり、実行時には `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` を投げます。メッセージには有効な名前の一覧が入るため、打ち間違いは黙って素のテキストを返すのではなく、その場で失敗します。名前が実行時にしか分からない場合は、先に `isStyleName(name)` で確かめてください。文字列が `StyleName` に絞り込まれます。`then`、`toString`、`valueOf`、`toJSON`、`constructor`、およびあらゆるシンボルはそのまま素通りするので、カラライザを await したり、文字列化やシリアライズをしたりしても例外にはなりません。
 
 ## スタイルの一覧
 
@@ -57,6 +57,22 @@ console.log(color.bgYellow.black("  WARNING  "));
 | 背景色 | `bgRed`, `bgGreen`, `bgYellow`, `bgBlue`, `bgMagenta`, `bgCyan`, `bgWhite` |
 
 `grey` は `gray` の別名です。`bgBlack` はありません。
+
+### スタイルの型
+
+- `StyleName` は上の23個の名前の union です。
+- `ColorProxy` は `color` と `createColorizer` が返すオブジェクトの型で、`StyleName` ごとに連結可能な `ColorFn` を1つ持ちます。連結のキーは `StyleName` に限られるため、`color.red.bol` はコンパイルできません。
+- `StyleSpec` はスタイル名、またはドットでつないだスタイル名の連なり（`"cyan"`、`"cyan.bold"`、`"cyan.bold.underline"`）で、スタイルを受け取るオプションが使います。1つ目と2つ目はコンパイラが検査し、3つ目以降は値を使うときに検査されます。
+
+```ts
+import { color, isStyleName, type StyleName } from "@libraz/node-cli";
+
+function paint(name: string, text: string): string {
+  if (!isStyleName(name)) throw new Error(`not a style: ${name}`);
+  const style: StyleName = name;
+  return color[style](text);
+}
+```
 
 ## 入れ子
 
@@ -93,19 +109,22 @@ console.log(c`{yellow outer {bold inner} outer}`);
 
 波括弧は数を数えているため、マークアップは入れ子にできます。
 
-スタイル名が未知の場合、空白が欠けている場合、波括弧の対応が取れていない場合は、`{` が **そのまま文字として** 出力され、残りのテキストには手が加わりません。`color.foo` と違って `c` は不正なマークアップで例外を投げません。唯一の例外は深さで、64段を超える入れ子のマークアップは例外になります。
+スタイル名が未知の場合、空白が欠けている場合、波括弧の対応が取れていない場合は、`{` が **そのまま文字として** 出力され、残りのテキストには手が加わりません。`color.foo` と違って `c` は不正なマークアップで例外を投げません。唯一の例外は深さで、64段を超える入れ子のマークアップは `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` になります。
 
 補間された値は、マークアップの描画が済んだ **後で** 文字列に変換されて差し込まれます。そのため補間値の中の `{` がマークアップとして解釈されることはなく、信頼できないデータからスタイルを注入されることもありません。
 
 ## カラーが有効になる条件
 
-有効かどうかは、モジュールを import した時点ではなく **スタイル関数を呼び出したその瞬間** に判定されます。`color` と `c` は `process.stdout` を基準に判定します。`createColorizer(stream)` は、同じ連結可能なオブジェクトを別のストリームに結び付けて返します。
+有効かどうかは、モジュールを import した時点ではなく **スタイル関数を呼び出したその瞬間** に判定されます。`color` と `c` は `process.stdout` を基準に判定します。`createColorizer(stream)` は、同じ連結可能なオブジェクトを別のストリームに結び付けて返し、`createTemplateTag(stream)` は `c` タグについて同じことを行います（`c` はそのタグを `process.stdout` に結び付けたものです）。どちらも任意の `Writable` を受け取ります。
 
 ```ts
-import { createColorizer } from "@libraz/node-cli";
+import { createColorizer, createTemplateTag } from "@libraz/node-cli";
 
 const errColor = createColorizer(process.stderr);
 console.error(errColor.red("failed"));
+
+const e = createTemplateTag(process.stderr);
+console.error(e`{bold.red Error}: broken`);
 ```
 
 `isColorEnabled(stream?)` はその判定を直接返します。引数を省略した場合の対象は `process.stdout` です。判定は次の順に進み、最初に当てはまった規則で決まります。
@@ -117,14 +136,14 @@ console.error(errColor.red("failed"));
 5. それ以外は、ストリームが **端末** かどうかで決まります。端末とは対話的なコンソールのことで、ファイルや他プログラムへのパイプは該当しません。
 
 ```ts
-import { isColorEnabled, resetColorEnabled, setColorEnabled } from "@libraz/node-cli";
+import { isColorEnabled, setColorEnabled } from "@libraz/node-cli";
 
 setColorEnabled(false); // force plain text, e.g. inside a test
 isColorEnabled(); // false
-resetColorEnabled(); // drop the override, return to automatic detection
+setColorEnabled("auto"); // drop the override, return to automatic detection
 ```
 
-`setColorEnabled` はモジュール全体で1つのフラグを設定します。ストリームごとの設定ではありません。一度設定すると、`resetColorEnabled()` で解除するまですべてのカラライザがそれに従います。
+`setColorEnabled` はモジュール全体で1つのフラグを設定します。ストリームごとの設定ではありません。一度設定すると、`setColorEnabled("auto")` で解除するまですべてのカラライザがそれに従います。
 
 ## 文字列ユーティリティ
 
@@ -152,9 +171,9 @@ stringWidth("\x1b[31mred\x1b[39m"); // 3
 
 CSI シーケンス（カラー、カーソル移動、画面消去）、OSC シーケンス（ウィンドウタイトル、ハイパーリンク）、DCS・SOS・PM・APC の制御文字列、そのほかのエスケープを含め、ANSI エスケープシーケンスをすべて取り除きます。テキストの途中で終わっているシーケンスは、端末が読み込むのと同じくテキストの末尾まで取り除きます。端末の出力をログファイルへ書き出す前に使ってください。
 
-### `truncateAnsi(text, maxWidth, marker = "…"): string`
+### `truncateAnsi(text, width, ellipsis = "…"): string`
 
-テキストを表示幅で最大 `maxWidth` カラムまで縮め、`marker` を末尾に付けます。書記素を途中で分断せず、記号の分の幅も含めて収め、残した部分の中にあったエスケープシーケンスは保持し、切り詰めで開いたままになったスタイルやハイパーリンクを閉じるためのエスケープを末尾に補います。スタイルはその属性だけを戻すリセットで閉じるため、後に続くテキストには外側の `color.*` が付けたスタイルが残ります。`maxWidth` を切り捨てて 0 以下になるときは `""` を返し、`NaN` と `Infinity` は上限なしとして扱います。
+テキストを表示幅で最大 `width` カラムまで縮め、`ellipsis` を末尾に付けます。書記素を途中で分断せず、記号の分の幅も含めて収め、残した部分の中にあったエスケープシーケンスは保持し、切り詰めで開いたままになったスタイルやハイパーリンクを閉じるためのエスケープを末尾に補います。スタイルはその属性だけを戻すリセットで閉じるため、後に続くテキストには外側の `color.*` が付けたスタイルが残ります。`width` は正の整数か、上限なしを表す `Infinity` でなければなりません。`0`、負数、`NaN`、`-Infinity`、小数は `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` になり、数値でない値は `code: "ERR_INVALID_ARG_TYPE"` を持つ `TypeError` になります。
 
 ```ts
 import { truncateAnsi } from "@libraz/node-cli";
@@ -172,7 +191,7 @@ truncateAnsi("a very long line", 8); // "a very …"
 
 ### `sanitizeTerminalText(text, options?): string`
 
-信頼できない文字列を、そのまま表示しても安全な形にします。オプションは `{ singleLine = true, allowHyperlinks = true }` です。
+信頼できない文字列を、そのまま表示しても安全な形にします。オプションは `SanitizeTerminalTextOptions` で、`{ singleLine = true, allowHyperlinks = true }` です。
 
 - カラーとスタイルのシーケンス（SGR。`ESC [` に続いて数字・`;`・`:` だけから成るパラメータ、最後に `m`）は残します。
 - 終端された OSC 8 のハイパーリンクは、`id=` などのパラメータの有無にかかわらず、`allowHyperlinks: false` を指定しない限り残します。指定した場合は開始と終了の両方を破棄します。
@@ -180,6 +199,7 @@ truncateAnsi("a very long line", 8); // "a very …"
 - 単一行モードでは改行が空白になります。`singleLine: false` なら改行は残ります。
 - タブ、垂直タブ、改ページ、復帰は、それぞれ空白1つになります。
 - その他の制御バイトはすべて破棄します。
+- テキストが閉じ忘れたスタイルやハイパーリンクは、返す文字列の末尾で閉じます。スタイルはその属性だけを戻すリセットで閉じるため、後に続くテキストには影響しません。
 
 これが重要なのは、端末が届いたエスケープシーケンスをそのまま実行するためです。ファイル名や HTTP レスポンス、データベースの行から取った文字列は、放っておけば画面を消したり、既に出力した内容の上へカーソルを動かしたり、ウィンドウタイトルを書き換えたりできてしまいます。`sanitizeTerminalText` を通せば、カラーを保ったままその力だけを取り除けます。テーブルのセルとプログレスのラベルは、既にこの処理を通っています。
 
@@ -190,15 +210,15 @@ const fromDatabase = "release \x1b[2J\x1b[Hv2";
 console.log(sanitizeTerminalText(fromDatabase)); // "release v2" — the screen is not cleared
 ```
 
-### `streamIsTTY(stream): boolean`
+### `streamIsTTY(value: unknown): boolean`
 
-ストリームがファイルやパイプではなく端末かどうかを返します。
+値がファイルやパイプではなく端末のストリームかどうかを返します。任意の値を受け取り、`isTTY === true` を持つオブジェクト以外は `false` です。
 
 ## よくある落とし穴
 
 - **有効判定は呼び出しごとに行われます。** モジュールを import した後に `FORCE_COLOR` を設定しても効きますし、`setColorEnabled` は以後の呼び出しに適用されます。
-- **`setColorEnabled` はストリーム単位ではなくグローバルです。** `createColorizer` で作ったカラライザもこれに従います。
-- **`color.foo` は例外を投げ、`c` は投げません。** 未知のスタイル名は、プロキシでは致命的なエラーになり、インラインマークアップでは文字どおりの `{` になります。
+- **`setColorEnabled` はストリーム単位ではなくグローバルです。** `createColorizer` で作ったカラライザもこれに従います。`setColorEnabled("auto")` で自動判定に戻ります。
+- **`color.foo` は例外を投げ、`c` は投げません。** 未知のスタイル名は、プロキシでは `RangeError`（コンパイル時には型エラー）になり、インラインマークアップでは文字どおりの `{` になります。
 - **空白の欠落はインラインマークアップを黙って壊します。** `` c`{green OK}` `` は `OK` を着色しますが、`` c`{greenOK}` `` は `{greenOK}` をそのまま表示します。
 - **`.length` は幅ではありません。** エスケープシーケンスは長さを増やし、全角文字は幅を増やします。`stringWidth` を使ってください。
 - **`bgBlack` はなく、bright 系も RGB もありません。** 上の一覧がすべてです。

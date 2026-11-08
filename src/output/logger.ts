@@ -1,7 +1,8 @@
 import type { Writable } from "node:stream";
 import { format } from "node:util";
+import { usageError } from "../errors.js";
 import { guardCall, ownValue } from "../guard.js";
-import { createColorizer, isColorEnabled, renderSafe } from "./color.js";
+import { createColorizer, isColorEnabled, renderSafe, type StyleName } from "./color.js";
 import { writeThrough } from "./region.js";
 
 // ── Types ──
@@ -32,17 +33,17 @@ export interface LoggerOptions {
  */
 export interface Logger {
   /** Logs a debug-level message (lowest priority). */
-  debug(message: string, ...args: unknown[]): void;
+  debug(message: unknown, ...args: unknown[]): void;
   /** Logs an informational message. */
-  info(message: string, ...args: unknown[]): void;
+  info(message: unknown, ...args: unknown[]): void;
   /** Logs a success message (displayed at info level with a check mark). */
-  success(message: string, ...args: unknown[]): void;
+  success(message: unknown, ...args: unknown[]): void;
   /** Logs a warning message. */
-  warn(message: string, ...args: unknown[]): void;
+  warn(message: unknown, ...args: unknown[]): void;
   /** Logs an error message (highest priority). */
-  error(message: string, ...args: unknown[]): void;
-  /** Changes the minimum log level at runtime. */
-  setLevel(level: LogLevel): void;
+  error(message: unknown, ...args: unknown[]): void;
+  /** Changes the minimum log level at runtime. Returns this logger for chaining. */
+  setLevel(level: LogLevel): this;
   /** Creates a child logger with an additional prefix segment. */
   child(prefix: string): Logger;
   /** Resolves after buffered lines reach the stream; rejects if the stream errors or closes first. */
@@ -70,7 +71,7 @@ interface LevelConfig {
   /** Glyph used when color is enabled, e.g. `\u2139`. */
   ttyIcon: string;
   /** Color style name applied to the icon in TTY mode. */
-  colorName: string;
+  colorName: StyleName;
   /** Short label for the level. */
   label: string;
 }
@@ -104,9 +105,10 @@ function formatTimestamp(): string {
  *
  * @param options - Logger configuration options.
  * @returns A Logger instance.
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown `level` or an invalid `bufferLimit`.
  */
-export function logger(options: LoggerOptions = {}): Logger {
-  return createLogger(options);
+export function createLogger(options: LoggerOptions = {}): Logger {
+  return buildLogger(options);
 }
 
 /** Returns whether `level` is one of the {@link LogLevel} values. */
@@ -117,7 +119,11 @@ function isLogLevel(level: unknown): level is LogLevel {
 /** Throws a RangeError naming the accepted levels when `level` is not one of them. */
 function assertLogLevel(level: unknown): asserts level is LogLevel {
   if (!isLogLevel(level)) {
-    throw new RangeError(`Logger level must be one of: ${Object.keys(levelOrder).join(", ")}`);
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      `Logger level must be one of: ${Object.keys(levelOrder).join(", ")}`,
+    );
   }
 }
 
@@ -156,7 +162,7 @@ function stateFor(stream: Writable): StreamState {
     failStream(
       stream,
       state,
-      new Error("Logger output stream closed before buffered data was flushed"),
+      new Error("Logger output stream closed before buffered data was flushed"), // usage-error-exempt: stream failure
     ),
   );
   return state;
@@ -247,7 +253,7 @@ function formatMessage(message: unknown, args: unknown[]): string {
  * it stays off the exported signature so it never becomes part of the public
  * type contract in the generated declarations.
  */
-function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel): Logger {
+function buildLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel): Logger {
   // A logger uses its own level when one is set, otherwise it inherits its
   // parent's current level dynamically. This means `parent.setLevel(...)`
   // propagates to children that have no explicit level of their own, while
@@ -261,7 +267,11 @@ function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel
   const stream = options.stream ?? process.stderr;
   const bufferLimit = options.bufferLimit ?? 1000;
   if (!Number.isSafeInteger(bufferLimit) || bufferLimit < 0) {
-    throw new RangeError("Logger bufferLimit must be a non-negative safe integer");
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      "Logger bufferLimit must be a non-negative safe integer",
+    );
   }
   const col = createColorizer(stream);
   const colorOn = () => isColorEnabled(stream);
@@ -276,7 +286,7 @@ function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel
     return levelOrder[level] >= levelOrder[effectiveLevel()];
   }
 
-  function writeLog(level: string, message: string, args: unknown[]): void {
+  function writeLog(level: string, message: unknown, args: unknown[]): void {
     const config = levelConfig[level];
     if (!config) return;
 
@@ -337,12 +347,13 @@ function createLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel
     setLevel(level) {
       assertLogLevel(level);
       ownLevel = level;
+      return this;
     },
     child(childPrefix: string) {
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
       // No explicit level → the child inherits this logger's effective level
       // dynamically (so later parent.setLevel calls still reach it).
-      return createLogger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
+      return buildLogger({ prefix: fullPrefix, timestamp, stream, bufferLimit }, effectiveLevel);
     },
     flush() {
       return flushStream(stream, state);

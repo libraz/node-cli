@@ -1,10 +1,18 @@
-export type { AnsiSegment, ColorFn } from "../output/color.js";
+export type {
+  AnsiSegment,
+  ColorFn,
+  ColorProxy,
+  SanitizeTerminalTextOptions,
+  StyleName,
+  StyleSpec,
+} from "../output/color.js";
 export {
   c,
   color,
   createColorizer,
+  createTemplateTag,
   isColorEnabled,
-  resetColorEnabled,
+  isStyleName,
   sanitizeTerminalText,
   setColorEnabled,
   splitAnsi,

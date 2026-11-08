@@ -1,15 +1,15 @@
 # Logging
 
-`logger(options?)` creates a leveled logger: five methods that write a formatted line with an icon, an optional timestamp, and an optional prefix. It is a plain function exported from the package, so it needs no `CLI` instance and can be imported into any Node script.
+`createLogger(options?)` creates a leveled logger: five methods that write a formatted line with an icon, an optional timestamp, and an optional prefix. It is a plain function exported from the package, so it needs no `CLI` instance and can be imported into any Node script.
 
 ![Terminal showing leveled log lines with colored icons, timestamps, and a nested child-logger prefix](../assets/logger.svg)
 
 ## A first example
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger({ prefix: "app", timestamp: true, level: "debug" });
+const log = createLogger({ prefix: "app", timestamp: true, level: "debug" });
 
 log.info("Server started on port %d", 3000);
 log.success("Deployment complete");
@@ -29,9 +29,9 @@ The reason is that stdout is the channel a command's *data* travels on. A user w
 To send log output to stdout instead, say so:
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger({ stream: process.stdout });
+const log = createLogger({ stream: process.stdout });
 ```
 
 ## Options
@@ -40,11 +40,11 @@ const log = logger({ stream: process.stdout });
 
 | Field | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `level` | `LogLevel` | `"info"` | Minimum level that is emitted. Any other value throws `RangeError`, as does the same value passed to `setLevel`. |
+| `level` | `LogLevel` | `"info"` | Minimum level that is emitted. Any other value throws a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"`, as does the same value passed to `setLevel`. |
 | `prefix` | `string` | — | Rendered as `[prefix]` before the message. |
 | `timestamp` | `boolean` | `false` | Adds the local time as `HH:MM:SS`. |
 | `stream` | `Writable` | `process.stderr` | Destination for every level. |
-| `bufferLimit` | `number` | `1000` | Lines queued while the stream is busy. Must be a non-negative safe integer, or `RangeError` is thrown. |
+| `bufferLimit` | `number` | `1000` | Lines queued while the stream is busy. Must be a non-negative safe integer, or a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"` is thrown. |
 
 ## Levels
 
@@ -60,14 +60,16 @@ They are ordered `debug < info < warn < error < silent`. A message is emitted wh
 
 | Method | Signature |
 | --- | --- |
-| `debug` | `(message: string, ...args: unknown[]) => void` |
-| `info` | `(message: string, ...args: unknown[]) => void` |
-| `success` | `(message: string, ...args: unknown[]) => void` |
-| `warn` | `(message: string, ...args: unknown[]) => void` |
-| `error` | `(message: string, ...args: unknown[]) => void` |
-| `setLevel` | `(level: LogLevel) => void` |
+| `debug` | `(message: unknown, ...args: unknown[]) => void` |
+| `info` | `(message: unknown, ...args: unknown[]) => void` |
+| `success` | `(message: unknown, ...args: unknown[]) => void` |
+| `warn` | `(message: unknown, ...args: unknown[]) => void` |
+| `error` | `(message: unknown, ...args: unknown[]) => void` |
+| `setLevel` | `(level: LogLevel) => this` |
 | `child` | `(prefix: string) => Logger` |
 | `flush` | `() => Promise<void>` |
+
+`setLevel` returns the logger itself, so calls chain: `log.setLevel("debug").info("verbose on")`. Calling it again replaces the level.
 
 `success` is not a separate level. It is gated at the **`info`** level and rendered with the `✔` marker, so it disappears together with `info` when the level is raised to `warn`.
 
@@ -78,9 +80,9 @@ Every call goes through Node's `util.format`, whether or not extra arguments wer
 Format specifiers work:
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger();
+const log = createLogger();
 
 log.info("Listening on %s:%d", "127.0.0.1", 3000);
 log.info("Config: %o", { retries: 3 });
@@ -89,7 +91,7 @@ log.info("Payload: %j", { ok: true });
 
 `%s` inserts a string, `%d` a number, `%j` JSON, and `%o` an inspected object.
 
-The same routing means a non-string first argument is inspected rather than crashing the call. The declared parameter type is `string`, so TypeScript still asks for one, but the logger is reachable from plain JavaScript where nothing enforces that — an `Error` or an object arriving there is rendered by `util.format` (message and stack for an error, an inspected view for an object) instead of throwing inside the logging call.
+The same routing means a non-string first argument is inspected rather than crashing the call. The declared parameter type is `unknown`, so an `Error` or an object can be passed directly: `util.format` renders it (message and stack for an error, an inspected view for an object) instead of throwing inside the logging call.
 
 Message text is then sanitized (and a value whose own formatting throws, such as a throwing `toString`, is printed as `[unprintable]` rather than failing the call): **newlines are kept**, so a multi-line stack trace renders across several lines; tabs and carriage returns become single spaces; all other control bytes are dropped. This prevents a message taken from untrusted input from moving the cursor or erasing the screen. Styling or a hyperlink the message leaves open is closed at the end of the message, before the newline.
 
@@ -120,9 +122,9 @@ Redirecting output to a file therefore produces plain, greppable `[WARN]`-style 
 `child(prefix)` returns a logger scoped to a subsystem. Prefixes compose with `:`.
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger({ prefix: "app" });
+const log = createLogger({ prefix: "app" });
 const db = log.child("db"); // prefix "app:db"
 const pool = db.child("pool"); // prefix "app:db:pool"
 ```
@@ -130,9 +132,9 @@ const pool = db.child("pool"); // prefix "app:db:pool"
 A child inherits `timestamp`, `stream`, and `bufferLimit` from its parent, and shares the stream's write queue with it: lines from a parent and its children reach the stream in call order. The level is inherited **dynamically**: a later `parent.setLevel("debug")` reaches every child that never set a level of its own, while `child.setLevel(...)` overrides that one child and nothing else.
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger({ prefix: "app" });
+const log = createLogger({ prefix: "app" });
 const db = log.child("db");
 
 log.setLevel("debug"); // db now logs debug too
@@ -155,9 +157,9 @@ If the stream emits an error or closes at any time, the buffered lines are disca
 `flush()` resolves once the buffered lines have reached the stream and the stream has accepted every earlier write. Parent and children share one queue per stream, so one call covers the whole tree.
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger();
+const log = createLogger();
 
 log.info("done");
 await log.flush();

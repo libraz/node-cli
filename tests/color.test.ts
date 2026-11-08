@@ -3,7 +3,10 @@ import {
   c,
   closeAnsiState,
   color,
+  createColorizer,
+  createTemplateTag,
   isColorEnabled,
+  isStyleName,
   renderSafe,
   resetColorEnabled,
   sanitizeTerminalText,
@@ -18,6 +21,15 @@ import {
 import { restoreProcessStateAfterEach } from "./helpers.js";
 
 restoreProcessStateAfterEach(["NO_COLOR", "FORCE_COLOR", "TERM"]);
+
+function catchError(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
 
 describe("color", () => {
   beforeEach(() => {
@@ -61,6 +73,27 @@ describe("color", () => {
   it("throws on unknown style", () => {
     // biome-ignore lint/suspicious/noExplicitAny: testing unknown style access
     expect(() => (color as any).foobar("test")).toThrow("Unknown style");
+  });
+
+  it("throws a RangeError with a code that lists the valid names", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: testing unknown style access
+    const error = catchError(() => (color as any).gren);
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error).toMatchObject({ code: "ERR_INVALID_ARG_VALUE" });
+    expect((error as Error).message).toContain("green");
+    expect((error as Error).message).toContain("bgWhite");
+  });
+
+  it("throws on an unknown link in a chain", () => {
+    // biome-ignore lint/suspicious/noExplicitAny: testing unknown style access
+    expect(() => (color.red as any).bol).toThrow(RangeError);
+  });
+
+  it("narrows names with isStyleName", () => {
+    expect(isStyleName("cyan")).toBe(true);
+    expect(isStyleName("grey")).toBe(true);
+    expect(isStyleName("toString")).toBe(false);
+    expect(isStyleName("gren")).toBe(false);
   });
 
   it("does not expose inherited Function or Object members as styles", () => {
@@ -223,6 +256,21 @@ describe("c (template tag)", () => {
       raw: [deeplyNested],
     }) as unknown as TemplateStringsArray;
     expect(() => c(strings)).toThrow(/nesting exceeds/);
+    expect(catchError(() => c(strings))).toMatchObject({
+      name: "RangeError",
+      code: "ERR_INVALID_ARG_VALUE",
+    });
+  });
+
+  it("accepts nesting of exactly 64 levels", () => {
+    const nested = `${"{red ".repeat(64)}value${"}".repeat(64)}`;
+    const strings = Object.assign([nested], { raw: [nested] }) as unknown as TemplateStringsArray;
+    expect(stripAnsi(c(strings))).toBe("value");
+  });
+
+  it("keeps braces that do not start with a known style as literal text", () => {
+    setColorEnabled(true);
+    expect(c`{notastyle text} and {red ok}`).toBe(`{notastyle text} and ${color.red("ok")}`);
   });
 });
 
@@ -453,8 +501,22 @@ describe("escape-sequence grammar", () => {
 
   it("keeps only plain SGR sequences as colour", () => {
     for (const sgr of [`${ESC}[31m`, `${ESC}[38:2::255:0:0m`, `${ESC}[m`, `${ESC}[1;4m`]) {
-      expect(sanitizeTerminalText(`a${sgr}b`)).toBe(`a${sgr}b`);
+      const sanitized = sanitizeTerminalText(`a${sgr}b`);
+      expect(sanitized.startsWith(`a${sgr}b`)).toBe(true);
+      expect(sanitized).toBe(closeAnsiState(`a${sgr}b`));
     }
+  });
+
+  it("closes the SGR styles and the OSC 8 link it leaves open", () => {
+    expect(sanitizeTerminalText(`${ESC}[31mred`)).toBe(`${ESC}[31mred${ESC}[39m`);
+    expect(sanitizeTerminalText(`${ESC}[1;4mx`)).toBe(`${ESC}[1;4mx${ESC}[22m${ESC}[24m`);
+    const open = `${ESC}]8;;https://x.invalid${ST}link`;
+    expect(sanitizeTerminalText(open)).toBe(`${open}${ESC}]8;;${ST}`);
+  });
+
+  it("leaves closed styling untouched", () => {
+    const text = `${ESC}[31mred${ESC}[39m`;
+    expect(sanitizeTerminalText(text)).toBe(text);
   });
 
   it("keeps OSC 8 links that carry params, opener and closer together", () => {
@@ -524,14 +586,96 @@ describe("closing ANSI state", () => {
 });
 
 describe("truncateAnsi width argument", () => {
-  it("treats NaN and Infinity as no limit", () => {
-    expect(truncateAnsi("hello world", Number.NaN)).toBe("hello world");
+  it("treats Infinity as no limit", () => {
     expect(truncateAnsi("hello world", Number.POSITIVE_INFINITY)).toBe("hello world");
   });
 
-  it("returns an empty string below one column", () => {
-    expect(truncateAnsi("hello world", Number.NEGATIVE_INFINITY)).toBe("");
-    expect(truncateAnsi("hello world", 0.5)).toBe("");
+  it.each([0, -0, -1, Number.NaN, Number.NEGATIVE_INFINITY, 0.5, 2.5])(
+    "rejects the width %s with a RangeError",
+    (width) => {
+      const error = catchError(() => truncateAnsi("hello world", width));
+      expect(error).toBeInstanceOf(RangeError);
+      expect(error).toMatchObject({ code: "ERR_INVALID_ARG_VALUE" });
+    },
+  );
+
+  it("rejects a width that is not a number with a TypeError", () => {
+    const error = catchError(() => truncateAnsi("hello", null as never));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({ code: "ERR_INVALID_ARG_TYPE" });
+  });
+
+  it("takes the ellipsis as the third argument", () => {
+    expect(truncateAnsi("abcdef", 4, "..")).toBe("ab..");
+  });
+});
+
+describe("setColorEnabled", () => {
+  afterEach(() => {
+    resetColorEnabled();
+  });
+
+  it('restores detection with "auto"', () => {
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+    setColorEnabled(true);
+    expect(isColorEnabled({ isTTY: false } as never)).toBe(true);
+    setColorEnabled("auto");
+    expect(isColorEnabled({ isTTY: false } as never)).toBe(false);
+    expect(isColorEnabled({ isTTY: true } as never)).toBe(true);
+  });
+
+  it("forces color off with false regardless of the stream", () => {
+    setColorEnabled(false);
+    expect(isColorEnabled({ isTTY: true } as never)).toBe(false);
+  });
+});
+
+describe("streamIsTTY", () => {
+  it("is true only for objects with isTTY === true", () => {
+    expect(streamIsTTY({ isTTY: true })).toBe(true);
+    expect(streamIsTTY({ isTTY: false })).toBe(false);
+    expect(streamIsTTY({})).toBe(false);
+    expect(streamIsTTY(null)).toBe(false);
+    expect(streamIsTTY(undefined)).toBe(false);
+    expect(streamIsTTY("tty")).toBe(false);
+  });
+});
+
+describe("createTemplateTag and createColorizer", () => {
+  const stream = (isTTY: boolean) => ({ isTTY }) as never;
+
+  afterEach(() => {
+    resetColorEnabled();
+  });
+
+  it("emits no escapes for a non-TTY stream", () => {
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+    setColorEnabled("auto");
+    const tag = createTemplateTag(stream(false));
+    expect(tag`{bold.red Error}: ${"x"}`).toBe("Error: x");
+    expect(createColorizer(stream(false)).red("x")).toBe("x");
+  });
+
+  it("emits escapes for a TTY stream", () => {
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+    setColorEnabled("auto");
+    const tag = createTemplateTag(stream(true));
+    expect(tag`{red x}`).toBe("\x1b[31mx\x1b[39m");
+  });
+
+  it("matches c when color is forced on", () => {
+    setColorEnabled(true);
+    const tag = createTemplateTag(stream(false));
+    expect(tag`{green OK} {bold.red no}`).toBe(c`{green OK} {bold.red no}`);
+  });
+
+  it("applies the nesting limit", () => {
+    const nested = `${"{red ".repeat(66)}v${"}".repeat(66)}`;
+    const strings = Object.assign([nested], { raw: [nested] }) as unknown as TemplateStringsArray;
+    expect(() => createTemplateTag(stream(true))(strings)).toThrow(RangeError);
   });
 });
 

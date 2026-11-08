@@ -1,15 +1,15 @@
 # ロギング
 
-`logger(options?)` はレベル付きのロガーを作ります。アイコンと、必要ならタイムスタンプと接頭辞を添えた1行を書き出すメソッドが5つあります。パッケージが公開する素の関数なので `CLI` インスタンスは要らず、どの Node スクリプトからでも import できます。
+`createLogger(options?)` はレベル付きのロガーを作ります。アイコンと、必要ならタイムスタンプと接頭辞を添えた1行を書き出すメソッドが5つあります。パッケージが公開する素の関数なので `CLI` インスタンスは要らず、どの Node スクリプトからでも import できます。
 
 ![色付きのアイコン、タイムスタンプ、入れ子になった子ロガーの接頭辞を伴うレベル付きのログ行を表示している端末](../assets/logger.svg)
 
 ## 最初の例
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger({ prefix: "app", timestamp: true, level: "debug" });
+const log = createLogger({ prefix: "app", timestamp: true, level: "debug" });
 
 log.info("Server started on port %d", 3000);
 log.success("Deployment complete");
@@ -29,9 +29,9 @@ db.debug("Query executed in 12ms");
 ログの出力先を stdout にしたい場合は、明示的に指定します。
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger({ stream: process.stdout });
+const log = createLogger({ stream: process.stdout });
 ```
 
 ## オプション
@@ -40,11 +40,11 @@ const log = logger({ stream: process.stdout });
 
 | フィールド | 型 | 既定値 | 挙動 |
 | --- | --- | --- | --- |
-| `level` | `LogLevel` | `"info"` | 出力する最小のレベル。これ以外の値は `RangeError` になり、`setLevel` に渡した場合も同じです。 |
+| `level` | `LogLevel` | `"info"` | 出力する最小のレベル。これ以外の値は `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` になり、`setLevel` に渡した場合も同じです。 |
 | `prefix` | `string` | — | メッセージの前に `[prefix]` の形で描画されます。 |
 | `timestamp` | `boolean` | `false` | ローカル時刻を `HH:MM:SS` で付けます。 |
 | `stream` | `Writable` | `process.stderr` | すべてのレベルの出力先。 |
-| `bufferLimit` | `number` | `1000` | ストリームが詰まっている間に待機させる行数。非負の安全な整数である必要があり、そうでなければ `RangeError` を投げます。 |
+| `bufferLimit` | `number` | `1000` | ストリームが詰まっている間に待機させる行数。非負の安全な整数である必要があり、そうでなければ `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` を投げます。 |
 
 ## レベル
 
@@ -60,14 +60,16 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "silent";
 
 | メソッド | シグネチャ |
 | --- | --- |
-| `debug` | `(message: string, ...args: unknown[]) => void` |
-| `info` | `(message: string, ...args: unknown[]) => void` |
-| `success` | `(message: string, ...args: unknown[]) => void` |
-| `warn` | `(message: string, ...args: unknown[]) => void` |
-| `error` | `(message: string, ...args: unknown[]) => void` |
-| `setLevel` | `(level: LogLevel) => void` |
+| `debug` | `(message: unknown, ...args: unknown[]) => void` |
+| `info` | `(message: unknown, ...args: unknown[]) => void` |
+| `success` | `(message: unknown, ...args: unknown[]) => void` |
+| `warn` | `(message: unknown, ...args: unknown[]) => void` |
+| `error` | `(message: unknown, ...args: unknown[]) => void` |
+| `setLevel` | `(level: LogLevel) => this` |
 | `child` | `(prefix: string) => Logger` |
 | `flush` | `() => Promise<void>` |
+
+`setLevel` はロガー自身を返すので、`log.setLevel("debug").info("verbose on")` のように連結できます。繰り返し呼ぶと、レベルは置き換わります。
 
 `success` は独立したレベルではありません。**`info`** のレベルで絞り込まれ、`✔` の記号を付けて描画されます。そのため、レベルを `warn` に上げると `info` と一緒に消えます。
 
@@ -78,9 +80,9 @@ type LogLevel = "debug" | "info" | "warn" | "error" | "silent";
 書式指定子が使えます。
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger();
+const log = createLogger();
 
 log.info("Listening on %s:%d", "127.0.0.1", 3000);
 log.info("Config: %o", { retries: 3 });
@@ -89,7 +91,7 @@ log.info("Payload: %j", { ok: true });
 
 `%s` は文字列、`%d` は数値、`%j` は JSON、`%o` は検査したオブジェクトを差し込みます。
 
-同じ経路をたどるおかげで、第1引数が文字列でなくても呼び出しが壊れず、検査結果として描画されます。宣言上の引数の型は `string` なので TypeScript は文字列を要求しますが、そこを強制するもののない素の JavaScript からもロガーは呼べます。そこへ `Error` やオブジェクトが渡された場合、ログの呼び出しの中で例外になるのではなく、`util.format` が描画します（エラーならメッセージとスタック、オブジェクトなら検査した表示）。
+同じ経路をたどるおかげで、第1引数が文字列でなくても呼び出しが壊れず、検査結果として描画されます。宣言上の引数の型は `unknown` なので、`Error` やオブジェクトをそのまま渡せます。ログの呼び出しの中で例外になるのではなく、`util.format` が描画します（エラーならメッセージとスタック、オブジェクトなら検査した表示）。
 
 続いてメッセージのテキストが無害化されます（`toString` が例外を投げるなど、整形そのものが失敗する値は、呼び出しを失敗させずに `[unprintable]` と表示されます）。**改行は残る** ため、複数行のスタックトレースは複数行のまま描画されます。タブと復帰は空白1つになり、それ以外の制御バイトは破棄されます。これにより、信頼できない入力から来たメッセージがカーソルを動かしたり画面を消したりできなくなります。メッセージが閉じ忘れたスタイルやハイパーリンクは、改行の前、メッセージの末尾で閉じられます。
 
@@ -120,9 +122,9 @@ log.info("Payload: %j", { ok: true });
 `child(prefix)` は、サブシステムに絞ったロガーを返します。接頭辞は `:` でつながります。
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger({ prefix: "app" });
+const log = createLogger({ prefix: "app" });
 const db = log.child("db"); // prefix "app:db"
 const pool = db.child("pool"); // prefix "app:db:pool"
 ```
@@ -130,9 +132,9 @@ const pool = db.child("pool"); // prefix "app:db:pool"
 子は `timestamp`、`stream`、`bufferLimit` を親から引き継ぎ、ストリームの書き込み待ち行列を親と共有します。親と子の行は呼び出した順にストリームへ届きます。レベルの継承は **動的** です。後から `parent.setLevel("debug")` を呼ぶと、自分でレベルを設定していないすべての子に届きます。`child.setLevel(...)` はその子だけを上書きし、他には影響しません。
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger({ prefix: "app" });
+const log = createLogger({ prefix: "app" });
 const db = log.child("db");
 
 log.setLevel("debug"); // db now logs debug too
@@ -155,9 +157,9 @@ log.setLevel("info"); // db keeps its own "error"
 `flush()` は、バッファ上の行がストリームに届き、それ以前の書き込みをストリームがすべて受け付けた時点で解決します。親と子はストリームごとに1つの待ち行列を共有するため、1回の呼び出しでツリー全体を賄えます。
 
 ```ts
-import { logger } from "@libraz/node-cli";
+import { createLogger } from "@libraz/node-cli";
 
-const log = logger();
+const log = createLogger();
 
 log.info("done");
 await log.flush();

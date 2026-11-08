@@ -1,12 +1,49 @@
-import { finiteInteger } from "../guard.js";
+import type { Writable } from "node:stream";
+import { usageError } from "../errors.js";
 
 // ── ANSI codes ──
+
+/** The name of a built-in style, as accepted by {@link color} and the template tag. */
+export type StyleName =
+  | "bold"
+  | "dim"
+  | "italic"
+  | "underline"
+  | "inverse"
+  | "strikethrough"
+  | "black"
+  | "red"
+  | "green"
+  | "yellow"
+  | "blue"
+  | "magenta"
+  | "cyan"
+  | "white"
+  | "gray"
+  | "grey"
+  | "bgRed"
+  | "bgGreen"
+  | "bgYellow"
+  | "bgBlue"
+  | "bgMagenta"
+  | "bgCyan"
+  | "bgWhite";
+
+/**
+ * A style, or a dot-separated chain of styles, as taken by options such as a
+ * progress bar color. The first two links are checked by the type system; any
+ * further link is checked when the value is used.
+ */
+export type StyleSpec =
+  | StyleName
+  | `${StyleName}.${StyleName}`
+  | `${StyleName}.${StyleName}.${string}`;
 
 /**
  * Mapping of style names to their ANSI open/close code pairs.
  * Each entry is a tuple of [openCode, closeCode].
  */
-const styles: Record<string, [number, number]> = {
+const styles: Record<StyleName, [number, number]> = {
   // modifiers
   bold: [1, 22],
   dim: [2, 22],
@@ -41,9 +78,14 @@ let _enabled: boolean | null = null;
 
 /**
  * Determines whether a value looks like a TTY stream.
+ *
+ * @param value - Any value; non-objects are never TTYs.
+ * @returns True when `value` is an object whose `isTTY` is `true`.
  */
-export function streamIsTTY(stream: object): boolean {
-  return (stream as { isTTY?: unknown }).isTTY === true;
+export function streamIsTTY(value: unknown): boolean {
+  return (
+    typeof value === "object" && value !== null && (value as { isTTY?: unknown }).isTTY === true
+  );
 }
 
 /**
@@ -58,7 +100,7 @@ export function streamIsTTY(stream: object): boolean {
  * @param stream - Optional output stream to evaluate. Defaults to `process.stdout`.
  * @returns Whether color escape codes should be emitted.
  */
-export function isColorEnabled(stream?: NodeJS.WritableStream): boolean {
+export function isColorEnabled(stream?: Writable): boolean {
   if (_enabled !== null) return _enabled;
   if (process.env.NO_COLOR != null && process.env.NO_COLOR !== "") return false;
   // FORCE_COLOR is evaluated before TERM/TTY checks: "0"/"false" disable, any
@@ -73,19 +115,20 @@ export function isColorEnabled(stream?: NodeJS.WritableStream): boolean {
 }
 
 /**
- * Explicitly enable or disable color output.
- * When set, overrides automatic TTY/environment detection.
+ * Explicitly enable or disable color output, or restore automatic detection.
+ * An explicit boolean overrides TTY/environment detection; `"auto"` returns to
+ * detection (TTY, NO_COLOR, FORCE_COLOR, TERM variables).
  *
- * @param enabled - Whether color output should be enabled.
+ * @param value - `true` or `false` to force color on or off, `"auto"` to detect.
  */
-export function setColorEnabled(enabled: boolean): void {
-  _enabled = enabled;
+export function setColorEnabled(value: boolean | "auto"): void {
+  _enabled = value === "auto" ? null : value;
 }
 
 /**
  * Reset color output to automatic detection mode.
- * After calling this, color support is determined by the environment
- * (TTY, NO_COLOR, FORCE_COLOR, TERM variables).
+ *
+ * @internal Equivalent to `setColorEnabled("auto")`; kept for the test suite.
  */
 export function resetColorEnabled(): void {
   _enabled = null;
@@ -130,9 +173,18 @@ function applyStyle(text: string, codes: [number, number][], enabled: boolean): 
  * Can be called directly with a string, or chained with other style names
  * (e.g. `color.bold.red("hello")`).
  */
-export interface ColorFn {
-  (text: string): string;
-  [key: string]: ColorFn;
+export type ColorFn = ((text: string) => string) & { readonly [K in StyleName]: ColorFn };
+
+/** The object behind {@link color} and {@link createColorizer}: one chainable {@link ColorFn} per style. */
+export type ColorProxy = { readonly [K in StyleName]: ColorFn };
+
+/**
+ * True when `name` is one of the built-in style names. Callers that resolve a
+ * style chosen by option (table borders and headers, bar colour) check here so
+ * inherited members such as `toString` never resolve.
+ */
+export function isStyleName(name: string): name is StyleName {
+  return Object.hasOwn(styles, name);
 }
 
 /**
@@ -142,26 +194,21 @@ export interface ColorFn {
  * as style names would turn passing a colorizer through an `await`, a template
  * literal, or `JSON.stringify` into a crash naming a property nobody typed.
  */
-/**
- * True when `name` is one of the built-in style names. Callers that resolve a
- * style chosen by option (table borders and headers, bar colour) check here so
- * inherited members such as `toString` never resolve.
- */
-export function isStyleName(name: string): boolean {
-  return Object.hasOwn(styles, name);
-}
-
 const protocolProperties = new Set(["then", "toString", "valueOf", "toJSON", "constructor"]);
 
 function styleTrap<T extends object>(
   target: T,
   prop: string | symbol,
-  resolve: (name: string) => ColorFn,
+  resolve: (name: StyleName) => ColorFn,
 ): unknown {
   // Symbols are protocol hooks too, so they never name a style.
   if (typeof prop !== "string" || protocolProperties.has(prop)) return Reflect.get(target, prop);
   if (!isStyleName(prop)) {
-    throw new Error(`Unknown style: ${prop}`);
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      `Unknown style: ${prop}. Valid styles: ${Object.keys(styles).join(", ")}`,
+    );
   }
   return resolve(prop);
 }
@@ -175,8 +222,8 @@ function createChain(accumulated: [number, number][], isEnabled: () => boolean):
   }) as ColorFn;
 }
 
-function createColorProxy(isEnabled: () => boolean): Record<string, ColorFn> {
-  return new Proxy({} as Record<string, ColorFn>, {
+function createColorProxy(isEnabled: () => boolean): ColorProxy {
+  return new Proxy({} as ColorProxy, {
     get: (target, prop) =>
       styleTrap(target, prop, (name) => createChain([styles[name]], isEnabled)),
   });
@@ -195,7 +242,7 @@ function createColorProxy(isEnabled: () => boolean): Record<string, ColorFn> {
  * color.bold.underline("hi");  // bold + underlined text
  * ```
  */
-export const color: Record<string, ColorFn> = createColorProxy(() => isColorEnabled());
+export const color: ColorProxy = createColorProxy(() => isColorEnabled());
 
 /**
  * Creates a color proxy whose enablement is tied to a specific output stream.
@@ -207,28 +254,61 @@ export const color: Record<string, ColorFn> = createColorProxy(() => isColorEnab
  * @param stream - The output stream color will be written to.
  * @returns A chainable color proxy bound to the stream's TTY status.
  */
-export function createColorizer(stream: NodeJS.WritableStream): Record<string, ColorFn> {
+export function createColorizer(stream: Writable): ColorProxy {
   return createColorProxy(() => isColorEnabled(stream));
 }
 
 // ── Template tag ──
 
+function templateTag(
+  isEnabled: () => boolean,
+): (strings: TemplateStringsArray, ...values: unknown[]) => string {
+  return (strings, ...values) => formatTemplate(isEnabled(), strings, values);
+}
+
 /**
- * Tagged template literal for inline color formatting.
+ * Creates a tagged template literal for inline color formatting whose
+ * enablement is tied to a specific output stream.
+ *
  * Use `{styleName text}` syntax inside the template to apply styles.
- * Dot-separated style names are supported for chaining.
+ * Dot-separated style names are supported for chaining. A brace that does not
+ * start with a known style name is kept as literal text; markup nested deeper
+ * than 64 levels throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+ *
+ * @param stream - The output stream the text will be written to.
+ * @returns A template tag that emits escapes only when color is enabled for `stream`.
+ *
+ * @example
+ * ```ts
+ * const e = createTemplateTag(process.stderr);
+ * e`{bold.red Error}: something went wrong`;
+ * ```
+ */
+export function createTemplateTag(
+  stream: Writable,
+): (strings: TemplateStringsArray, ...values: unknown[]) => string {
+  return templateTag(() => isColorEnabled(stream));
+}
+
+/**
+ * Tagged template literal for inline color formatting, bound to `process.stdout`.
+ * Use {@link createTemplateTag} to bind another stream.
  *
  * @example
  * ```ts
  * c`Status: {green OK}`;
  * c`{bold.red Error}: something went wrong`;
  * ```
- *
- * @param strings - Template literal string segments.
- * @param values  - Interpolated values.
- * @returns The formatted string with ANSI escape codes applied.
  */
-export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
+export const c: (strings: TemplateStringsArray, ...values: unknown[]) => string = templateTag(() =>
+  isColorEnabled(),
+);
+
+function formatTemplate(
+  enabled: boolean,
+  strings: TemplateStringsArray,
+  values: unknown[],
+): string {
   const valueStrings = values.map(String);
   const allInput = [...strings, ...valueStrings];
   // Build a collision-free marker in a single pass. The marker is a run of
@@ -252,13 +332,18 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
   const tokens = valueStrings.map((_, index) => `${marker}${index}${marker}`);
   const raw = strings.reduce((acc, str, i) => acc + str + (i < tokens.length ? tokens[i] : ""), "");
 
-  const enabled = isColorEnabled();
   const formatInline = (
     text: string,
     nesting = 0,
     activeCodes: [number, number][] = [],
   ): string => {
-    if (nesting > 64) throw new Error("Inline color markup nesting exceeds 64 levels");
+    if (nesting > 64) {
+      throw usageError(
+        "range",
+        "ERR_INVALID_ARG_VALUE",
+        "Inline color markup nesting exceeds 64 levels",
+      );
+    }
     let result = "";
     for (let i = 0; i < text.length; i++) {
       const token = tokens.find((candidate) => text.startsWith(candidate, i));
@@ -286,7 +371,7 @@ export function c(strings: TemplateStringsArray, ...values: unknown[]): string {
 
       const styleChain = text.slice(i + 1, styleEnd);
       const names = styleChain.split(".");
-      if (names.length === 0 || names.some((name) => !isStyleName(name))) {
+      if (names.length === 0 || !names.every(isStyleName)) {
         result += text[i];
         continue;
       }
@@ -452,19 +537,28 @@ function parseSgrParameters(body: string): number[][] {
     .map((parameter) => parameter.split(":").map((value) => (value === "" ? 0 : Number(value))));
 }
 
+/** Options for {@link sanitizeTerminalText}. */
+export interface SanitizeTerminalTextOptions {
+  /** Collapse newlines to spaces. Defaults to true. */
+  singleLine?: boolean;
+  /** Keep complete OSC 8 hyperlinks. Defaults to true. */
+  allowHyperlinks?: boolean;
+}
+
 /**
  * Sanitizes text before it is rendered inside a structured terminal UI.
  *
  * SGR styling and OSC 8 hyperlinks are preserved. Cursor movement, screen
  * clearing, title changes, and every other escape sequence are removed. Visible
  * C0/C1 controls are either collapsed to spaces in single-line mode or dropped.
+ * Any SGR style or OSC 8 hyperlink the text leaves open is closed at the end.
  */
 export function sanitizeTerminalText(
   text: string,
-  options: { singleLine?: boolean; allowHyperlinks?: boolean } = {},
+  options: SanitizeTerminalTextOptions = {},
 ): string {
   const { singleLine = true, allowHyperlinks = true } = options;
-  return splitAnsi(text)
+  const sanitized = splitAnsi(text)
     .map((segment) => {
       if (segment.ansi) {
         if (sgrPattern.test(segment.text)) return segment.text;
@@ -503,6 +597,7 @@ export function sanitizeTerminalText(
       return result;
     })
     .join("");
+  return closeAnsiState(sanitized);
 }
 
 /**
@@ -515,7 +610,7 @@ export function sanitizeTerminalText(
  * did not intend.
  */
 export function renderSafe(text: string, options: { singleLine?: boolean } = {}): string {
-  return closeAnsiState(sanitizeTerminalText(text, options));
+  return sanitizeTerminalText(text, options);
 }
 
 // ── String width (East Asian Width aware) ──
@@ -690,28 +785,43 @@ export function closeAnsiState(text: string): string {
 
 /**
  * Truncates terminal text without splitting graphemes or leaking active ANSI
- * state. A `NaN` or `Infinity` width means no limit; a width below 1 returns "".
+ * state.
+ *
+ * @param text - The text to truncate.
+ * @param width - Maximum display width in columns: a positive integer, or `Infinity` for no limit.
+ * @param ellipsis - Marker appended when the text is cut. Defaults to `"…"`.
+ * @returns The text, cut to `width` columns when it is wider.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `width` is not a number.
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `width` is 0 or negative, NaN, or fractional.
  */
-export function truncateAnsi(text: string, maxWidth: number, marker = "…"): string {
-  const limit = finiteInteger(maxWidth, 0);
-  if (limit === undefined) return maxWidth < 0 ? "" : closeAnsiState(text);
-  if (limit === 0) return "";
-  if (stringWidth(text) <= limit) return closeAnsiState(text);
+export function truncateAnsi(text: string, width: number, ellipsis = "…"): string {
+  if (typeof width !== "number") {
+    throw usageError("type", "ERR_INVALID_ARG_TYPE", "truncateAnsi width must be a number");
+  }
+  if (width === Number.POSITIVE_INFINITY) return closeAnsiState(text);
+  if (!Number.isInteger(width) || width <= 0) {
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      `truncateAnsi width must be a positive integer or Infinity, received ${width}`,
+    );
+  }
+  if (stringWidth(text) <= width) return closeAnsiState(text);
 
   const takePlain = (value: string, widthLimit: number) => {
-    let width = 0;
+    let used = 0;
     let result = "";
     for (const grapheme of iterateGraphemes(value)) {
       const nextWidth = graphemeWidth(grapheme);
-      if (width + nextWidth > widthLimit) break;
+      if (used + nextWidth > widthLimit) break;
       result += grapheme;
-      width += nextWidth;
+      used += nextWidth;
     }
     return result;
   };
 
-  const fittedMarker = takePlain(stripAnsi(marker), limit);
-  const contentLimit = limit - stringWidth(fittedMarker);
+  const fittedMarker = takePlain(stripAnsi(ellipsis), width);
+  const contentLimit = width - stringWidth(fittedMarker);
   let visibleWidth = 0;
   let result = "";
   outer: for (const segment of splitAnsi(text)) {
