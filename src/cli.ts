@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CommandBuilder } from "./command/builder.js";
+import { CommandBuilder, type CommandBuilderFor } from "./command/builder.js";
 import { CommandRegistry, visibleSubcommands } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
 import { CommandNotFoundError, presentError, usageError } from "./errors.js";
@@ -152,11 +152,12 @@ export class CLI {
   }
 
   /**
-   * Registers a new command with the given definition string.
+   * Registers a new command with the given definition string. A literal
+   * definition types `ctx.args` from its argument tokens.
    * @param definition - The command definition (e.g., "greet <name> [title]").
    * @returns A CommandBuilder instance for further configuration.
    */
-  command(definition: string): CommandBuilder {
+  command<D extends string>(definition: D): CommandBuilderFor<D> {
     return CommandBuilder.create(this.registry, definition);
   }
 
@@ -208,7 +209,7 @@ export class CLI {
   use(plugin: Plugin): this {
     if (this.pluginInitializationFailed) throw this.pluginInitializationError;
     const context: PluginContext = {
-      command: (definition: string) => this.command(definition),
+      command: (definition) => this.command(definition),
       on: (event, handler) => {
         this.on(event, handler);
         return context;

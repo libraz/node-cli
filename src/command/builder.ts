@@ -2,22 +2,38 @@ import { usageError } from "../errors.js";
 import { coerceOptionValue } from "../option/resolver.js";
 import type {
   Action,
+  AddOption,
   CancelHandler,
+  CheckedOptionSchema,
   CommandDefinition,
   CommandValidator,
   Completer,
+  DefinitionArgs,
   OptionSchema,
 } from "../types.js";
 import { parseDefinitionString, parseOptionFlags, stripOptionPrefix } from "./parser.js";
 import type { CommandRegistry } from "./registry.js";
 
 /**
+ * The builder `command()` returns for a definition string: typed arguments and
+ * no options yet for a literal, untyped records otherwise.
+ */
+export type CommandBuilderFor<D extends string> = string extends D
+  ? CommandBuilder
+  : CommandBuilder<DefinitionArgs<D>, Record<never, never>>;
+
+/**
  * Fluent builder for defining CLI commands and their options, actions, and subcommands.
  *
  * Instances are created internally when a new command is registered through the CLI
- * and are chained to configure the command incrementally.
+ * and are chained to configure the command incrementally. `A` and `O` are the
+ * types of `ctx.args` and `ctx.options` the handlers receive; each `.option()`
+ * adds its key to `O`.
  */
-export class CommandBuilder {
+export class CommandBuilder<
+  A extends object = Record<string, unknown>,
+  O extends object = Record<string, unknown>,
+> {
   private readonly registry: CommandRegistry;
   private readonly definition: CommandDefinition;
   private readonly parentPath: string[];
@@ -31,12 +47,12 @@ export class CommandBuilder {
    * @param definitionStr - A definition string describing the command name and its arguments (e.g., `"serve <port>"`).
    * @param parentPath - The path of parent command names leading to this command. Defaults to an empty array for root commands.
    */
-  static create(
+  static create<D extends string>(
     registry: CommandRegistry,
-    definitionStr: string,
+    definitionStr: D,
     parentPath: string[] = [],
-  ): CommandBuilder {
-    return new CommandBuilder(registry, definitionStr, parentPath);
+  ): CommandBuilderFor<D> {
+    return new CommandBuilder(registry, definitionStr, parentPath) as CommandBuilderFor<D>;
   }
 
   private constructor(registry: CommandRegistry, definitionStr: string, parentPath: string[]) {
@@ -104,13 +120,22 @@ export class CommandBuilder {
    * Repeated call: the same option name replaces the previous definition in
    * place; a new name adds an option.
    *
+   * With a literal flags string the option is added to the type of
+   * `ctx.options` under the key described above. Its value type is the awaited
+   * return of `parse`, else `type`, else `string` or `boolean` from the
+   * placeholder, narrowed to the `choices` union when present. It is optional
+   * unless it has a `default`, is `required`, or is a boolean.
+   *
    * @param flags - The option flags string.
    * @param schema - Optional schema describing the option's type, default value, etc.
    * @returns This builder instance for chaining.
    * @throws {Error} `ERR_INVALID_DEFINITION` for malformed flags or an invalid
    *   schema, `ERR_DEFINITION_CONFLICT` when a name or alias belongs to another option.
    */
-  option(flags: string, schema: OptionSchema = {}): this {
+  option<F extends string, const S extends OptionSchema = Record<never, never>>(
+    flags: F,
+    schema?: S & CheckedOptionSchema<S>,
+  ): CommandBuilder<A, AddOption<O, F, S>> {
     this.assertRegistered();
     const { long, aliases, longAliases, takesValue, valueName } = parseOptionFlags(flags);
 
@@ -255,7 +280,7 @@ export class CommandBuilder {
       schema: resolved,
     });
 
-    return this;
+    return this as CommandBuilder<A, AddOption<O, F, S>>;
   }
 
   /**
@@ -265,7 +290,7 @@ export class CommandBuilder {
    * @param fn - The async (or sync) function to run when the command matches.
    * @returns This builder instance for chaining.
    */
-  action(fn: Action): this {
+  action(fn: Action<A, O>): this {
     this.assertRegistered();
     if (this.definition.argDefs.length > 0 && this.definition.subcommands.size > 0) {
       process.emitWarning(
@@ -273,7 +298,7 @@ export class CommandBuilder {
         { code: "NODE_CLI_UNREACHABLE_SUBCOMMAND" },
       );
     }
-    this.definition.action = fn;
+    this.definition.action = fn as Action;
     return this;
   }
 
@@ -323,9 +348,9 @@ export class CommandBuilder {
    * @param fn - The validation function.
    * @returns This builder instance for chaining.
    */
-  validate(fn: CommandValidator): this {
+  validate(fn: CommandValidator<A, O>): this {
     this.assertRegistered();
-    this.definition.validate = fn;
+    this.definition.validate = fn as CommandValidator;
     return this;
   }
 
@@ -338,9 +363,9 @@ export class CommandBuilder {
    * @param fn - The cancel handler function.
    * @returns This builder instance for chaining.
    */
-  onCancel(fn: CancelHandler): this {
+  onCancel(fn: CancelHandler<A, O>): this {
     this.assertRegistered();
-    this.definition.cancelHandler = fn;
+    this.definition.cancelHandler = fn as CancelHandler;
     return this;
   }
 
@@ -358,14 +383,15 @@ export class CommandBuilder {
 
   /**
    * Registers a subcommand under this command and returns the subcommand's
-   * builder, not this one, so the chain continues on the child.
+   * builder, not this one, so the chain continues on the child. The child is
+   * typed from its own definition and does not inherit this command's options.
    * Repeated call: the same name merges into the existing subcommand.
    *
    * @param definitionStr - The definition string for the subcommand (e.g., `"list [filter]"`).
    * @returns A new {@link CommandBuilder} for configuring the subcommand.
    * @throws {Error} `ERR_INVALID_DEFINITION` for a malformed definition string.
    */
-  command(definitionStr: string): CommandBuilder {
+  command<D extends string>(definitionStr: D): CommandBuilderFor<D> {
     this.assertRegistered();
     const fullParentPath = [...this.parentPath, this.definition.name];
     return CommandBuilder.create(this.registry, definitionStr, fullParentPath);

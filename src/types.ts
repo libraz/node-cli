@@ -1,5 +1,5 @@
 import type { Readable, Writable } from "node:stream";
-import type { CommandBuilder } from "./command/builder.js";
+import type { CommandBuilderFor } from "./command/builder.js";
 import type { Shell } from "./shell/repl.js";
 
 // ── Argument ──
@@ -82,9 +82,13 @@ export interface OptionDef {
 
 /**
  * An action handler executed when a command is invoked.
- * May be synchronous or asynchronous.
+ * May be synchronous or asynchronous. `A` and `O` type `ctx.args` and
+ * `ctx.options`; the builder infers them from the command definition.
  */
-export type Action = (ctx: CommandContext) => void | Promise<void>;
+export type Action<
+  A extends object = Record<string, unknown>,
+  O extends object = Record<string, unknown>,
+> = (ctx: CommandContext<A, O>) => void | Promise<void>;
 
 /**
  * A completion provider that returns candidates for the word under the cursor
@@ -97,14 +101,20 @@ export type Completer = (ctx: CompletionContext) => readonly string[] | Promise<
  * A command-level validator run after option resolution and before the action.
  * Throw (or reject) to stop execution.
  */
-export type CommandValidator = (ctx: CommandContext) => void | Promise<void>;
+export type CommandValidator<
+  A extends object = Record<string, unknown>,
+  O extends object = Record<string, unknown>,
+> = (ctx: CommandContext<A, O>) => void | Promise<void>;
 
 /**
  * A handler invoked when a running command is interrupted: Ctrl-C, an aborted
  * exec signal, or SIGTERM in the shell. It is not awaited; a rejection is
  * reported through the `error` event.
  */
-export type CancelHandler = (ctx: CommandContext) => void;
+export type CancelHandler<
+  A extends object = Record<string, unknown>,
+  O extends object = Record<string, unknown>,
+> = (ctx: CommandContext<A, O>) => void;
 
 /**
  * A fallback handler invoked with the raw input when no command matches it.
@@ -148,6 +158,153 @@ export interface CommandDefinition {
   /** Handler invoked when this command is interrupted: Ctrl-C, an aborted exec signal, or SIGTERM in the shell. */
   cancelHandler?: CancelHandler;
 }
+
+// ── Typed context ──
+
+/** Strips spaces from both ends of a string literal. */
+type Trim<S extends string> = S extends ` ${infer R}`
+  ? Trim<R>
+  : S extends `${infer R} `
+    ? Trim<R>
+    : S;
+
+/** The positional-argument entry one definition-string token contributes. */
+type ArgEntry<T extends string> = T extends `<...${infer N}>` | `[...${infer N}]`
+  ? { [K in N]: readonly string[] }
+  : T extends `<${infer N}>`
+    ? { [K in N]: string }
+    : T extends `[${infer N}]`
+      ? { [K in N]: string | undefined }
+      : Record<never, never>;
+
+/** Accumulates the argument entries of a space-separated definition string. */
+type ParseArgs<D extends string, Acc> = D extends `${infer T} ${infer Rest}`
+  ? ParseArgs<Rest, Acc & ArgEntry<T>>
+  : Acc & ArgEntry<D>;
+
+/**
+ * The `ctx.args` type of a command definition string: each `<x>` is a
+ * `string`, `[x]` is `string | undefined`, and `<...x>` or `[...x]` is a
+ * `readonly string[]`. Leading path words add nothing. A non-literal string
+ * gives an untyped record.
+ */
+export type DefinitionArgs<D extends string> = string extends D
+  ? Record<string, unknown>
+  : { [K in keyof ParseArgs<D, Record<never, never>>]: ParseArgs<D, Record<never, never>>[K] };
+
+/** The flag word of one comma-separated flags part, without its placeholder. */
+type FlagWord<P extends string> = Trim<P> extends `${infer W} ${string}` ? W : Trim<P>;
+
+/** Walks the flags parts, keeping the last `--name` and the first short name. */
+type ScanFlags<
+  F extends string,
+  Long extends string,
+  Short extends string,
+> = F extends `${infer Part},${infer Rest}`
+  ? ScanPart<FlagWord<Part>, Rest, Long, Short>
+  : FinishFlags<FlagWord<F>, Long, Short>;
+
+type ScanPart<
+  W extends string,
+  Rest extends string,
+  Long extends string,
+  Short extends string,
+> = W extends `--${infer L}`
+  ? ScanFlags<Rest, L, Short>
+  : W extends `-${infer S}`
+    ? ScanFlags<Rest, Long, [Short] extends [never] ? S : Short>
+    : ScanFlags<Rest, Long, Short>;
+
+type FinishFlags<
+  W extends string,
+  Long extends string,
+  Short extends string,
+> = W extends `--${infer L}`
+  ? L
+  : [Long] extends [never]
+    ? W extends `-${infer S}`
+      ? [Short] extends [never]
+        ? S
+        : Short
+      : Short
+    : Long;
+
+/**
+ * The `ctx.options` key an option's flags produce: the last `--name`, or the
+ * first short name when there is none. A comma inside a placeholder only
+ * splits the placeholder, whose pieces never start with a dash.
+ */
+export type OptionKey<F extends string> = ScanFlags<F, never, never>;
+
+/** Value types of the built-in `OptionSchema.type` names. */
+interface OptionTypeMap {
+  string: string;
+  number: number;
+  boolean: boolean;
+  "string[]": readonly string[];
+  "number[]": readonly number[];
+}
+
+/** Wraps `V` in a readonly array when the schema declares an array type. */
+type ArrayOf<S, V> = S extends { readonly type: "string[]" | "number[]" } ? readonly V[] : V;
+
+/**
+ * The value type of an option, by precedence: the awaited return of `parse`
+ * (per element for an array type), then `type`, then `string` when the flags
+ * carry a placeholder and `boolean` when they do not. `choices` narrows the
+ * result to the union of its elements.
+ */
+type OptionValue<F extends string, S> = "choices" extends keyof S
+  ? ArrayOf<S, NonNullable<S["choices" & keyof S]> extends readonly (infer C)[] ? C : unknown>
+  : "parse" extends keyof S
+    ? ArrayOf<
+        S,
+        Awaited<NonNullable<S["parse" & keyof S]> extends (...args: never) => infer R ? R : unknown>
+      >
+    : S extends { readonly type: infer T extends keyof OptionTypeMap }
+      ? OptionTypeMap[T]
+      : F extends `${string} <${string}>${string}` | `${string} [${string}]${string}`
+        ? string
+        : boolean;
+
+/** Whether an option is always present in `ctx.options`. */
+type OptionPresent<S, V> = S extends { readonly required: true }
+  ? true
+  : "default" extends keyof S
+    ? undefined extends S["default" & keyof S]
+      ? false
+      : true
+    : [V] extends [boolean]
+      ? true
+      : false;
+
+type OptionEntry<F extends string, S, V = OptionValue<F, S>> =
+  OptionPresent<S, V> extends true ? { [K in OptionKey<F>]: V } : { [K in OptionKey<F>]?: V };
+
+/**
+ * The `ctx.options` type after adding an option. A non-literal flags string
+ * widens the options to an untyped record.
+ */
+export type AddOption<O extends object, F extends string, S> = string extends F
+  ? O & Record<string, unknown>
+  : O & OptionEntry<F, S>;
+
+/**
+ * The schema `.option()` accepts for an inferred schema `S`. It rejects a
+ * `default` outside the declared `choices` at compile time, the check
+ * `.option()` makes at run time, and keeps callbacks such as `parse`
+ * contextually typed.
+ */
+export type CheckedOptionSchema<S> = "choices" extends keyof S
+  ? "default" extends keyof S
+    ? OptionSchema & {
+        readonly default?: ArrayOf<
+          S,
+          NonNullable<S["choices" & keyof S]> extends readonly (infer C)[] ? C : unknown
+        >;
+      }
+    : OptionSchema
+  : OptionSchema;
 
 // ── Events ──
 
@@ -214,13 +371,17 @@ export interface CommandStreams {
 export type StdioOptions = Partial<CommandStreams>;
 
 /**
- * Context passed to a command's action handler at execution time.
+ * Context passed to a command's action handler at execution time. `A` types
+ * `args` and `O` types `options`; both default to untyped records.
  */
-export interface CommandContext extends CommandStreams {
+export interface CommandContext<
+  A extends object = Record<string, unknown>,
+  O extends object = Record<string, unknown>,
+> extends CommandStreams {
   /** Parsed positional arguments keyed by argument name. This is a null-prototype record. */
-  readonly args: Record<string, unknown>;
+  readonly args: A;
   /** Parsed options keyed by option long-name. This is a null-prototype record. */
-  readonly options: Record<string, unknown>;
+  readonly options: O;
   /** The original raw input string. */
   readonly rawInput: string;
   /**
@@ -267,8 +428,11 @@ export type ModeContext = Pick<CommandStreams, "stdout" | "stderr" | "signal">;
  * the context so registrations can be chained.
  */
 export interface PluginContext {
-  /** Registers a new command and returns its builder. */
-  command(definition: string): CommandBuilder;
+  /**
+   * Registers a new command and returns its builder, typed from a literal
+   * definition the same way as `cli.command()`.
+   */
+  command<D extends string>(definition: D): CommandBuilderFor<D>;
   /** Registers an event listener. A repeated call adds another listener. */
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   /** Removes a previously registered event listener. */

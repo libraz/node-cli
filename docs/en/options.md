@@ -5,7 +5,8 @@ An option is a named input written with a leading dash — `--force`, `-p 8080`,
 order, it carries a declared type, and it can have a default value.
 
 Options are declared with `.option()` on a command builder and are read from
-`ctx.options` inside the action.
+`ctx.options` inside the action, which is typed from the declarations (see
+[Typed options](#typed-options)).
 
 ## Declaring an option
 
@@ -25,7 +26,7 @@ cli
   })
   .option("--verbose", { description: "Print each request" })
   .action((ctx) => {
-    const port = ctx.options.port as number;
+    const port: number = ctx.options.port;
     ctx.stdout.write(`listening on ${port}\n`);
   });
 
@@ -99,7 +100,7 @@ cli
 | `parse` | `(value: string, ctx) => unknown` | — | Replaces built-in conversion entirely |
 | `validate` | `(value: unknown, ctx) => void` | — | Rejects a resolved value by throwing |
 | `hidden` | `boolean` | `false` | Excludes the option from help and completion |
-| `autocomplete` | `string[] \| ((current: string) => string[] \| Promise<string[]>)` | — | Value candidates for tab completion; takes precedence over `choices` |
+| `completer` | `readonly string[] \| Completer` | — | Value candidates for tab completion, as a fixed list or a function of the `CompletionContext`; takes precedence over `choices` |
 
 Aliases from `alias` are merged with those in the specification string, so
 `.option("--port <n>", { alias: "p" })` and `.option("-p, --port <n>")` declare
@@ -344,7 +345,7 @@ exactly as typed, even if it begins with a dash:
 
 ```typescript
 cli.command("run <...args>").action((ctx) => {
-  ctx.stdout.write(`${(ctx.args.args as string[]).join(" ")}\n`);
+  ctx.stdout.write(`${ctx.args.args.join(" ")}\n`);
 });
 // myapp run -- --verbose -x   → args is ["--verbose", "-x"]
 ```
@@ -367,15 +368,15 @@ cli
   .option("-v, --verbose")
   .option("--tags <tag>", { type: "string[]" })
   .action((ctx) => {
-    const port = ctx.options.port as number;
-    const verbose = ctx.options.verbose as boolean;
-    const tags = (ctx.options.tags as string[] | undefined) ?? [];
+    const port: number = ctx.options.port;
+    const verbose: boolean = ctx.options.verbose;
+    const tags: readonly string[] = ctx.options.tags ?? [];
     ctx.stdout.write(`port=${port} verbose=${verbose} tags=${tags.length}\n`);
   });
 ```
 
-The values arrive typed as `unknown`, so a cast or a runtime check is needed to
-use them. The cast is safe for any option whose type the schema declares.
+No cast is needed: each `.option()` in the chain adds its key and value type to
+`ctx.options`, as described next.
 
 `ctx.options` is a null-prototype object: it does not inherit the usual `Object`
 methods. Testing for a key requires `Object.hasOwn`:
@@ -392,12 +393,69 @@ cli
   });
 ```
 
+## Typed options
+
+When the flags string is a literal, `.option()` adds an entry to the type of
+`ctx.options` for every handler set later in the same chain: `.action()`,
+`.validate()` and `.onCancel()`.
+
+**The key** follows the runtime rule from [the flag spec
+string](#the-flag-spec-string): the last `--name`, or the first short alias
+when there is no `--` part. `.option("--no-color")` adds the key `no-color`;
+no `color` key exists. A key that was never declared is a type error.
+
+**The value type** is decided by the first rule that applies:
+
+| Schema | Value type |
+|---|---|
+| `choices` | The union of its elements (a readonly array of them for `"string[]"` and `"number[]"`) |
+| `parse` | Its awaited return type (a readonly array of it for an array type) |
+| `type` | `string`, `number`, `boolean`, `readonly string[]` or `readonly number[]` |
+| none of these | `string` when the flags carry a placeholder, otherwise `boolean` |
+
+**The entry is optional** (`T | undefined`) unless the option has a `default`,
+is `required: true`, or is a boolean. A boolean always has a value, because
+an unset boolean defaults to `false`.
+
+```typescript
+cli
+  .command("deploy")
+  .option("--env <env>", { choices: ["dev", "prod"], default: "dev" })
+  .option("--replicas <n>", { type: "number" })
+  .option("--since <date>", { parse: (value) => new Date(value) })
+  .option("--dry-run")
+  .action((ctx) => {
+    ctx.options.env; //      "dev" | "prod"
+    ctx.options.replicas; // number | undefined
+    ctx.options.since; //    Date | undefined
+    ctx.options["dry-run"]; // boolean
+  });
+```
+
+A `default` that is not among the declared `choices` is a type error, matching
+the error `.option()` throws at runtime. `ctx.options` and `ctx.args` are
+readonly, and so are the array values in them.
+
+A command's own options do not carry over to a subcommand: the builder that
+`.command()` returns starts with no options, as at runtime.
+
+Positional arguments are typed from a literal definition string in the same
+way: `<x>` is a `string`, `[x]` is `string | undefined`, and `<...x>` or
+`[...x]` is a `readonly string[]`.
+
+A definition or flags string that is not a literal cannot be read by the type
+checker. A non-literal definition leaves `ctx.args` and `ctx.options` as
+`Record<string, unknown>`, and a non-literal flags string widens `ctx.options`
+to also accept any key with an `unknown` value. The named handler types take
+the same two type parameters, so a handler written apart from its command can
+state them: `Action<{ env: string }, { force: boolean }>`.
+
 ## Gotchas
 
 **`ctx.options` is never keyed by an alias.** `-p` and `--port` both write
-`ctx.options.port`. Reading `ctx.options.p` yields `undefined` unless `p` is the
-canonical name, which happens only when the specification string has no `--`
-part.
+`ctx.options.port`. Reading `ctx.options.p` is a type error, and yields
+`undefined` at runtime, unless `p` is the canonical name, which happens only
+when the specification string has no `--` part.
 
 **An omitted boolean option is `false`, not `undefined`.** Booleans receive an
 automatic default, so `if (ctx.options.force !== undefined)` is always true.
@@ -425,5 +483,5 @@ names the option `color` and makes `colour` an alias, not the other way around.
 
 - [Commands](commands.md) — command names, positional arguments, and the lifecycle
 - [Errors](errors.md) — `InvalidOptionError`, `MissingOptionError`, `UnknownOptionError`, `ValidationError`
-- [Interactive shell](interactive-shell.md) — tab completion and `autocomplete`
+- [Interactive shell](interactive-shell.md) — tab completion and `completer`
 - [API reference](api-reference.md) — full signatures

@@ -2,7 +2,7 @@
 
 オプションは、先頭にダッシュを付けて書く名前付きの入力です。`--force`、`-p 8080`、`--tag=v2` などがそれにあたります。[位置引数](commands.md)と違って順序を問わず、宣言された型を持ち、既定値を持てます。
 
-オプションはコマンドビルダーの `.option()` で宣言し、アクションの中では `ctx.options` から読み取ります。
+オプションはコマンドビルダーの `.option()` で宣言し、アクションの中では `ctx.options` から読み取ります。`ctx.options` の型は宣言から決まります（[型付きのオプション](#型付きのオプション)を参照）。
 
 ## オプションを宣言する
 
@@ -22,7 +22,7 @@ cli
   })
   .option("--verbose", { description: "Print each request" })
   .action((ctx) => {
-    const port = ctx.options.port as number;
+    const port: number = ctx.options.port;
     ctx.stdout.write(`listening on ${port}\n`);
   });
 
@@ -81,7 +81,7 @@ cli
 | `parse` | `(value: string, ctx) => unknown` | — | 組み込みの型変換を完全に置き換えます |
 | `validate` | `(value: unknown, ctx) => void` | — | 例外を送出して解決済みの値を拒否します |
 | `hidden` | `boolean` | `false` | ヘルプと補完からオプションを除外します |
-| `autocomplete` | `string[] \| ((current: string) => string[] \| Promise<string[]>)` | — | タブ補完用の値の候補。`choices` より優先されます |
+| `completer` | `readonly string[] \| Completer` | — | タブ補完用の値の候補。固定のリストか、`CompletionContext` を受け取る関数で指定します。`choices` より優先されます |
 
 `alias` で指定したエイリアスは仕様文字列のものとマージされるので、`.option("--port <n>", { alias: "p" })` と `.option("-p, --port <n>")` は同じオプションを宣言します。
 
@@ -280,7 +280,7 @@ cli.command("build").option("--cache", { type: "boolean", default: true });
 
 ```typescript
 cli.command("run <...args>").action((ctx) => {
-  ctx.stdout.write(`${(ctx.args.args as string[]).join(" ")}\n`);
+  ctx.stdout.write(`${ctx.args.args.join(" ")}\n`);
 });
 // myapp run -- --verbose -x   → args is ["--verbose", "-x"]
 ```
@@ -298,14 +298,14 @@ cli
   .option("-v, --verbose")
   .option("--tags <tag>", { type: "string[]" })
   .action((ctx) => {
-    const port = ctx.options.port as number;
-    const verbose = ctx.options.verbose as boolean;
-    const tags = (ctx.options.tags as string[] | undefined) ?? [];
+    const port: number = ctx.options.port;
+    const verbose: boolean = ctx.options.verbose;
+    const tags: readonly string[] = ctx.options.tags ?? [];
     ctx.stdout.write(`port=${port} verbose=${verbose} tags=${tags.length}\n`);
   });
 ```
 
-値は `unknown` 型で届くので、使うにはキャストか実行時のチェックが必要です。スキーマが型を宣言しているオプションであれば、キャストは安全です。
+キャストは要りません。連鎖の中の `.option()` が、それぞれのキーと値の型を `ctx.options` に加えるからです。規則は次の節で説明します。
 
 `ctx.options` は null プロトタイプのオブジェクトで、通常の `Object` のメソッドを継承しません。キーの有無を調べるには `Object.hasOwn` が必要です。
 
@@ -321,9 +321,49 @@ cli
   });
 ```
 
+## 型付きのオプション
+
+flags 文字列が literal のとき、`.option()` は `ctx.options` の型に項目を 1 つ加えます。この型は、同じ連鎖の中でそれより後に設定するハンドラ（`.action()`、`.validate()`、`.onCancel()`）が受け取ります。
+
+**キー**は、[フラグ仕様文字列](#フラグ仕様文字列)の実行時の規則と同じです。最後の `--name` がキーになり、`--` の部分がなければ最初のショートエイリアスがキーになります。`.option("--no-color")` はキー `no-color` を加え、`color` というキーは生まれません。宣言していないキーを読むと型エラーになります。
+
+**値の型**は、次の表で最初に当てはまる行で決まります。
+
+| スキーマ | 値の型 |
+|---|---|
+| `choices` | その要素の union（`"string[]"` と `"number[]"` ではその readonly 配列） |
+| `parse` | 戻り値を await した型（配列型ではその readonly 配列） |
+| `type` | `string`、`number`、`boolean`、`readonly string[]`、`readonly number[]` のいずれか |
+| どれもない | flags にプレースホルダがあれば `string`、なければ `boolean` |
+
+**項目は省略可能**（`T | undefined`）になります。ただし、`default` を持つ場合、`required: true` の場合、boolean の場合は省略可能になりません。設定されなかった boolean には既定値 `false` が入るので、boolean は常に値を持ちます。
+
+```typescript
+cli
+  .command("deploy")
+  .option("--env <env>", { choices: ["dev", "prod"], default: "dev" })
+  .option("--replicas <n>", { type: "number" })
+  .option("--since <date>", { parse: (value) => new Date(value) })
+  .option("--dry-run")
+  .action((ctx) => {
+    ctx.options.env; //      "dev" | "prod"
+    ctx.options.replicas; // number | undefined
+    ctx.options.since; //    Date | undefined
+    ctx.options["dry-run"]; // boolean
+  });
+```
+
+宣言した `choices` に含まれない `default` は型エラーになります。`.option()` が実行時に送出するエラーと対応しています。`ctx.options` と `ctx.args` は readonly で、その中の配列の値も readonly です。
+
+コマンド自身のオプションは、サブコマンドに引き継がれません。`.command()` が返す builder は、実行時と同じく、オプションを持たない状態から始まります。
+
+位置引数も、literal の定義文字列から同じように型が付きます。`<x>` は `string`、`[x]` は `string | undefined`、`<...x>` と `[...x]` は `readonly string[]` です。
+
+literal でない定義文字列や flags 文字列は、型検査器には読めません。定義文字列が literal でなければ、`ctx.args` と `ctx.options` は `Record<string, unknown>` のままです。flags 文字列が literal でなければ、`ctx.options` は任意のキーを `unknown` 型の値として受け付けるように広がります。名前付きのハンドラ型も同じ 2 つの型パラメータを取るので、コマンドと別に書いたハンドラでは `Action<{ env: string }, { force: boolean }>` のように型を明示できます。
+
 ## 落とし穴
 
-**`ctx.options` がエイリアスをキーにすることはありません。** `-p` も `--port` もどちらも `ctx.options.port` に書き込みます。`ctx.options.p` を読むと `undefined` になります。`p` が正規名である場合だけは別で、それは仕様文字列に `--` の部分がないときにだけ起こります。
+**`ctx.options` がエイリアスをキーにすることはありません。** `-p` も `--port` もどちらも `ctx.options.port` に書き込みます。`ctx.options.p` を読むと型エラーになり、実行時には `undefined` になります。`p` が正規名である場合だけは別で、それは仕様文字列に `--` の部分がないときにだけ起こります。
 
 **省略された boolean オプションは `undefined` ではなく `false` です。** boolean には自動的に既定値が入るので、`if (ctx.options.force !== undefined)` は常に真になります。値そのものを調べてください。`if (ctx.options.force)` と書きます。
 
@@ -341,5 +381,5 @@ cli
 
 - [コマンド](commands.md) — コマンド名、位置引数、ライフサイクル
 - [エラー](errors.md) — `InvalidOptionError`、`MissingOptionError`、`UnknownOptionError`、`ValidationError`
-- [対話シェル](interactive-shell.md) — タブ補完と `autocomplete`
+- [対話シェル](interactive-shell.md) — タブ補完と `completer`
 - [API リファレンス](api-reference.md) — 全シグネチャ
