@@ -40,7 +40,7 @@ describe("table cell measurement", () => {
       { label: "とても長い日本語の文字列", value: "短い" },
       { label: "短い", value: "短い" },
     ];
-    table(rows, { maxWidth: { label: 6 } });
+    table(rows, { columns: [{ key: "label", maxWidth: 6 }, "value"] });
 
     const truncatedOnce = measured.filter((text) => text === "とても長い日本語の文字列");
     expect(truncatedOnce).toHaveLength(1);

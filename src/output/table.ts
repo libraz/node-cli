@@ -1,9 +1,14 @@
-import { finiteInteger, guardCall, MAX_RENDER_WIDTH, ownValue } from "../guard.js";
+import type { Writable } from "node:stream";
+import { usageError } from "../errors.js";
+import { guardCall, MAX_RENDER_WIDTH, ownValue } from "../guard.js";
 import {
-  color as c,
+  type ColorFn,
+  type ColorProxy,
   closeAnsiState,
+  createColorizer,
   isStyleName,
   renderSafe,
+  type StyleSpec,
   sanitizeTerminalText,
   stringWidth,
   truncateAnsi,
@@ -14,168 +19,196 @@ import {
  * Each property controls one piece of the box-drawing frame.
  */
 export interface TableChars {
+  /** Horizontal fill of the top edge. */
   top?: string;
-  "top-mid"?: string;
-  "top-left"?: string;
-  "top-right"?: string;
+  /** Junction on the top edge between two columns. */
+  topMid?: string;
+  /** Top-left corner. */
+  topLeft?: string;
+  /** Top-right corner. */
+  topRight?: string;
+  /** Horizontal fill of the bottom edge. */
   bottom?: string;
-  "bottom-mid"?: string;
-  "bottom-left"?: string;
-  "bottom-right"?: string;
+  /** Junction on the bottom edge between two columns. */
+  bottomMid?: string;
+  /** Bottom-left corner. */
+  bottomLeft?: string;
+  /** Bottom-right corner. */
+  bottomRight?: string;
+  /** Left edge of every row. */
   left?: string;
-  "left-mid"?: string;
+  /** Left end of a separator line between rows. */
+  leftMid?: string;
+  /** Right edge of every row. */
   right?: string;
-  "right-mid"?: string;
-  mid?: string;
-  "mid-mid"?: string;
-  middle?: string;
+  /** Right end of a separator line between rows. */
+  rightMid?: string;
+  /** Horizontal fill of a separator line between rows. */
+  horizontal?: string;
+  /** Crossing of a separator line and a column divider. */
+  cross?: string;
+  /** Divider between two columns within a row. */
+  vertical?: string;
 }
 
 /**
- * Style options for table rendering.
+ * Settings for one column, passed in {@link TableOptions.columns}.
  */
-export interface TableStyle {
-  /** Left padding inside each cell (number of spaces). Defaults to 1 for bordered, 0 for none. */
-  "padding-left"?: number;
-  /** Right padding inside each cell (number of spaces). Defaults to 1 for bordered, 0 for none. */
-  "padding-right"?: number;
-  /** Color/style applied to header text (e.g. "red", "bold", "cyan.bold"). */
-  head?: string;
-  /** Color/style applied to border characters (e.g. "grey", "dim", "cyan"). */
-  border?: string;
-  /** When true, suppresses row separators between data rows. Defaults to true. */
-  compact?: boolean;
+export interface ColumnSpec {
+  /** Object property to read for object data. Array data is matched by position and ignores it. */
+  key: string;
+  /** Header text. Defaults to `key`. */
+  label?: string;
+  /** Text alignment of the header and the cells. Defaults to `"left"`. */
+  align?: "left" | "right" | "center";
+  /**
+   * Fixed total width of the column, padding included, as a positive integer.
+   * Values below `paddingLeft + paddingRight + 1` render at that minimum. When
+   * set, it wins over `maxWidth`.
+   */
+  width?: number;
+  /** Upper bound on the content width, padding excluded: a positive integer or `Infinity`. */
+  maxWidth?: number;
 }
 
 /**
  * Options for configuring table rendering.
  */
 export interface TableOptions {
-  /** Column keys to include (for object data) or header labels (for array data). */
-  columns?: string[];
+  /**
+   * Columns to render, in order. For object data these select the properties; for
+   * array data they are matched by position and supplying them means row 0 is
+   * data rather than the header.
+   */
+  columns?: readonly (string | ColumnSpec)[];
   /** Whether to display a header row. Defaults to true. */
   header?: boolean;
-  /** Custom display labels for column keys, keyed by column name. */
-  headerLabels?: Record<string, string>;
   /** Border style preset. Use "custom" with `chars` for full control. */
   border?: "none" | "simple" | "rounded" | "single" | "double" | "custom";
   /** Custom border characters. Implicitly sets border to "custom" if provided without border option. */
   chars?: TableChars;
-  /** Text alignment per column, keyed by column name. */
-  align?: Record<string, "left" | "right" | "center">;
-  /** Text alignment per column by index. Takes precedence over `align` by name. */
-  colAligns?: ("left" | "right" | "center")[];
+  /** Style of the border glyphs, for example `"dim"` or `"cyan.bold"`. */
+  borderColor?: StyleSpec;
+  /** Style of the header text, or `"none"` for plain text. Defaults to `"bold"`. */
+  headerStyle?: StyleSpec | "none";
+  /** Spaces inside each cell on the left. Defaults to 1 with a frame and 0 with `border: "none"`. */
+  paddingLeft?: number;
+  /** Spaces inside each cell on the right. Defaults to 1 with a frame and 0 with `border: "none"`. */
+  paddingRight?: number;
+  /** Spaces between columns of a borderless table. Defaults to 2. */
+  gap?: number;
+  /** Draw a separator line between data rows. Defaults to false. */
+  rowSeparators?: boolean;
+  /** Marker appended to a truncated cell. Defaults to "…". */
+  ellipsis?: string;
   /**
-   * Fixed total width per column by index, padding included. Takes precedence
-   * over auto-calculated widths. The smallest honoured value is
-   * `padding-left + padding-right + 1`; anything below that renders at that
-   * minimum, and a value of `0` or less means "size this column automatically".
+   * Stream the result is meant for. It only decides whether colour is emitted
+   * (a TTY gets colour); nothing is written to it. Defaults to `process.stdout`.
    */
-  colWidths?: number[];
-  /** Maximum width per column, keyed by column name. */
-  maxWidth?: Record<string, number>;
-  /** Padding between columns (number of spaces). Used for borderless tables. Defaults to 2. */
-  padding?: number;
-  /** Style applied to the header row text. Defaults to "bold". */
-  headerStyle?: "bold" | "dim" | "underline" | "none";
-  /** Character used when truncating cell content. Defaults to "…". */
-  truncate?: string;
-  /** Style options for padding, header color, border color, and compact mode. */
-  style?: TableStyle;
+  stream?: Writable;
 }
 
 // ── Border Presets ──
 
 const CHARS_ROUNDED: Required<TableChars> = {
   top: "─",
-  "top-mid": "┬",
-  "top-left": "╭",
-  "top-right": "╮",
+  topMid: "┬",
+  topLeft: "╭",
+  topRight: "╮",
   bottom: "─",
-  "bottom-mid": "┴",
-  "bottom-left": "╰",
-  "bottom-right": "╯",
+  bottomMid: "┴",
+  bottomLeft: "╰",
+  bottomRight: "╯",
   left: "│",
-  "left-mid": "├",
+  leftMid: "├",
   right: "│",
-  "right-mid": "┤",
-  mid: "─",
-  "mid-mid": "┼",
-  middle: "│",
+  rightMid: "┤",
+  horizontal: "─",
+  cross: "┼",
+  vertical: "│",
 };
 
 const CHARS_SINGLE: Required<TableChars> = {
   top: "─",
-  "top-mid": "┬",
-  "top-left": "┌",
-  "top-right": "┐",
+  topMid: "┬",
+  topLeft: "┌",
+  topRight: "┐",
   bottom: "─",
-  "bottom-mid": "┴",
-  "bottom-left": "└",
-  "bottom-right": "┘",
+  bottomMid: "┴",
+  bottomLeft: "└",
+  bottomRight: "┘",
   left: "│",
-  "left-mid": "├",
+  leftMid: "├",
   right: "│",
-  "right-mid": "┤",
-  mid: "─",
-  "mid-mid": "┼",
-  middle: "│",
+  rightMid: "┤",
+  horizontal: "─",
+  cross: "┼",
+  vertical: "│",
 };
 
 const CHARS_DOUBLE: Required<TableChars> = {
   top: "═",
-  "top-mid": "╦",
-  "top-left": "╔",
-  "top-right": "╗",
+  topMid: "╦",
+  topLeft: "╔",
+  topRight: "╗",
   bottom: "═",
-  "bottom-mid": "╩",
-  "bottom-left": "╚",
-  "bottom-right": "╝",
+  bottomMid: "╩",
+  bottomLeft: "╚",
+  bottomRight: "╝",
   left: "║",
-  "left-mid": "╠",
+  leftMid: "╠",
   right: "║",
-  "right-mid": "╣",
-  mid: "═",
-  "mid-mid": "╬",
-  middle: "║",
+  rightMid: "╣",
+  horizontal: "═",
+  cross: "╬",
+  vertical: "║",
 };
 
 const CHARS_SIMPLE: Required<TableChars> = {
   top: "",
-  "top-mid": "",
-  "top-left": "",
-  "top-right": "",
+  topMid: "",
+  topLeft: "",
+  topRight: "",
   bottom: "",
-  "bottom-mid": "",
-  "bottom-left": "",
-  "bottom-right": "",
+  bottomMid: "",
+  bottomLeft: "",
+  bottomRight: "",
   left: "",
-  "left-mid": "",
+  leftMid: "",
   right: "",
-  "right-mid": "",
-  mid: "-",
-  "mid-mid": "-|-",
-  middle: " | ",
+  rightMid: "",
+  horizontal: "-",
+  cross: "-|-",
+  vertical: " | ",
   // simple has special rendering handled separately
 };
 
 const CHARS_NONE: Required<TableChars> = {
   top: "",
-  "top-mid": "",
-  "top-left": "",
-  "top-right": "",
+  topMid: "",
+  topLeft: "",
+  topRight: "",
   bottom: "",
-  "bottom-mid": "",
-  "bottom-left": "",
-  "bottom-right": "",
+  bottomMid: "",
+  bottomLeft: "",
+  bottomRight: "",
   left: "",
-  "left-mid": "",
+  leftMid: "",
   right: "",
-  "right-mid": "",
-  mid: "",
-  "mid-mid": "",
-  middle: "",
+  rightMid: "",
+  horizontal: "",
+  cross: "",
+  vertical: "",
 };
+
+const BORDER_NAMES: ReadonlySet<string> = new Set([
+  "none",
+  "simple",
+  "rounded",
+  "single",
+  "double",
+  "custom",
+]);
 
 function resolveChars(options: TableOptions): Required<TableChars> {
   const border = options.chars ? (options.border ?? "custom") : (options.border ?? "none");
@@ -219,53 +252,149 @@ type TableLayout = {
   chars: Required<TableChars>;
   padLeft: number;
   padRight: number;
-  colPadding: number;
+  gap: number;
 };
 
 /** Resolves border characters and every padding value shared by sizing and rendering. */
 function resolveLayout(options: TableOptions): TableLayout {
   const border = options.chars ? (options.border ?? "custom") : (options.border ?? "none");
   const isBordered = border !== "none" && border !== "simple";
-  const style = options.style ?? {};
   return {
     border,
     chars: resolveChars(options),
-    padLeft: normalizePadding(style["padding-left"], isBordered ? 1 : 0),
-    padRight: normalizePadding(style["padding-right"], isBordered ? 1 : 0),
-    colPadding: normalizePadding(options.padding, 2),
+    padLeft: Math.min(options.paddingLeft ?? (isBordered ? 1 : 0), MAX_RENDER_WIDTH),
+    padRight: Math.min(options.paddingRight ?? (isBordered ? 1 : 0), MAX_RENDER_WIDTH),
+    gap: Math.min(options.gap ?? 2, MAX_RENDER_WIDTH),
   };
+}
+
+// ── Validation ──
+
+/**
+ * Checks a numeric option: a number is required, and it must be an integer of at
+ * least `min`. `Infinity` passes only when `allowInfinity` is set.
+ */
+function checkInteger(
+  name: string,
+  value: unknown,
+  min: number,
+  allowInfinity = false,
+  safe = false,
+): void {
+  if (value === undefined) return;
+  if (typeof value !== "number") {
+    throw usageError("type", "ERR_INVALID_ARG_TYPE", `${name} must be a number`);
+  }
+  if (allowInfinity && value === Number.POSITIVE_INFINITY) return;
+  const valid = safe ? Number.isSafeInteger(value) : Number.isInteger(value);
+  if (!valid || value < min) {
+    const shape = safe ? "a safe integer" : "an integer";
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      `${name} must be ${shape} of at least ${min}${allowInfinity ? " or Infinity" : ""}, received ${value}`,
+    );
+  }
+}
+
+/** Checks a style name or dot-separated chain; every segment must be a built-in style. */
+function checkStyle(name: string, value: unknown, allowNone = false): void {
+  if (value === undefined) return;
+  if (typeof value !== "string") {
+    throw usageError("type", "ERR_INVALID_ARG_TYPE", `${name} must be a string`);
+  }
+  if (allowNone && value === "none") return;
+  for (const segment of value.split(".")) {
+    if (!isStyleName(segment)) {
+      throw usageError(
+        "range",
+        "ERR_INVALID_ARG_VALUE",
+        `${name} contains the unknown style "${segment}" in "${value}"`,
+      );
+    }
+  }
+}
+
+/** Validates `columns` and converts every entry to a {@link ColumnSpec}. */
+function resolveColumns(columns: TableOptions["columns"]): ColumnSpec[] | undefined {
+  if (columns === undefined) return undefined;
+  if (!Array.isArray(columns)) {
+    throw usageError("type", "ERR_INVALID_ARG_TYPE", "columns must be an array");
+  }
+  return columns.map((entry: unknown, index) => {
+    if (typeof entry === "string") return { key: entry };
+    const spec = entry as ColumnSpec | null | undefined;
+    if (typeof spec !== "object" || spec === null || typeof spec.key !== "string") {
+      throw usageError(
+        "type",
+        "ERR_INVALID_ARG_TYPE",
+        `columns[${index}] must be a string or a ColumnSpec with a string key`,
+      );
+    }
+    checkInteger(`columns[${index}].width`, spec.width, 1);
+    checkInteger(`columns[${index}].maxWidth`, spec.maxWidth, 1, true);
+    return spec;
+  });
+}
+
+/** Validates every option that has a closed or numeric domain, before any rendering. */
+function validateOptions(options: TableOptions): void {
+  if (options.border !== undefined) {
+    if (typeof options.border !== "string") {
+      throw usageError("type", "ERR_INVALID_ARG_TYPE", "border must be a string");
+    }
+    if (!BORDER_NAMES.has(options.border)) {
+      throw usageError(
+        "range",
+        "ERR_INVALID_ARG_VALUE",
+        `Unknown border "${options.border}". Valid borders: ${[...BORDER_NAMES].join(", ")}`,
+      );
+    }
+  }
+  checkStyle("headerStyle", options.headerStyle, true);
+  checkStyle("borderColor", options.borderColor);
+  checkInteger("paddingLeft", options.paddingLeft, 0, false, true);
+  checkInteger("paddingRight", options.paddingRight, 0, false, true);
+  checkInteger("gap", options.gap, 0, false, true);
 }
 
 /**
  * Renders tabular data as a formatted string.
  *
  * Accepts either an array of arrays or an array of objects. Supports configurable
- * borders, column alignment, max column widths, header styling, and custom border characters.
+ * borders, per-column alignment and widths, header styling, and custom border
+ * characters. The result is returned, never written: `options.stream` only
+ * decides whether colour escape codes are included.
  *
  * @param data - The data to render, either as rows of arrays or rows of objects.
  * @param options - Table rendering options.
  * @returns The formatted table string.
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown border or style name, or a width, maxWidth, gap or padding outside its range.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a value of the wrong type, including a `columns` entry that is not a string or a `ColumnSpec`.
  */
 export function table(
-  data: unknown[][] | Record<string, unknown>[],
+  data: readonly (readonly unknown[])[] | readonly Record<string, unknown>[],
   options: TableOptions = {},
 ): string {
-  const { header = true, headerStyle = "bold" } = options;
-  const truncChar = renderSafe(options.truncate ?? "\u2026");
+  validateOptions(options);
+  const columnSpecs = resolveColumns(options.columns);
+
+  const { header = true } = options;
+  const headerStyle = (options.headerStyle as string | undefined) ?? "bold";
+  const truncChar = renderSafe(options.ellipsis ?? "\u2026");
+  const colorizer = createColorizer(options.stream ?? process.stdout);
 
   // Normalize to string[][]
-  const { rows, columns, keys } = normalizeData(data, options);
+  const { rows, columns, specs } = normalizeData(data, options.header !== false, columnSpecs);
 
   if (rows.length === 0 && columns.length === 0) return "";
 
-  // Calculate column widths (header width from labels, maxWidth keyed by column key)
   const layout = resolveLayout(options);
   const { colWidths, cellWidths, labelWidths } = calculateWidths(
     rows,
     columns,
-    keys,
+    specs,
     header,
-    options,
     layout,
   );
 
@@ -282,22 +411,14 @@ export function table(
     ),
   );
 
-  // Style
-  const style = options.style ?? {};
-  const headColor = style.head;
-  const borderColor = style.border;
-  const compact = style.compact ?? true;
+  const compact = !options.rowSeparators;
 
   // Header row — truncate to the same width as data cells before styling so a
-  // narrow maxWidth/colWidths does not leave an over-wide header that breaks the frame.
+  // narrow maxWidth/width does not leave an over-wide header that breaks the frame.
   const headerRow = header && columns.length > 0 ? columns : undefined;
   const styledHeader = headerRow?.map((h, i) => {
-    let styled = applyHeaderStyle(
-      truncateCell(h, colWidths[i], truncChar, labelWidths[i]),
-      headerStyle,
-    );
-    if (headColor) styled = applyColorChain(styled, headColor);
-    return styled;
+    const label = truncateCell(h, colWidths[i], truncChar, labelWidths[i]);
+    return headerStyle === "none" ? label : applyStyleChain(colorizer, label, headerStyle);
   });
   // Styling only wraps the label in escape sequences, which carry no display
   // width, so an untruncated label keeps the width measured for it.
@@ -305,11 +426,13 @@ export function table(
     labelWidths[i] <= colWidths[i] ? labelWidths[i] : stringWidth(styled),
   );
 
-  // Resolve alignment (keyed by column key)
-  const getAlign = buildAlignFn(options, keys);
+  const getAlign = buildAlignFn(specs);
 
   // Apply border color wrapper
-  const bc = borderColor ? (s: string) => applyColorChain(s, borderColor) : (s: string) => s;
+  const { borderColor } = options;
+  const bc = borderColor
+    ? (s: string) => applyStyleChain(colorizer, s, borderColor)
+    : (s: string) => s;
 
   // Render
   if (layout.border === "none") {
@@ -319,7 +442,7 @@ export function table(
       truncated,
       truncatedWidths,
       colWidths,
-      layout.colPadding,
+      layout.gap,
       layout.padLeft,
       layout.padRight,
       getAlign,
@@ -381,80 +504,76 @@ function cellToString(value: unknown): string {
 /**
  * Normalizes heterogeneous input data into a uniform rows/columns structure.
  *
- * `columns` holds the display labels (header text); `keys` holds the underlying
- * column identifiers used to resolve alignment, maxWidth, and per-column options.
+ * `columns` holds the display labels (header text); `specs` holds the per-column
+ * settings, one entry per column, resolved by position.
  */
 function normalizeData(
-  data: unknown[][] | Record<string, unknown>[],
-  options: TableOptions,
-): { rows: string[][]; columns: string[]; keys: string[] } {
-  if (data.length === 0) return { rows: [], columns: [], keys: [] };
+  data: readonly (readonly unknown[])[] | readonly Record<string, unknown>[],
+  headerProvided: boolean,
+  columnSpecs: ColumnSpec[] | undefined,
+): { rows: string[][]; columns: string[]; specs: ColumnSpec[] } {
+  if (data.length === 0) return { rows: [], columns: [], specs: [] };
 
   // Array of arrays
   const firstDefinedIndex = data.findIndex((row) => row != null);
   const firstDefined = data[firstDefinedIndex];
-  if (firstDefined == null) return { rows: [], columns: [], keys: [] };
+  if (firstDefined == null) return { rows: [], columns: [], specs: [] };
 
   if (Array.isArray(firstDefined)) {
-    const arrayData = data as unknown[][];
-    const headerProvided = options.header !== false;
-    const explicitColumns = options.columns;
+    const arrayData = data as readonly (readonly unknown[])[];
     // When explicit columns are supplied they serve as the header and every
     // array row is data; only auto-consume row 0 as the header when no columns
     // are given (matching the object-array branch, which never drops a row).
-    const consumeFirstRowAsHeader = headerProvided && explicitColumns === undefined;
+    const consumeFirstRowAsHeader = headerProvided && columnSpecs === undefined;
     const rawColumns =
-      explicitColumns?.map(cellToString) ??
+      columnSpecs?.map((spec) => cellToString(spec.label ?? spec.key)) ??
       (consumeFirstRowAsHeader ? (arrayData[firstDefinedIndex] ?? []).map(cellToString) : []);
     const rawRows = arrayData.map((row, index) =>
       consumeFirstRowAsHeader && index === firstDefinedIndex
         ? undefined
         : row == null
           ? []
-          : (row as unknown[]).map(cellToString),
+          : row.map(cellToString),
     );
     const normalizedRows = rawRows.filter((row): row is string[] => row !== undefined);
     let colCount = rawColumns.length;
     for (const row of normalizedRows) colCount = Math.max(colCount, row.length);
-    const keys = Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? String(index));
+    const specs = Array.from(
+      { length: colCount },
+      (_, index): ColumnSpec => columnSpecs?.[index] ?? { key: String(index) },
+    );
     const columns = headerProvided
-      ? Array.from({ length: colCount }, (_, index) =>
-          cellToString(
-            ownValue<string>(options.headerLabels, keys[index]) ?? rawColumns[index] ?? "",
-          ),
-        )
+      ? Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? "")
       : [];
     const rows = normalizedRows.map((row) =>
       Array.from({ length: colCount }, (_, index) => row[index] ?? ""),
     );
-    return { rows, columns, keys };
+    return { rows, columns, specs };
   }
 
   // Array of objects — derive the column set from the union of all row keys so
   // keys present only on later rows are not silently dropped.
-  const objData = data as Record<string, unknown>[];
-  let keys = options.columns;
-  if (!keys) {
+  const objData = data as readonly Record<string, unknown>[];
+  let specs = columnSpecs;
+  if (!specs) {
     const seen = new Set<string>();
-    keys = [];
+    specs = [];
     for (const obj of objData) {
       if (obj == null) continue;
       for (const k of Object.keys(obj)) {
         if (!seen.has(k)) {
           seen.add(k);
-          keys.push(k);
+          specs.push({ key: k });
         }
       }
     }
   }
-  const labels = keys.map((col) =>
-    cellToString(ownValue<string>(options.headerLabels, col) ?? col),
-  );
+  const labels = specs.map((spec) => cellToString(spec.label ?? spec.key));
   const rows = Array.from(objData, (obj) =>
-    (keys as string[]).map((col) => cellToString(ownValue(obj, col))),
+    (specs as ColumnSpec[]).map((spec) => cellToString(ownValue(obj, spec.key))),
   );
 
-  return { rows, columns: labels, keys };
+  return { rows, columns: labels, specs };
 }
 
 /**
@@ -466,12 +585,11 @@ function normalizeData(
 function calculateWidths(
   rows: string[][],
   labels: string[],
-  keys: string[],
+  specs: ColumnSpec[],
   header: boolean,
-  options: TableOptions,
   layout: TableLayout,
 ): { colWidths: number[]; cellWidths: number[][]; labelWidths: number[] } {
-  let colCount = Math.max(labels.length, keys.length);
+  let colCount = Math.max(labels.length, specs.length);
   for (const row of rows) colCount = Math.max(colCount, row.length);
   const widths = new Array<number>(colCount).fill(0);
   const labelWidths: number[] = [];
@@ -496,51 +614,20 @@ function calculateWidths(
     cellWidths[r] = rowWidths;
   }
 
-  // Apply maxWidth (by column key). A non-positive maxWidth is treated as "no
-  // limit" rather than clamping to 0, which would collapse the column and cause
-  // truncation/overflow against the truncation-character width.
-  const maxWidth = options.maxWidth;
-  if (maxWidth && keys.length > 0) {
-    for (let i = 0; i < keys.length; i++) {
-      const col = keys[i];
-      const limit = ownValue<number>(maxWidth, col);
-      const bound = spanOption(limit);
-      if (bound !== undefined) widths[i] = Math.min(widths[i], bound);
+  for (let i = 0; i < specs.length && i < widths.length; i++) {
+    const { maxWidth, width } = specs[i];
+    if (maxWidth !== undefined && Number.isFinite(maxWidth)) {
+      widths[i] = Math.min(widths[i], maxWidth, MAX_RENDER_WIDTH);
     }
-  }
-
-  // Apply colWidths (by index, fixed width overrides)
-  const colWidths = options.colWidths;
-  if (colWidths) {
-    for (let i = 0; i < colWidths.length && i < widths.length; i++) {
-      const total = spanOption(colWidths[i]);
-      if (total !== undefined) {
-        // colWidths specifies total column width including padding
-        // Internal content width = colWidths - padding
-        const contentWidth = total - layout.padLeft - layout.padRight;
-        widths[i] = Math.max(contentWidth, 1);
-      }
+    // width is the total column width including padding; the content width is
+    // what remains, and never drops below one cell.
+    if (width !== undefined) {
+      const contentWidth = Math.min(width, MAX_RENDER_WIDTH) - layout.padLeft - layout.padRight;
+      widths[i] = Math.max(contentWidth, 1);
     }
   }
 
   return { colWidths: widths, cellWidths, labelWidths };
-}
-
-/** Coerces user-provided spacing to a safe number of spaces. */
-function normalizePadding(value: number | undefined, fallback: number): number {
-  if (value === undefined) return fallback;
-  return Math.min(finiteInteger(value, 0) ?? 0, MAX_RENDER_WIDTH);
-}
-
-/**
- * Reads a width option: a positive number becomes an integer of at least 1,
- * capped at {@link MAX_RENDER_WIDTH}. Anything else (zero, negative, NaN, Infinity,
- * non-numbers) means "automatic" and yields undefined.
- */
-function spanOption(value: unknown): number | undefined {
-  if (typeof value !== "number" || !(value > 0)) return undefined;
-  const integer = finiteInteger(value, 0);
-  return integer === undefined ? undefined : Math.min(Math.max(integer, 1), MAX_RENDER_WIDTH);
 }
 
 /**
@@ -561,42 +648,13 @@ function truncateCell(
 }
 
 /**
- * Applies a text style (bold, dim, underline) to a header cell string.
+ * Applies a dot-chained style (for example "cyan.bold") to text. The chain was
+ * validated up front, so every segment names a built-in style.
  */
-function applyHeaderStyle(text: string, style: string): string {
-  switch (style) {
-    case "bold":
-      return c.bold(text);
-    case "dim":
-      return c.dim(text);
-    case "underline":
-      return c.underline(text);
-    default:
-      return text;
-  }
-}
-
-/**
- * Applies a dot-chained color/style string to text (e.g. "red", "cyan.bold", "dim").
- *
- * Accessing an unknown style on the color proxy throws; any such failure is
- * caught and the original (uncolored) text is returned so an unrecognized style
- * name in user options degrades gracefully instead of crashing the render.
- */
-function applyColorChain(text: string, chain: string): string {
-  try {
-    const parts = chain.split(".");
-    let result: unknown = c;
-    for (const part of parts) {
-      if (!isStyleName(part)) return text;
-      result = (result as Record<string, unknown>)[part];
-      if (typeof result !== "function" && typeof result !== "object") return text;
-    }
-    if (typeof result === "function") return (result as (s: string) => string)(text);
-    return text;
-  } catch {
-    return text;
-  }
+function applyStyleChain(colorizer: ColorProxy, text: string, chain: string): string {
+  let node: Record<string, unknown> = colorizer;
+  for (const part of chain.split(".")) node = node[part] as Record<string, unknown>;
+  return (node as unknown as ColorFn)(text);
 }
 
 /**
@@ -625,21 +683,10 @@ function padCell(
 }
 
 /**
- * Builds an alignment resolver function that handles both Record-based and array-based alignment.
+ * Builds an alignment resolver that reads each column's {@link ColumnSpec.align}.
  */
-function buildAlignFn(
-  options: TableOptions,
-  columns: string[],
-): (i: number) => "left" | "right" | "center" {
-  const { align, colAligns } = options;
-  return (i: number): "left" | "right" | "center" => {
-    // colAligns (array) takes precedence
-    if (colAligns?.[i]) return colAligns[i];
-    // Then align (Record by column name)
-    if (align && columns[i])
-      return ownValue<"left" | "right" | "center">(align, columns[i]) ?? "left";
-    return "left";
-  };
+function buildAlignFn(specs: ColumnSpec[]): (i: number) => "left" | "right" | "center" {
+  return (i) => specs[i]?.align ?? "left";
 }
 
 // ── Renderers ──
@@ -650,14 +697,14 @@ function renderNone(
   rows: string[][],
   rowWidths: number[][],
   widths: number[],
-  padding: number,
+  gap: number,
   padLeft: number,
   padRight: number,
   getAlign: (i: number) => "left" | "right" | "center",
 ): string {
   const lines: string[] = [];
-  const pad = " ".repeat(padding);
-  // Width calculation already charged every explicit colWidths entry for the
+  const pad = " ".repeat(gap);
+  // Width calculation already charged every explicit ColumnSpec.width for the
   // left and right padding, so the renderer has to put it back; otherwise the
   // column comes out narrower than the caller asked for.
   const pl = " ".repeat(padLeft);
@@ -688,9 +735,9 @@ function renderSimple(
   chars?: Required<TableChars>,
 ): string {
   const lines: string[] = [];
-  const middle = bc(chars?.middle ?? " | ");
-  const separator = chars ? chars.mid : "-";
-  const separatorMiddle = chars?.["mid-mid"] ?? "-|-";
+  const middle = bc(chars?.vertical ?? " | ");
+  const separator = chars ? chars.horizontal : "-";
+  const separatorMiddle = chars?.cross ?? "-|-";
   // Same contract as the other modes: padding charged to the width is rendered,
   // border glyphs go through the resolved border colorizer, and a non-compact
   // table separates its data rows.
@@ -737,20 +784,15 @@ function renderBoxed(
     return bc(left + widths.map((_, i) => fill.repeat(cellWidth(i))).join(mid) + right);
   };
 
-  const topLine = hLine(chars["top-left"], chars.top, chars["top-mid"], chars["top-right"]);
-  const midLine = hLine(chars["left-mid"], chars.mid, chars["mid-mid"], chars["right-mid"]);
-  const botLine = hLine(
-    chars["bottom-left"],
-    chars.bottom,
-    chars["bottom-mid"],
-    chars["bottom-right"],
-  );
+  const topLine = hLine(chars.topLeft, chars.top, chars.topMid, chars.topRight);
+  const midLine = hLine(chars.leftMid, chars.horizontal, chars.cross, chars.rightMid);
+  const botLine = hLine(chars.bottomLeft, chars.bottom, chars.bottomMid, chars.bottomRight);
 
   const formatRow = (row: string[], cellWidths: number[] | undefined) => {
     const cells = row.map(
       (cell, i) => pl + padCell(cell, widths[i], getAlign(i), cellWidths?.[i]) + pr,
     );
-    return bc(chars.left) + cells.join(bc(chars.middle)) + bc(chars.right);
+    return bc(chars.left) + cells.join(bc(chars.vertical)) + bc(chars.right);
   };
 
   if (topLine) lines.push(topLine);

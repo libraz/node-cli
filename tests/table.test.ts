@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Writable } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import {
   color,
   resetColorEnabled,
@@ -6,7 +7,7 @@ import {
   stringWidth,
   stripAnsi,
 } from "../src/output/color.js";
-import { table } from "../src/output/table.js";
+import { type ColumnSpec, table } from "../src/output/table.js";
 
 describe("table", () => {
   beforeEach(() => {
@@ -40,24 +41,29 @@ describe("table", () => {
     expect(result).toContain("alice");
   });
 
-  it("uses headerLabels", () => {
+  it("uses ColumnSpec.label", () => {
     const result = table([{ name: "alice" }], {
-      columns: ["name"],
-      headerLabels: { name: "Full Name" },
+      columns: [{ key: "name", label: "Full Name" }],
     });
     expect(result).toContain("Full Name");
   });
 
-  it("uses headerLabels for array input", () => {
+  it("uses ColumnSpec.label for array input", () => {
     const result = table(
       [
-        ["name", "role"],
         ["alice", "admin"],
+        ["bob", "user"],
       ],
-      { headerLabels: { name: "Full Name", role: "Access" } },
+      {
+        columns: [
+          { key: "name", label: "Full Name" },
+          { key: "role", label: "Access" },
+        ],
+      },
     );
     expect(result).toContain("Full Name");
     expect(result).toContain("Access");
+    expect(result).not.toContain("role");
   });
 
   it("renders with simple border", () => {
@@ -87,8 +93,7 @@ describe("table", () => {
 
   it("aligns columns", () => {
     const result = table([{ val: "1" }, { val: "100" }], {
-      columns: ["val"],
-      align: { val: "right" },
+      columns: [{ key: "val", align: "right" }],
     });
     expect(result.split("\n").slice(1)).toEqual(["  1", "100"]);
   });
@@ -119,16 +124,14 @@ describe("table", () => {
     expect(table([null] as unknown as Record<string, unknown>[])).toBe("");
   });
 
-  it("normalizes negative and non-finite padding", () => {
-    const borderless = table([["Name"], ["alice"]], { padding: -1 });
-    expect(new Set(borderless.split("\n").map(stringWidth)).size).toBe(1);
-
+  it("caps padding larger than a render can hold", () => {
     const bordered = table([["Name"], ["alice"]], {
       border: "single",
-      style: { "padding-left": -1, "padding-right": Number.POSITIVE_INFINITY },
+      paddingLeft: 2 ** 31,
+      paddingRight: 2 ** 32,
     });
-    // Every row lines up: an unclamped padding would produce ragged rows or a
-    // RangeError from repeating a non-finite count.
+    // Every row lines up, and the padding is capped instead of building a
+    // multi-gigabyte string.
     expect(new Set(bordered.split("\n").map(stringWidth)).size).toBe(1);
   });
 
@@ -201,20 +204,20 @@ describe("table", () => {
       {
         chars: {
           top: "=",
-          "top-left": "+",
-          "top-mid": "+",
-          "top-right": "+",
+          topLeft: "+",
+          topMid: "+",
+          topRight: "+",
           bottom: "=",
-          "bottom-left": "+",
-          "bottom-mid": "+",
-          "bottom-right": "+",
+          bottomLeft: "+",
+          bottomMid: "+",
+          bottomRight: "+",
           left: "|",
           right: "|",
-          middle: "|",
-          "left-mid": "+",
-          "right-mid": "+",
-          mid: "=",
-          "mid-mid": "+",
+          vertical: "|",
+          leftMid: "+",
+          rightMid: "+",
+          horizontal: "=",
+          cross: "+",
         },
       },
     );
@@ -232,9 +235,9 @@ describe("table", () => {
       {
         border: "simple",
         chars: {
-          middle: " ~ ",
-          mid: "=",
-          "mid-mid": "=+=",
+          vertical: " ~ ",
+          horizontal: "=",
+          cross: "=+=",
         },
       },
     );
@@ -242,11 +245,11 @@ describe("table", () => {
     expect(result).toContain("=+=");
   });
 
-  it("supports compact mode (no row separators)", () => {
+  it("supports rowSeparators: false (no row separators)", () => {
     const result = table([{ name: "alice" }, { name: "bob" }, { name: "charlie" }], {
       columns: ["name"],
       border: "single",
-      style: { compact: true },
+      rowSeparators: false,
     });
     const lines = result.split("\n");
     // With compact, there should be no mid-lines between data rows
@@ -256,7 +259,7 @@ describe("table", () => {
     expect(midLines.length).toBe(1); // only after header
   });
 
-  it("defaults to compact mode (no row separators)", () => {
+  it("defaults to no row separators", () => {
     const result = table([{ name: "alice" }, { name: "bob" }, { name: "charlie" }], {
       columns: ["name"],
       border: "single",
@@ -266,11 +269,11 @@ describe("table", () => {
     expect(midLines.length).toBe(1); // only after header
   });
 
-  it("supports non-compact mode with row separators", () => {
+  it("supports rowSeparators: true", () => {
     const result = table([{ name: "alice" }, { name: "bob" }, { name: "charlie" }], {
       columns: ["name"],
       border: "single",
-      style: { compact: false },
+      rowSeparators: true,
     });
     const lines = result.split("\n");
     const midLines = lines.filter((l) => l.includes("├"));
@@ -278,13 +281,18 @@ describe("table", () => {
     expect(midLines.length).toBe(3);
   });
 
-  it("supports colAligns (array-based alignment)", () => {
+  it("aligns each column by its own ColumnSpec", () => {
     const result = table(
       [
         { a: "1", b: "hello" },
         { a: "100", b: "hi" },
       ],
-      { columns: ["a", "b"], colAligns: ["right", "center"] },
+      {
+        columns: [
+          { key: "a", align: "right" },
+          { key: "b", align: "center" },
+        ],
+      },
     );
     const lines = result.split("\n");
     // First data row: "1" should be right-aligned (leading spaces)
@@ -297,11 +305,10 @@ describe("table", () => {
     expect(lines.slice(1)).toEqual(["  1  hello", "100   hi  "]);
   });
 
-  it("supports colWidths (fixed column widths)", () => {
+  it("supports ColumnSpec.width (fixed column width, padding included)", () => {
     const result = table([{ name: "alice" }], {
-      columns: ["name"],
+      columns: [{ key: "name", width: 20 }],
       border: "single",
-      colWidths: [20],
     });
     const lines = result.split("\n");
     // Top border should be 20 chars wide (including padding)
@@ -309,11 +316,12 @@ describe("table", () => {
     expect(topLine.length).toBe(22); // ┌ + 20 + ┐
   });
 
-  it("supports custom padding-left and padding-right", () => {
+  it("supports custom paddingLeft and paddingRight", () => {
     const result = table([{ x: "hi" }], {
       columns: ["x"],
       border: "single",
-      style: { "padding-left": 3, "padding-right": 3 },
+      paddingLeft: 3,
+      paddingRight: 3,
     });
     // Cell content should have 3 spaces on each side
     const dataLine = result.split("\n").find((l) => l.includes("hi"));
@@ -323,11 +331,10 @@ describe("table", () => {
     }
   });
 
-  it("supports custom truncate character", () => {
+  it("supports a custom ellipsis", () => {
     const result = table([{ name: "alexander" }], {
-      columns: ["name"],
-      maxWidth: { name: 5 },
-      truncate: "..",
+      columns: [{ key: "name", maxWidth: 5 }],
+      ellipsis: "..",
     });
     expect(result).toContain("..");
     expect(result).not.toContain("…");
@@ -336,8 +343,7 @@ describe("table", () => {
   it("preserves ANSI color when truncating cells", () => {
     setColorEnabled(true);
     const result = table([{ name: color.red("alexander") }], {
-      columns: ["name"],
-      maxWidth: { name: 5 },
+      columns: [{ key: "name", maxWidth: 5 }],
     });
     expect(result).toContain("\x1b[31m");
     expect(stripAnsi(result)).toContain("alex…");
@@ -345,24 +351,15 @@ describe("table", () => {
 
   it("does not split ZWJ emoji graphemes when truncating cells", () => {
     const result = table([{ icon: "❤️‍🔥abcdef" }], {
-      columns: ["icon"],
-      maxWidth: { icon: 3 },
+      columns: [{ key: "icon", maxWidth: 3 }],
     });
     expect(stripAnsi(result)).toContain("❤️‍🔥…");
   });
 
-  it("does not throw for documented grey border style", () => {
+  it("accepts the documented grey border colour", () => {
     let result = "";
     expect(() => {
-      result = table([{ a: 1 }], { border: "single", style: { border: "grey" } });
-    }).not.toThrow();
-    expect(result).toContain("1");
-  });
-
-  it("does not throw for an unknown border style", () => {
-    let result = "";
-    expect(() => {
-      result = table([{ a: 1 }], { border: "single", style: { border: "notacolor" } });
+      result = table([{ a: 1 }], { border: "single", borderColor: "grey" });
     }).not.toThrow();
     expect(result).toContain("1");
   });
@@ -390,12 +387,15 @@ describe("table", () => {
     expect(inferred).toContain("name");
 
     const explicit = table([[1]], {
-      columns: ["va\x1b]2;spoofed\x07lue"],
-      headerLabels: { value: "ignored" },
+      columns: [{ key: "value", label: "la\x1b]2;spoofed\x07bel" }],
       border: "single",
     });
     expect(explicit).not.toContain("\x1b]2;");
-    expect(explicit).toContain("ignored");
+    expect(explicit).toContain("label");
+
+    const hostileColumn = table([[1]], { columns: ["va\x1b]2;spoofed\x07lue"], border: "single" });
+    expect(hostileColumn).not.toContain("\x1b]2;");
+    expect(hostileColumn).toContain("value");
   });
 
   it("preserves SGR color sequences in cell content while sanitizing controls", () => {
@@ -432,18 +432,12 @@ describe("table", () => {
     expect(result.slice(closeIndex + closeLink.length, borderAfterClose)).not.toContain("\x1b");
   });
 
-  it("handles maxWidth of 0 without throwing or overflowing", () => {
-    let result = "";
-    expect(() => {
-      result = table([{ name: "alexander" }], {
-        columns: ["name"],
-        border: "single",
-        maxWidth: { name: 0 },
-      });
-    }).not.toThrow();
-    const lines = result.split("\n");
-    // All bordered lines must share the same display width (no overflow).
-    const widths = new Set(lines.map((l) => l.length));
+  it("keeps a framed table rectangular at the narrowest maxWidth", () => {
+    const result = table([{ name: "alexander" }], {
+      columns: [{ key: "name", maxWidth: 1 }],
+      border: "single",
+    });
+    const widths = new Set(result.split("\n").map((l) => l.length));
     expect(widths.size).toBe(1);
   });
 
@@ -494,9 +488,8 @@ describe("table", () => {
 
   it("never lets a wide truncation marker exceed maxWidth", () => {
     const result = table([{ name: "abcdef" }], {
-      columns: ["name"],
-      maxWidth: { name: 1 },
-      truncate: "...",
+      columns: [{ key: "name", maxWidth: 1 }],
+      ellipsis: "...",
       border: "single",
     });
     const dataLine = result.split("\n").find((line) => line.includes("."));
@@ -504,27 +497,25 @@ describe("table", () => {
     expect(stripAnsi(dataLine ?? "")).not.toContain("...");
   });
 
-  it("colAligns takes precedence over align", () => {
-    const result = table([{ val: "1" }, { val: "100" }], {
-      columns: ["val"],
-      align: { val: "left" },
-      colAligns: ["right"],
-    });
-    const lines = result.split("\n");
-    const line = lines.find((l) => l.includes("1") && !l.includes("100"));
-    expect(line).toBeDefined();
-    if (line) {
-      const idx = line.indexOf("1");
-      expect(idx).toBeGreaterThan(0); // right-aligned despite align saying left
-    }
+  it("renders a column that no ColumnSpec describes with the defaults", () => {
+    const result = table(
+      [
+        { a: "1", b: "x" },
+        { a: "100", b: "y" },
+      ],
+      {
+        columns: [{ key: "a", align: "right" }, "b"],
+      },
+    );
+    expect(result.split("\n").slice(1)).toEqual(["  1  x", "100  y"]);
   });
 });
 
 describe("untrusted table decoration", () => {
   it("strips control sequences from the truncate marker and border characters", () => {
     const marked = table([{ a: "abcdefghij" }], {
-      colWidths: [6],
-      truncate: "\x1b[2J~",
+      columns: [{ key: "a", width: 6 }],
+      ellipsis: "\x1b[2J~",
     });
     expect(marked).not.toContain("\x1b[2J");
 
@@ -562,35 +553,27 @@ describe("table input hardening", () => {
     expect(named).not.toContain("native code");
   });
 
-  it("leaves text unstyled for protocol names in style.head and style.border", () => {
+  it("rejects protocol names as style names instead of resolving them", () => {
     setColorEnabled(true);
-    for (const border of ["none", "simple", "single"] as const) {
-      for (const name of ["toString", "constructor", "red.constructor", "valueOf"]) {
-        const out = table([{ a: "x" }], { border, style: { head: name, border: name } });
-        expect(out).not.toContain("native code");
-        expect(out).not.toContain("[object");
-        expect(out).toContain("x");
-      }
+    for (const name of ["toString", "constructor", "red.constructor", "valueOf"]) {
+      expect(() => table([{ a: "x" }], { headerStyle: name as never })).toThrow(RangeError);
+      expect(() => table([{ a: "x" }], { borderColor: name as never })).toThrow(RangeError);
     }
   });
 
-  it("survives infinite, huge and fractional widths and padding", () => {
+  it("survives huge widths and padding", () => {
     const rows = [{ header: "abc" }, { header: "de" }];
     for (const border of ["none", "simple", "single"] as const) {
       expect(() =>
         table(rows, {
           border,
-          colWidths: [Number.POSITIVE_INFINITY],
-          padding: 1e10,
-          style: { "padding-left": 1e10, "padding-right": Number.POSITIVE_INFINITY },
+          columns: [{ key: "header", width: 1e10 }],
+          gap: 1e10,
+          paddingLeft: 1e10,
+          paddingRight: 2 ** 32,
         }),
       ).not.toThrow();
-      expect(() => table(rows, { border, colWidths: [1e10] })).not.toThrow();
     }
-    const out = table(rows, { maxWidth: { header: 0.5 } });
-    expect(stringWidth(out.split("\n")[0])).toBe(1);
-    expect(out.split("\n")[0]).not.toBe("");
-    expect(table(rows, { maxWidth: { header: Number.NaN } })).toContain("abc");
   });
 
   it("converts cell values String() cannot convert", () => {
@@ -628,10 +611,11 @@ describe("borderless and simple modes honour every table option", () => {
       const out = table([["a"]], {
         border,
         header: false,
-        colWidths: [8],
-        style: { "padding-left": 2, "padding-right": 2 },
+        columns: [{ key: "0", width: 8 }],
+        paddingLeft: 2,
+        paddingRight: 2,
       });
-      // colWidths counts padding, so the rendered column must be that wide.
+      // ColumnSpec.width counts padding, so the rendered column must be that wide.
       expect(stringWidth(out)).toBe(8);
     }
   });
@@ -640,22 +624,418 @@ describe("borderless and simple modes honour every table option", () => {
     setColorEnabled(true);
     const out = table([["a"]], {
       border: "simple",
-      style: { border: "red" },
+      borderColor: "red",
     });
     const separator = out.split("\n")[1];
     expect(separator.startsWith("\x1b[31m")).toBe(true);
     expect(separator.endsWith("\x1b[39m")).toBe(true);
   });
 
-  it("separates data rows of a simple table when not compact", () => {
+  it("separates data rows of a simple table with rowSeparators", () => {
     const compact = table([["a"], ["b"]], { border: "simple", header: false });
     const spaced = table([["a"], ["b"]], {
       border: "simple",
       header: false,
-      style: { compact: false },
+      rowSeparators: true,
     });
     expect(compact.split("\n")).toHaveLength(2);
     expect(spaced.split("\n")).toHaveLength(3);
     expect(spaced.split("\n")[1]).toMatch(/^-+$/);
+  });
+});
+
+describe("column normalization", () => {
+  // Model (pairwise, strength 2):
+  //   dataShape   {objects, arrays}
+  //   columnEntry {string, spec-key-only, spec-with-label}
+  //   align       {none, left, right, center}
+  //   width       {none, valid}
+  //   maxWidth    {none, valid, infinity}
+  //   border      {none, simple, rounded}
+  // Constraint: columnEntry = string implies align, width and maxWidth = none,
+  //   because a bare string carries no per-column settings.
+  // Seed: none (greedy cover over the constrained product; 16 rows).
+  // Expected output is derived from the column rules: the label is
+  // `label ?? key`, `width` fixes the column including padding and wins over
+  // `maxWidth`, `maxWidth` caps the content, and alignment applies to the
+  // header and the data cells alike.
+  type Row = [
+    dataShape: "objects" | "arrays",
+    columnEntry: "string" | "spec-key-only" | "spec-with-label",
+    align: "none" | "left" | "right" | "center",
+    width: "none" | "valid",
+    maxWidth: "none" | "valid" | "infinity",
+    border: "none" | "simple" | "rounded",
+  ];
+  const rows: Row[] = [
+    ["objects", "string", "none", "none", "none", "none"],
+    ["objects", "spec-key-only", "left", "valid", "valid", "simple"],
+    ["arrays", "spec-key-only", "right", "none", "infinity", "rounded"],
+    ["arrays", "spec-with-label", "center", "valid", "none", "none"],
+    ["objects", "spec-with-label", "none", "valid", "infinity", "rounded"],
+    ["arrays", "spec-with-label", "none", "none", "valid", "simple"],
+    ["objects", "spec-key-only", "right", "valid", "none", "none"],
+    ["objects", "spec-key-only", "center", "none", "valid", "rounded"],
+    ["arrays", "spec-with-label", "left", "none", "none", "rounded"],
+    ["objects", "spec-key-only", "left", "none", "infinity", "none"],
+    ["objects", "spec-key-only", "center", "none", "infinity", "simple"],
+    ["objects", "spec-with-label", "right", "none", "none", "simple"],
+    ["objects", "spec-key-only", "none", "none", "valid", "none"],
+    ["arrays", "string", "none", "none", "none", "simple"],
+    ["objects", "string", "none", "none", "none", "rounded"],
+    ["objects", "spec-key-only", "right", "none", "valid", "none"],
+  ];
+
+  const FIXED_WIDTH = 12;
+  const MAX_WIDTH = 5;
+  const LONG = "abcdefgh";
+
+  const fitTo = (text: string, width: number) =>
+    text.length <= width ? text : `${text.slice(0, width - 1)}…`;
+  const alignIn = (text: string, width: number, align: "left" | "right" | "center") => {
+    const diff = width - text.length;
+    if (align === "right") return " ".repeat(diff) + text;
+    if (align === "center") {
+      const left = Math.floor(diff / 2);
+      return " ".repeat(left) + text + " ".repeat(diff - left);
+    }
+    return text + " ".repeat(diff);
+  };
+
+  test.each(rows)(
+    "%s / %s / align %s / width %s / maxWidth %s / border %s",
+    (shape, entry, align, width, maxWidth, border) => {
+      const column: Record<string, unknown> = { key: "name" };
+      if (entry === "spec-with-label") column.label = "Label";
+      if (align !== "none") column.align = align;
+      if (width === "valid") column.width = FIXED_WIDTH;
+      if (maxWidth === "valid") column.maxWidth = MAX_WIDTH;
+      if (maxWidth === "infinity") column.maxWidth = Number.POSITIVE_INFINITY;
+      const columns = [entry === "string" ? "name" : (column as unknown as ColumnSpec)];
+      const data = shape === "objects" ? [{ name: "ab" }, { name: LONG }] : [["ab"], [LONG]];
+
+      const out = table(data, { columns, border });
+
+      const pad = border === "rounded" ? 1 : 0;
+      const contentWidth =
+        width === "valid" ? FIXED_WIDTH - 2 * pad : maxWidth === "valid" ? MAX_WIDTH : LONG.length;
+      const label = entry === "spec-with-label" ? "Label" : "name";
+      const cell = (text: string) =>
+        " ".repeat(pad) +
+        alignIn(fitTo(text, contentWidth), contentWidth, align === "none" ? "left" : align) +
+        " ".repeat(pad);
+      const body = [label, "ab", LONG].map(cell);
+      const [head, ...data1] = body;
+      let expected: string[];
+      if (border === "rounded") {
+        const bar = "─".repeat(contentWidth + 2 * pad);
+        expected = [
+          `╭${bar}╮`,
+          `│${head}│`,
+          `├${bar}┤`,
+          ...data1.map((line) => `│${line}│`),
+          `╰${bar}╯`,
+        ];
+      } else if (border === "simple") {
+        expected = [head, "-".repeat(contentWidth), ...data1];
+      } else {
+        expected = [head, ...data1];
+      }
+      expect(out.split("\n")).toEqual(expected);
+    },
+  );
+
+  it("keys per-column settings by position for array data and ignores ColumnSpec.key", () => {
+    const out = table(
+      [
+        ["x", "yy"],
+        ["zzz", "w"],
+      ],
+      { columns: [{ key: "ignored", label: "A", align: "right" }, "B"] },
+    );
+    expect(out.split("\n")).toEqual(["  A  B ", "  x  yy", "zzz  w "]);
+  });
+
+  it("uses a bare string column as the header for array data", () => {
+    const out = table([["x"]], { columns: ["Header"] });
+    expect(out.split("\n")).toEqual(["Header", "x     "]);
+  });
+
+  it("falls back to key for a spec without a label in array data", () => {
+    const out = table([["x"]], { columns: [{ key: "k" }] });
+    expect(out.split("\n")).toEqual(["k", "x"]);
+  });
+
+  it("treats the first array row as the header when no columns are given", () => {
+    const out = table([["H"], ["x"]]);
+    expect(out.split("\n")).toEqual(["H", "x"]);
+  });
+
+  it("selects and orders object columns by key", () => {
+    const out = table([{ a: "1", b: "2", c: "3" }], { columns: ["c", { key: "a", label: "A" }] });
+    expect(out.split("\n")).toEqual(["c  A", "3  1"]);
+  });
+
+  it("raises a width below the padding floor to the smallest honoured width", () => {
+    const out = table([{ a: "xyz" }], {
+      columns: [{ key: "a", width: 1 }],
+      border: "single",
+    });
+    // paddingLeft + paddingRight + 1 = 3 cells in total.
+    expect(out.split("\n")[0]).toBe("┌───┐");
+  });
+
+  it("lets width win over maxWidth", () => {
+    const out = table([{ a: "abcdefgh" }], {
+      columns: [{ key: "a", width: 6, maxWidth: 3 }],
+    });
+    expect(out.split("\n")[1]).toBe("abcde…");
+  });
+
+  it("maps every TableChars key to its position in a custom frame", () => {
+    const out = table(
+      [
+        ["1", "2"],
+        ["3", "4"],
+      ],
+      {
+        columns: ["a", "b"],
+        chars: {
+          top: "t",
+          topLeft: "1",
+          topMid: "2",
+          topRight: "3",
+          bottom: "b",
+          bottomLeft: "4",
+          bottomMid: "5",
+          bottomRight: "6",
+          left: "L",
+          right: "R",
+          vertical: "V",
+          leftMid: "7",
+          rightMid: "8",
+          horizontal: "h",
+          cross: "9",
+        },
+      },
+    );
+    expect(out.split("\n")).toEqual([
+      "1ttt2ttt3",
+      "L a V b R",
+      "7hhh9hhh8",
+      "L 1 V 2 R",
+      "L 3 V 4 R",
+      "4bbb5bbb6",
+    ]);
+  });
+
+  it("ignores the retired kebab-case chars keys", () => {
+    const out = table([{ a: "1" }], {
+      border: "single",
+      chars: { "top-left": "X" } as never,
+    });
+    expect(out).not.toContain("X");
+  });
+
+  it("separates borderless columns by gap", () => {
+    const out = table([["a", "b"]], { header: false, gap: 4 });
+    expect(out).toBe("a    b");
+  });
+
+  it("defaults gap to 2 and bordered padding to 1, borderless padding to 0", () => {
+    expect(table([["a", "b"]], { header: false })).toBe("a  b");
+    expect(table([["a"]], { header: false, border: "single" }).split("\n")[1]).toBe("│ a │");
+  });
+
+  it("ignores unknown option keys at run time", () => {
+    expect(table([{ a: "1" }], { retired: true } as never)).toBe(table([{ a: "1" }]));
+  });
+});
+
+describe("table colour follows the stream", () => {
+  const rows = [{ a: "x" }];
+  const bold = "\x1b[1m";
+
+  beforeEach(() => {
+    resetColorEnabled();
+    vi.stubEnv("NO_COLOR", "");
+    vi.stubEnv("FORCE_COLOR", "");
+    vi.stubEnv("TERM", "xterm");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    resetColorEnabled();
+  });
+
+  it("colours the header when the stream is a TTY", () => {
+    expect(table(rows, { stream: { isTTY: true } as unknown as Writable })).toContain(bold);
+  });
+
+  it("does not colour when the stream is not a TTY", () => {
+    expect(table(rows, { stream: { isTTY: false } as unknown as Writable })).not.toContain("\x1b[");
+  });
+
+  it("defaults to process.stdout", () => {
+    expect(table(rows)).toBe(table(rows, { stream: process.stdout }));
+  });
+
+  it("returns a string and never writes to the stream", () => {
+    const write = vi.fn();
+    const out = table(rows, { stream: { isTTY: true, write } as unknown as Writable });
+    expect(typeof out).toBe("string");
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("applies headerStyle and borderColor chains", () => {
+    const out = table(rows, {
+      border: "single",
+      headerStyle: "red.underline",
+      borderColor: "cyan",
+      stream: { isTTY: true } as unknown as Writable,
+    });
+    expect(out).toContain("\x1b[31m\x1b[4m");
+    expect(out).toContain("\x1b[36m");
+  });
+
+  it("leaves the header plain with headerStyle: none", () => {
+    const out = table(rows, {
+      headerStyle: "none",
+      stream: { isTTY: true } as unknown as Writable,
+    });
+    expect(out).not.toContain("\x1b[");
+  });
+});
+
+describe("table argument validation", () => {
+  const data = [{ a: "x" }];
+  const withWidth = (width: unknown) => ({ columns: [{ key: "a", width }] }) as never;
+  const withMaxWidth = (maxWidth: unknown) => ({ columns: [{ key: "a", maxWidth }] }) as never;
+
+  const expectRange = (fn: () => unknown) => {
+    expect(fn).toThrow(RangeError);
+    expect(fn).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+  };
+  const expectType = (fn: () => unknown) => {
+    expect(fn).toThrow(TypeError);
+    expect(fn).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
+  };
+
+  describe("ColumnSpec.width", () => {
+    test.each([0, -0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5])(
+      "rejects %s",
+      (value) => expectRange(() => table(data, withWidth(value))),
+    );
+    test.each([null, true, "3"])("rejects the non-number %s", (value) =>
+      expectType(() => table(data, withWidth(value))),
+    );
+    it("accepts a positive integer, 2^31 and 2^32, and an omitted value", () => {
+      expect(() => table(data, withWidth(3))).not.toThrow();
+      expect(() => table(data, withWidth(2 ** 31))).not.toThrow();
+      expect(() => table(data, withWidth(2 ** 32))).not.toThrow();
+      expect(() => table(data, withWidth(undefined))).not.toThrow();
+    });
+  });
+
+  describe("ColumnSpec.maxWidth", () => {
+    test.each([0, -0, -1, Number.NaN, Number.NEGATIVE_INFINITY, 0.5])("rejects %s", (value) =>
+      expectRange(() => table(data, withMaxWidth(value))),
+    );
+    test.each([null, false, "3"])("rejects the non-number %s", (value) =>
+      expectType(() => table(data, withMaxWidth(value))),
+    );
+    it("accepts Infinity as no limit, 2^31 and an omitted value", () => {
+      expect(table([{ a: "abcdefgh" }], withMaxWidth(Number.POSITIVE_INFINITY))).toContain(
+        "abcdefgh",
+      );
+      expect(() => table(data, withMaxWidth(2 ** 31))).not.toThrow();
+      expect(() => table(data, withMaxWidth(undefined))).not.toThrow();
+    });
+  });
+
+  describe.each(["gap", "paddingLeft", "paddingRight"] as const)("%s", (name) => {
+    const opts = (value: unknown) => ({ [name]: value }) as never;
+    test.each([-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2 ** 53, 0.5])(
+      "rejects %s",
+      (value) => expectRange(() => table(data, opts(value))),
+    );
+    test.each([null, true, "1"])("rejects the non-number %s", (value) =>
+      expectType(() => table(data, opts(value))),
+    );
+    it("accepts 0, -0, 2^31, 2^32 and an omitted value", () => {
+      for (const value of [0, -0, 2 ** 31, 2 ** 32, undefined]) {
+        expect(() => table(data, opts(value))).not.toThrow();
+      }
+    });
+  });
+
+  describe("style names", () => {
+    test.each(["headerStyle", "borderColor"] as const)("%s rejects unknown names", (name) => {
+      for (const value of ["nope", "red.nope", "", "赤", "toString", "red."]) {
+        expectRange(() => table(data, { [name]: value } as never));
+      }
+    });
+    test.each(["headerStyle", "borderColor"] as const)("%s rejects non-strings", (name) => {
+      for (const value of [null, 1, true, {}]) {
+        expectType(() => table(data, { [name]: value } as never));
+      }
+    });
+    it("validates every dot segment", () => {
+      expect(() => table(data, { headerStyle: "red.bold.underline" })).not.toThrow();
+      expectRange(() => table(data, { headerStyle: "red.bold.nope" as never }));
+    });
+    it("accepts none for headerStyle only", () => {
+      expect(() => table(data, { headerStyle: "none" })).not.toThrow();
+      expectRange(() => table(data, { borderColor: "none" as never }));
+    });
+    it("validates before looking at the data", () => {
+      expectRange(() => table([], { headerStyle: "nope" as never }));
+    });
+  });
+
+  describe("border names", () => {
+    test.each(["nope", "", "線", "toString", "SINGLE"])("rejects %s", (value) =>
+      expectRange(() => table(data, { border: value as never })),
+    );
+    test.each([null, 1, true])("rejects the non-string %s", (value) =>
+      expectType(() => table(data, { border: value as never })),
+    );
+    it("accepts every preset", () => {
+      for (const border of ["none", "simple", "rounded", "single", "double", "custom"] as const) {
+        expect(() => table(data, { border })).not.toThrow();
+      }
+    });
+  });
+
+  describe("columns", () => {
+    it("rejects an undefined or null entry", () => {
+      expectType(() => table(data, { columns: ["a", undefined] } as never));
+      expectType(() => table(data, { columns: [null] } as never));
+    });
+    it("rejects an entry that is neither a string nor a spec with a string key", () => {
+      expectType(() => table(data, { columns: [1] } as never));
+      expectType(() => table(data, { columns: [{}] } as never));
+      expectType(() => table(data, { columns: [{ key: 1 }] } as never));
+    });
+    it("rejects a non-array", () => {
+      expectType(() => table(data, { columns: "a" } as never));
+    });
+    it("reports a bad width inside a spec among valid ones", () => {
+      expectRange(() => table(data, { columns: ["a", { key: "a", width: 0 }] }));
+    });
+  });
+});
+
+describe("table truncation never hands truncateAnsi a rejected width", () => {
+  it("renders an empty column, a one-cell column and every border without throwing", () => {
+    for (const border of ["none", "simple", "single", "double", "rounded"] as const) {
+      expect(() => table([{ a: "" }], { border })).not.toThrow();
+      expect(() =>
+        table([{ a: "abcdef" }], { border, columns: [{ key: "a", maxWidth: 1 }] }),
+      ).not.toThrow();
+      expect(() =>
+        table([{ a: "abcdef" }], { border, columns: [{ key: "a", width: 1 }] }),
+      ).not.toThrow();
+    }
   });
 });
