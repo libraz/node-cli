@@ -4,6 +4,19 @@ Version 2.0.0 changes names, signatures and defaults across the public surface. 
 
 TypeScript reports most of these at compile time. The changes that appear only at runtime are items 1, 7, 8, 9 (exit codes), 10, 11, 16, 18, 19 and 20 to 27.
 
+## Changes that compile and still behave differently
+
+These raise no type error and no exception. Check them first, most likely to break callers at the top:
+
+- **Exit codes** (item 9): errors caused by user input exit with 64, not 1. End of input exits with 66 and cancellation with 130. Shell scripts and CI steps that test for 1 stop matching.
+- **Canonical option name** (item 20): with several long names, the first one is the key, not the last. `--colour, --color` moves from `ctx.options.color` to `ctx.options.colour`, and the old key reads `undefined`.
+- **camelCase keys** (item 20): `ctx.options["dry-run"]` and `ctx.args["file-name"]` read `undefined` in JavaScript. TypeScript reports them.
+- **Prompts on stderr** (item 15): a tool that captures stdout no longer receives the prompt text.
+- **Help and usage text** (item 26): direct-mode help starts with the program name, so snapshots of help output change.
+- **A leading `--`** (item 27): `exec(["--", "greet"])` runs `greet` instead of failing with `CommandNotFoundError`.
+- **Status-line symbols** (item 25): the `[OK]` / `✔` choice follows the terminal, not the colour setting.
+- **SIGINT in `exec()`** (item 22): `exec()` and `execLine()` no longer cancel on Ctrl+C. Pass `options.signal`.
+
 ### 1. Entry points
 
 `createCLI(options)` is the only way to construct a CLI, and `name` is required. A name is letters, digits, `.`, `_` and `-`, starting with a letter or digit; it names the history file `~/.<name>_history` and the help heading. `CLI` and `CommandBuilder` are exported as types only. `logger()` is `createLogger()`.
