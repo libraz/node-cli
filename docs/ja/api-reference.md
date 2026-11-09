@@ -77,7 +77,7 @@ interface CLI {
 | `command` | 定義文字列からコマンドを登録し、[`CommandBuilder`](#commandbuilder) を返します。同じパスは既存のコマンドに合流するため、2 回目の登録は最初の定義を拡張します。 |
 | `on` / `off` | ライフサイクルのリスナーを追加または削除します。[`CLIEventMap`](#clieventmap) を参照してください。`off` は最初に一致した登録を 1 つ外し、登録されていないハンドラは無視します。未知のイベント名はコード `ERR_INVALID_ARG_VALUE` の `RangeError` を、関数でないハンドラはコード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。 |
 | `fallback` | 入力に一致するコマンドがないときに呼ばれるハンドラを設定します。保持できるハンドラは 1 つで、後の呼び出しが置き換えます。 |
-| `use` | プラグインを登録します。プラグインの本体は登録順に実行されます。同期プラグインは呼び出しの中で実行され、同期的な throw はそのまま呼び出し元へ伝わり、インスタンスは使える状態のままです。非同期プラグインは最初のコマンドが走る前に待機されます。その失敗は 1 度だけコード `ERR_PLUGIN_FAILED` の `Error` に包まれ、元の値が `cause` に入り、`error` が 1 度発行され、これ以降の `start`、`exec`、`execLine`、`use` は同じエラーで失敗します。 |
+| `use` | プラグインを登録します。プラグインの本体は登録順に実行されます。同期プラグインは呼び出しの中で実行され、同期的に投げられた例外 はそのまま呼び出し元へ伝わり、インスタンスは使える状態のままです。非同期プラグインは最初のコマンドが走る前に待機されます。その失敗は 1 度だけコード `ERR_PLUGIN_FAILED` の `Error` に包まれ、元の値が `cause` に入り、`error` が 1 度発行され、これ以降の `start`、`exec`、`execLine`、`use` は同じエラーで失敗します。 |
 | `exec` | argv をトークン化せずにプログラムから実行します。[プログラムからの実行](#プログラムからの実行)を参照してください。 |
 | `execLine` | シェル言語のコマンドラインを、引用符と `\|` によるパイプラインつきで実行します。[プログラムからの実行](#プログラムからの実行)を参照してください。 |
 | `start` | CLI を実行し、終了コードで解決します。[start](#start) を参照してください。 |
@@ -174,7 +174,7 @@ cli.command("release").action(async (ctx) => {
 type FallbackHandler = (input: string, ctx: FallbackContext) => void | Promise<void>
 ```
 
-どのコマンドにも一致しなかった入力を、そのまま受け取ります。閉じていない引用符のようにトークン化できない入力も、投げられる代わりにハンドラへ届きます。throw または reject は `error` イベントで報告されて実行を reject し、`ctx.signal` のキャンセルは代わりに `CancelledError` で reject されます。
+どのコマンドにも一致しなかった入力を、そのまま受け取ります。閉じていない引用符のようにトークン化できない入力も、投げられる代わりにハンドラへ届きます。例外の送出または reject は `error` イベントで報告されて実行を reject し、`ctx.signal` のキャンセルは代わりに `CancelledError` で reject されます。
 
 ### `FallbackContext`
 
@@ -218,7 +218,7 @@ class CommandBuilder<
 | `action` | コマンドの呼び出し時に実行されるハンドラを設定します。 |
 | `completer` | このコマンドの引数に対するタブ補完の候補を設定します。静的なリストか、[`Completer`](#completer) を渡します。 |
 | `alias` | 別名を追加します。同じ階層の別のコマンドまたはエイリアスに属する名前は、コード `ERR_DEFINITION_CONFLICT` のエラーを投げます。 |
-| `validate` | アクション前のチェックを設定します。throw すると、アクションが走る前に呼び出しを拒否します。 |
+| `validate` | アクション前のチェックを設定します。例外を投げると、アクションが走る前に呼び出しを拒否します。 |
 | `onCancel` | 実行中のコマンドがキャンセルされたときに呼ばれるハンドラを設定します。 |
 | `remove` | コマンドの登録を解除します。見つかって削除されたときは `true` を返します。 |
 | `command` | サブコマンドを登録し、そのサブコマンドのビルダーを返します。同じパスは既存のサブコマンドに合流します。 |
@@ -318,7 +318,7 @@ type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonl
 
 補完フックはどれも同じ形です。`builder.completer`、`OptionSchema.completer`、`ModeOptions.completer` の 3 つで、いずれも静的な `readonly string[]` も受け付けます。候補は、リストでも関数でも、提示される前に `ctx.current` で始まるものへ絞られます。そのためプロバイダは全候補を返して構いません。
 
-補完は、1000 ms の期限で `ctx.signal` が abort されると打ち切られます。同期的な throw、reject、タイムアウトのいずれも候補を空のリストにし、プロンプトを止めたままにすることはありません。
+補完は、1000 ms の期限で `ctx.signal` が abort されると打ち切られます。同期的な例外、reject、タイムアウトのいずれも候補を空のリストにし、プロンプトを止めたままにすることはありません。
 
 #### `CompletionContext`
 
@@ -481,8 +481,8 @@ interface OptionSchema {
 | `required` | `boolean` | `false` | オプションが指定されないと `MissingOptionError` で失敗します。 |
 | `default` | `unknown` | — | オプションがないときに使う値。オプションの値の型で型付けされます。 |
 | `choices` | `readonly unknown[]` | — | 値を制限します。オプションの値の型で型付けされ、配列型なら要素ごとです。入力は先に型変換され、`===` で比較されます。空にはできず、`parse` や boolean のオプションとは併用できません。 |
-| `parse` | 関数 | — | 明示的に渡された値に対するカスタムパーサ。生の文字列とコンテキストを受け取り、コンテキストでは他のオプションがまだ解決されていないことがあります。返された Promise は await されます。投げられた `CLIError` はそのまま伝わり、キャンセルはキャンセルのままで、それ以外の throw や reject は、`value` が生の文字列の `ValidationError` になります。 |
-| `validate` | 関数 | — | 型変換後に走るカスタムチェック。すべてのオプションが解決された後の値を受け取ります。throw または reject で値を拒否します。`CLIError` はそのまま伝わり、キャンセルはキャンセルのままで、それ以外の値は `ValidationError` になります。 |
+| `parse` | 関数 | — | 明示的に渡された値に対するカスタムパーサ。生の文字列とコンテキストを受け取り、コンテキストでは他のオプションがまだ解決されていないことがあります。返された Promise は await されます。投げられた `CLIError` はそのまま伝わり、キャンセルはキャンセルのままで、それ以外の例外や reject は、`value` が生の文字列の `ValidationError` になります。 |
+| `validate` | 関数 | — | 型変換後に走るカスタムチェック。すべてのオプションが解決された後の値を受け取ります。例外の送出または reject で値を拒否します。`CLIError` はそのまま伝わり、キャンセルはキャンセルのままで、それ以外の値は `ValidationError` になります。 |
 | `hidden` | `boolean` | `false` | ヘルプ出力とタブ補完からオプションを除外します。 |
 | `completer` | `readonly string[]` または [`Completer`](#completer) | — | このオプションの値に対して提示する候補。補完では `choices` より優先されます。 |
 
@@ -496,7 +496,7 @@ interface OptionSchema {
 - プレースホルダが `<number>` なら `type: "number"` か `"number[]"` が、`<boolean>` なら `type: "boolean"` が必要です。
 - `"number"` は通常の 10 進数と指数表記を受け付けます。`Number.MAX_SAFE_INTEGER` を超える大きさは、桁を正確に表せないため拒否されます。
 - コマンド内の別のオプションがすでに使っている名前や別名は、コード `ERR_DEFINITION_CONFLICT` のエラーを投げます。不正なフラグや、フラグと矛盾するスキーマは `ERR_INVALID_DEFINITION` を投げます。
-- フラグ文字列の最初の `--name` が正の名前で、以降のロング名は別名です。`ctx.options` では、正の名前を camelCase にしたキーでオプションを引きます。ヘルプ、補完、エラーメッセージはフラグの綴りのままです。1 つのコマンドの 2 つのオプションで camelCase のキーが重なる場合（`--dry-run` と `--dryRun` など）は、`ERR_DEFINITION_CONFLICT` を投げます。
+- フラグ文字列の最初の `--name` が正規の名前で、以降のロング名は別名です。`ctx.options` では、正規の名前を camelCase にしたキーでオプションを引きます。ヘルプ、補完、エラーメッセージはフラグの綴りのままです。1 つのコマンドの 2 つのオプションで camelCase のキーが重なる場合（`--dry-run` と `--dryRun` など）は、`ERR_DEFINITION_CONFLICT` を投げます。
 - 別名を含む名前は、ASCII の英数字を単一のダッシュでつないだ形に限られます。スキーマの `alias` はちょうど 1 文字です。
 - `--no-x` は boolean のオプション `x` を否定します。`x` を持たずに `--no-x` として宣言されたオプションは独立したオプションで、キーは `noX` です。
 - コマンド間で共有するスキーマは、`satisfies OptionSchema` で書くと型付けが保たれます。`OptionSchema` と注釈すると、オプションの値が `unknown` に広がります。
@@ -551,9 +551,9 @@ interface CLIEventMap {
 
 解決済みのコマンドの失敗では、`commandError` と `error` の **両方** が発行されます。`commandError` はコンテキストを持ち、`error` は包括的なイベントです。失敗をちょうど 1 度だけ見たいハンドラは、両方ではなくどちらか一方を購読します。キャンセルは失敗ではありません。実行中のコマンドが `ctx.signal` でキャンセルされたときは、どちらも発行されず、実行は `CancelledError` で reject されます。
 
-`exit` が発行されるのは、直接実行モードのコマンドが完了したとき、throw したとき、強制終了されたとき、引数のない非端末での起動でヘルプの一覧が表示された後、プラグインの初期化が失敗したとき、対話シェルが終了または SIGTERM を受け取ったとき、そして強制終了が `exec` または `execLine` の呼び出しを終わらせたときです。プログラムからの実行は、正常系では発行しません。CLI が扱わないシグナル（直接実行モードの SIGTERM と SIGHUP、シェルの SIGHUP）は、`exit` もキャンセルハンドラも実行せずにプロセスを終了させます。
+`exit` が発行されるのは、直接実行モードのコマンドが完了したとき、例外を投げたとき、強制終了されたとき、引数のない非端末での起動でヘルプの一覧が表示された後、プラグインの初期化が失敗したとき、対話シェルが終了または SIGTERM を受け取ったとき、そして強制終了が `exec` または `execLine` の呼び出しを終わらせたときです。プログラムからの実行は、正常系では発行しません。CLI が扱わないシグナル（直接実行モードの SIGTERM と SIGHUP、シェルの SIGHUP）は、`exit` もキャンセルハンドラも実行せずにプロセスを終了させます。
 
-throw するリスナーがコマンドを壊すことはありません。その失敗は `error` イベントとして再発行され、残りのリスナーも実行されます。`error` リスナー自身が throw した場合は、再帰を止めるために stderr に報告されます。
+例外を投げるリスナーがコマンドを壊すことはありません。その失敗は `error` イベントとして再発行され、残りのリスナーも実行されます。`error` リスナー自身が例外を投げた場合は、再帰を止めるために stderr に報告されます。
 
 1 つのイベントに対するリスナーは登録順に実行され、非同期のリスナーは次のリスナーが走る前に待機されます。
 
@@ -597,7 +597,7 @@ type Plugin = (ctx: PluginContext) => void | Promise<void>
 
 同期プラグインは `use` の中で実行され、非同期プラグインは最初のコマンドが走る前に待機されます。
 
-非同期プラグインの本体は 1 本の直列キューで実行されるため、先のプラグインが I/O を待っていても、登録順は決定的です。非同期の失敗は 1 度だけコード `ERR_PLUGIN_FAILED` の `Error` に包まれ、元の値が `cause` に入ります。`error` が 1 度発行され、`start` はそれを報告して `exit` を発行し、これ以降の `use`、`exec`、`execLine` は同じエラーで reject されます。`use` の中での同期的な throw は、そのまま呼び出し元へ伝わり、CLI は使える状態のままです。[イベントとプラグイン](events-and-plugins.md)を参照してください。
+非同期プラグインの本体は 1 本の直列キューで実行されるため、先のプラグインが I/O を待っていても、登録順は決定的です。非同期の失敗は 1 度だけコード `ERR_PLUGIN_FAILED` の `Error` に包まれ、元の値が `cause` に入ります。`error` が 1 度発行され、`start` はそれを報告して `exit` を発行し、これ以降の `use`、`exec`、`execLine` は同じエラーで reject されます。`use` の中での同期的に投げられた例外 は、そのまま呼び出し元へ伝わり、CLI は使える状態のままです。[イベントとプラグイン](events-and-plugins.md)を参照してください。
 
 ## 対話シェル
 
@@ -651,7 +651,7 @@ interface ModeOptions {
 type ModeAction = (input: string, ctx: ModeContext) => void | Promise<void>
 ```
 
-モードの中で送信された各行を受け取ります。throw または reject は stderr に報告され、シェルはモードに留まります。
+モードの中で送信された各行を受け取ります。例外の送出または reject は stderr に報告され、シェルはモードに留まります。
 
 ### `ModeContext`
 
@@ -986,9 +986,9 @@ interface TableChars {
 
 ## プログレス
 
-インジケータの出力先の既定値はすべて `process.stderr` で、リダイレクトされた stdout に進捗表示が混ざりません。インジケータは作成と同時に描画を始め、終了動詞（`succeed`、`fail`、`warn`、`stop`）のどれかで終わります。終了後にどのメソッドを呼んでも何も起きません。コマンドコンテキストをオプションのオブジェクトとして渡すこともでき（`progress.spinner(ctx)`）、その場合は `ctx.stderr` に描画されます。
+インジケーターの出力先の既定値はすべて `process.stderr` で、リダイレクトされた stdout に進捗表示が混ざりません。インジケーターは作成と同時に描画を始め、終了動詞（`succeed`、`fail`、`warn`、`stop`）のどれかで終わります。終了後にどのメソッドを呼んでも何も起きません。コマンドコンテキストをオプションのオブジェクトとして渡すこともでき（`progress.spinner(ctx)`）、その場合は `ctx.stderr` に描画されます。
 
-動詞 `succeed`、`fail`、`warn` は、指標を結果の行に置き換えます。緑の `✔`、赤の `✖`、黄の `⚠` の後に `message` が続き、既定値はラベルです。ストリームが記号を描けない場合（端末でない、または `TERM=dumb`）は、行頭が記号の代わりに ASCII の印 `[OK]`、`[ERROR]`、`[WARN]` になります。色は [`isColorEnabled`](#iscolorenabled) が別に判定します。`stop` は最後のフレームを残して行を終えます。
+動詞 `succeed`、`fail`、`warn` は、インジケーターを結果の行に置き換えます。緑の `✔`、赤の `✖`、黄の `⚠` の後に `message` が続き、既定値はラベルです。ストリームが記号を描けない場合（端末でない、または `TERM=dumb`）は、行頭が記号の代わりに ASCII の印 `[OK]`、`[ERROR]`、`[WARN]` になります。色は [`isColorEnabled`](#iscolorenabled) が別に判定します。`stop` は最後のフレームを残して行を終えます。
 
 ### progress.bar
 
@@ -1005,7 +1005,7 @@ progress.bar(options: BarOptions): Bar
 | `width` | `number` | `30` | バーの幅（文字数）。`1` から `4096` まで。小数は整数部分で描画されます。それ以外は例外を投げます。 |
 | `filled` | `string` | `"█"` | 塗りつぶし部分の文字。表示幅は `1` でなければなりません。 |
 | `empty` | `string` | `"░"` | 空の部分の文字。表示幅は `1` でなければなりません。 |
-| `format` | `(state: BarState) => string` | — | 描画される行全体を置き換えます。そのため `width`、`filled`、`empty`、`style` は使われず、`label` は既定の結果メッセージにだけ使われます。結果は端末で安全な 1 行にまとめられます。throw すると、バー（またはそのグループ）は端末を解放して何もしなくなり、エラーは再描画を引き起こした呼び出しから伝わります。 |
+| `format` | `(state: BarState) => string` | — | 描画される行全体を置き換えます。そのため `width`、`filled`、`empty`、`style` は使われず、`label` は既定の結果メッセージにだけ使われます。結果は端末で安全な 1 行にまとめられます。例外を投げると、バー（またはそのグループ）は端末を解放して何もしなくなり、エラーは再描画を引き起こした呼び出しから伝わります。 |
 | `stderr` | `Writable` | `process.stderr` | 出力先のストリーム。 |
 | `style` | [`StyleSpec`](#style-types) | — | バーに適用するスタイル。`"green"` や `"bold.cyan"` など。未知の名前は作成時に投げます。 |
 
@@ -1024,7 +1024,7 @@ progress.bar(options: BarOptions): Bar
 | `stop()` | 最後のフレームを残して行を終えます。`MultiBar` の中では、そのバーの行を固定し、グループの動詞はその行を飛ばします。 |
 | `[Symbol.dispose]()` | `stop()` の別名。 |
 
-`Symbol.dispose` があるので、バーは `using` 宣言で使えます。`using` はブロックの終わりで、ブロックが throw した場合も含めて、破棄用のメソッドを自動的に呼びます。
+`Symbol.dispose` があるので、バーは `using` 宣言で使えます。`using` はブロックの終わりで、ブロックが例外を投げた場合も含めて、破棄用のメソッドを自動的に呼びます。
 
 ```typescript
 {
@@ -1077,7 +1077,7 @@ progress.spinner(options?: SpinnerOptions): Spinner
 
 ### 端末でないストリームでの挙動
 
-端末でないストリームに書くバーやスピナーは、動作中は何も出力せず、`stop` も何も書きません。リダイレクトしたログが制御シーケンスで埋まることはありません。`succeed`、`fail`、`warn` は、結果の行を必ず 1 行書きます。そのため、出力を取り込むスクリプトにインジケータを残しておいても安全です。結果は記録され、アニメーションは記録されません。`TERM=dumb` のときも同じです。
+端末でないストリームに書くバーやスピナーは、動作中は何も出力せず、`stop` も何も書きません。リダイレクトしたログが制御シーケンスで埋まることはありません。`succeed`、`fail`、`warn` は、結果の行を必ず 1 行書きます。そのため、出力を取り込むスクリプトにインジケーターを残しておいても安全です。結果は記録され、アニメーションは記録されません。`TERM=dumb` のときも同じです。
 
 ### progress.multi
 
@@ -1108,7 +1108,7 @@ progress.multi(options?: MultiBarOptions): MultiBar
 
 グループが閉じた後に呼んだ `add` は、すべてのメソッドが何もしない無効なバーを返します。そのため、`finally { multi.stop() }` の直後にバーを追加するワーカーがいても失敗しません。
 
-2 つの単独の指標は、同じ端末ストリームに同時には描画できません。互いの行レイアウトを知り得ないため、2 つ目は、ストリームを保持している指標の種類を名指しした、コード `ERR_OUTPUT_BUSY` のエラーを投げます。並行して動くバーは `multi` グループに入れます。
+2 つの単独のインジケーターは、同じ端末ストリームに同時には描画できません。互いの行レイアウトを知り得ないため、2 つ目は、ストリームを保持しているインジケーターの種類を名指しした、コード `ERR_OUTPUT_BUSY` のエラーを投げます。並行して動くバーは `multi` グループに入れます。
 
 ### progress.releaseAll
 
@@ -1116,13 +1116,13 @@ progress.multi(options?: MultiBarOptions): MultiBar
 progress.releaseAll(): void
 ```
 
-プロセス内でまだ動いているすべての指標を、どのコマンドが作ったかに関係なく停止し、端末のカーソルを元に戻します。コマンドの実行が解放するのは、そのコマンド自身が作った指標だけなので、終了したコマンドが別のコマンドのスピナーを消すことはありません。プロセス全体を明示的にリセットしたいときに `releaseAll` を呼びます。
+プロセス内でまだ動いているすべてのインジケーターを、どのコマンドが作ったかに関係なく停止し、端末のカーソルを元に戻します。コマンドの実行が解放するのは、そのコマンド自身が作ったインジケーターだけなので、終了したコマンドが別のコマンドのスピナーを消すことはありません。プロセス全体を明示的にリセットしたいときに `releaseAll` を呼びます。
 
 使い方の実例は[プログレス](progress.md)を参照してください。
 
 ## プロンプト
 
-プロンプトは stderr で質問するため、質問がリダイレクトされた stdout を汚すことはありません。どのプロンプトも、Ctrl-C のとき、または `signal` が abort されたときに `CancelledError` で reject されます。後者の `cause` はシグナルの reason です。すでに abort 済みの `signal` は、すぐに reject されます。`stdin` が `null` のとき、または答える前に入力が終わった（Ctrl-D）ときは、再質問の最中も含めて `InputEndedError` で reject されます。入力ストリームの読み取りエラーは、そのストリーム自身のエラーで reject されます。throw する `validate` は reject ではありません。メッセージが表示され、プロンプトはもう一度質問します。メッセージと `marker` は 1 行で描画され、改行は空白になり、カーソル制御は取り除かれます。
+プロンプトは stderr で質問するため、質問がリダイレクトされた stdout を汚すことはありません。どのプロンプトも、Ctrl-C のとき、または `signal` が abort されたときに `CancelledError` で reject されます。後者の `cause` はシグナルの reason です。すでに abort 済みの `signal` は、すぐに reject されます。`stdin` が `null` のとき、または答える前に入力が終わった（Ctrl-D）ときは、再質問の最中も含めて `InputEndedError` で reject されます。入力ストリームの読み取りエラーは、そのストリーム自身のエラーで reject されます。例外を投げる `validate` は reject ではありません。メッセージが表示され、プロンプトはもう一度質問します。メッセージと `marker` は 1 行で描画され、改行は空白になり、カーソル制御は取り除かれます。
 
 同じ入力ストリームから 2 つのプロンプトが同時に読もうとすると、コード `ERR_INPUT_BUSY` のエラーを投げます。2 つ目が 1 つ目のキー入力を奪ってしまうためです。
 
@@ -1140,7 +1140,7 @@ type PromptOptions<T = unknown> = Pick<StdioOptions, "stdin" | "stderr" | "signa
 | `stdin` | `process.stdin` | 答えを読む先。省略すると `process.stdin` が選ばれます。`null` は入力なしを意味し、プロンプトは質問を書く前に `InputEndedError` で reject されます。 |
 | `stderr` | `process.stderr` | 質問を書き込む出力。 |
 | `signal` | — | abort すると、保留中のプロンプトが `CancelledError` で reject されます。 |
-| `validate` | — | throw または reject で値を拒否します。プロンプトはメッセージを表示して、もう一度尋ねます。 |
+| `validate` | — | 例外の送出または reject で値を拒否します。プロンプトはメッセージを表示して、もう一度尋ねます。 |
 | `marker` | `"?"` | 質問の前に表示される記号。 |
 
 すべてのプロンプトのオプション型がこの型を拡張しています。ストリーム関連のメンバーは `StdioOptions` と同じなので、コマンドコンテキストをオプションとして渡せます。`prompt.confirm("Continue?", ctx)` のように書きます。
@@ -1257,7 +1257,7 @@ function createLogger(options?: LoggerOptions): Logger
 | `prefix` | `string` | — | 各行に付く、角括弧で囲まれた接頭辞。 |
 | `timestamp` | `boolean` | `false` | `HH:MM:SS` を先頭に付けます。 |
 | `stderr` | `Writable` | `process.stderr` | 出力先のストリーム。 |
-| `bufferLimit` | `number` | `1000` | ストリームが背圧を受けている間にキューに溜める行数。満杯になると最も古い行を捨てます。`0` は、背圧を受けている間に書かれた行をドレインされるまですべて捨てます。非負の安全な整数でなければなりません。 |
+| `bufferLimit` | `number` | `1000` | ストリームが背圧を受けている間にキューに溜める行数。満杯になると最も古い行を捨てます。`0` は、背圧を受けている間に書かれた行を解消されるまですべて捨てます。非負の安全な整数でなければなりません。 |
 
 #### `Logger`
 
@@ -1361,14 +1361,14 @@ type CLIErrorCode =
 | `MissingOptionError` | `(optionName, { usage?, cause? })` | `MISSING_OPTION` | `64` | `optionName`, `usage?` | `required` なオプションがないとき。 |
 | `InvalidOptionError` | `(message, { optionName?, value?, usage?, cause? })` | `INVALID_OPTION` | `64` | `optionName?`, `value?`, `usage?` | 値が組み込みの型変換または `choices` のチェックに通らないとき、あるいはオプションが受け付けない形式で使われたとき。 |
 | `UnknownOptionError` | `(flag, { usage?, cause? })` | `UNKNOWN_OPTION` | `64` | `flag`, `optionName`, `usage?` | コマンドが宣言していないフラグが渡されたとき。`flag` は未知のフラグを 1 つ、正規化した形で表します（`--xyz=3` は `--xyz`、クラスタ `-vx` の中の未知の `x` は `-x`）。`optionName` は先頭のダッシュを除いた名前です。 |
-| `ValidationError` | `(message, { optionName?, value?, usage?, cause? })` | `VALIDATION_FAILED` | `64` | `optionName?`, `value?`, `usage?` | オプション自身の `parse` または `validate` が throw または reject したとき、あるいはコマンドの `validate` が `CLIError` でない値を投げたとき。 |
+| `ValidationError` | `(message, { optionName?, value?, usage?, cause? })` | `VALIDATION_FAILED` | `64` | `optionName?`, `value?`, `usage?` | オプション自身の `parse` または `validate` が例外を投げるか reject したとき、あるいはコマンドの `validate` が `CLIError` でない値を投げたとき。 |
 | `ParseError` | `(message, { quote?, cause? })` | `PARSE_FAILED` | `64` | `quote?` | 入力をトークン化できない、またはパイプラインのステージに分割できないとき。 |
 | `CancelledError` | `({ cause? })` | `CANCELLED` | `130` | — | プロンプトが Ctrl-C または abort されたシグナルでキャンセルされたとき、あるいは実行中のコマンドがそのシグナルでキャンセルされたとき。`cause` は、あればシグナルの reason です。 |
 | `InputEndedError` | `(promptMessage, { cause? })` | `INPUT_ENDED` | `66` | `promptMessage` | プロンプトに読み取れる入力がないとき。`stdin` が `null` のとき、または答える前に入力が終わったとき。 |
 
 `ValidationError` が包むのは、オプションの `parse` と `validate`、および `CommandBuilder.validate()` の失敗です。ただし、投げられた `CLIError` は元のクラス、コード、終了コードを保ったままそのまま伝わり、キャンセルは `CancelledError` のままです。オプションの場合は `optionName` が設定され、`value` は `parse` が失敗したときは生の入力文字列、`validate` が失敗したときは `validate` に渡された値になり、`cause` には元の値が入ります。
 
-`optionName` は、ダッシュを除いた正のロング名を kebab-case の綴りのまま表したもの（`dry-run`）で、そのオプションの `ctx.options` でのキーは camelCase の形（`dryRun`）です。`UnknownOptionError.optionName` には対応する定義がないため、入力されたフラグからダッシュを除いたものです。
+`optionName` は、ダッシュを除いた正規のロング名を kebab-case の綴りのまま表したもの（`dry-run`）で、そのオプションの `ctx.options` でのキーは camelCase の形（`dryRun`）です。`UnknownOptionError.optionName` には対応する定義がないため、入力されたフラグからダッシュを除いたものです。
 
 コマンドの解決中に起きたエラーは、コマンドの使い方の行である `usage` を持ち、メッセージの末尾に `\n\n  Usage: <usage>` を付けます。メッセージは、ユーザーが入力したものを引用符で囲み、アプリケーションが定義した名前は囲みません（`Unknown option: "--x"`、`Missing required option: --x`）。API の誤用のメッセージ（`UsageErrorCode` を参照）は、Node 自身のエラーと同じ形で、アプリケーションの名前も引用符で囲みます。
 
@@ -1442,7 +1442,7 @@ type UsageErrorCode =
 | `ERR_DEFINITION_CONFLICT` | `Error` | オプションの名前やエイリアス、あるいはコマンドのエイリアスがすでに使われているとき。 |
 | `ERR_COMMAND_REMOVED` | `Error` | 削除済みのコマンドに設定を呼んだとき。 |
 | `ERR_ALREADY_STARTED` | `Error` | `start` を 2 回呼んだとき。 |
-| `ERR_OUTPUT_BUSY` | `Error` | 2 つ目のインジケータが、別のインジケータが保持している端末ストリームを確保しようとしたとき。 |
+| `ERR_OUTPUT_BUSY` | `Error` | 2 つ目のインジケーターが、別のインジケーターが保持している端末ストリームを確保しようとしたとき。 |
 | `ERR_INPUT_BUSY` | `Error` | 2 つ目のプロンプトが、別のプロンプトが保持している入力ストリームから読もうとしたとき。 |
 | `ERR_PLUGIN_FAILED` | `Error` | 非同期プラグインが初期化中に失敗したとき。`cause` に元の値が入ります。 |
 

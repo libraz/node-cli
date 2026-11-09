@@ -115,7 +115,7 @@ console.log(
 | `columns` | `readonly (string \| ColumnSpec)[]` | データから導出 | 描画する列を順に指定します。配列データでは、渡した時点で行 0 は **ヘッダーとして消費されなくなります。** |
 | `header` | `boolean` | `true` | `false` にするとヘッダー行を出しません。 |
 | `border` | `"none" \| "simple" \| "rounded" \| "single" \| "double" \| "custom"` | `"none"`。`chars` を渡した場合は `"custom"` | 罫線のプリセット。`"none"` では `chars` と `rowSeparators` は無視されます。 |
-| `chars` | `TableChars` | — | 独自の罫線文字。`border` が選んだプリセット(`border` を省略した場合や `"custom"` の場合は `single`)の上に重ねて統合します。どの文字も表示幅は 1 である必要があり、満たさないと `RangeError` を投げます。上下の辺と行間の線の埋め文字 `top`、`bottom`、`horizontal` は、その線を省くために `""` にもできます。`border: "simple"` では `vertical` と `cross` に任意の文字列を使えます。 |
+| `chars` | `TableChars` | — | 独自の罫線文字。`border` が選んだプリセット（`border` を省略した場合や `"custom"` の場合は `single`）の上に重ねて統合します。どの文字も表示幅は 1 である必要があり、満たさないと `RangeError` を投げます。上下の辺と行間の線の埋め文字 `top`、`bottom`、`horizontal` は、その線を省くために `""` にもできます。`border: "simple"` では `vertical` と `cross` に任意の文字列を使えます。 |
 | `borderStyle` | `StyleSpec` | — | 罫線の文字の色と修飾。スタイル名、またはドットで連結したスタイルで、例えば `"dim"` や `"cyan.bold"`。`border` が枠の形を選び、`borderStyle` がその見た目を決めます。 |
 | `headerStyle` | `StyleSpec \| "none"` | `"bold"` | ヘッダーのテキストに適用するスタイル。`"none"` なら素のテキストのままです。 |
 | `paddingLeft` | `number` | 枠ありでは `1`、`none` / `simple` では `0` | 各セルの内側、左に入れる空白。 |

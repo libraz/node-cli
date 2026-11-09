@@ -52,7 +52,7 @@ mycli>
 | `UnknownOptionError(flag, { usage?, cause? })` | `UNKNOWN_OPTION` | `64` | `flag`, `optionName`（ダッシュを除いた名前）, `usage?` | 認識できないフラグ |
 | `ValidationError(message, { optionName?, value?, usage?, cause? })` | `VALIDATION_FAILED` | `64` | `optionName?`, `value?`, `usage?` | オプションの独自の `parse` または `validate`、あるいはコマンドの `validate` が例外を投げたとき |
 | `ParseError(message, { quote?, cause? })` | `PARSE_FAILED` | `64` | `quote?` | 閉じられていない引用符、空のパイプセグメントや末尾のパイプ、`<` / `>` のリダイレクト演算子 |
-| `CancelledError({ cause? })` | `CANCELLED` | **`130`** | — | プロンプトが Ctrl+C でキャンセルされたとき、コマンドがキャンセルされたとき、シグナルが中止されたとき |
+| `CancelledError({ cause? })` | `CANCELLED` | **`130`** | — | プロンプトが Ctrl+C でキャンセルされたとき、コマンドがキャンセルされたとき、シグナルが中断されたとき |
 | `InputEndedError(promptMessage, { cause? })` | `INPUT_ENDED` | **`66`** | `promptMessage` | プロンプトに読み取る入力がなかったとき。`stdin` が `null` だった場合と、答えの前に入力が終わった場合 |
 
 どのコンストラクタも `{ cause }` を受け取り、`Error` に渡して `err.cause` として公開します。`code` と `exitCode` は `readonly` です。
@@ -62,7 +62,7 @@ mycli>
 「追加フィールド」の列は、各クラスが足すものです。フィールドの意味は次のとおりです。
 
 - `usage` は、コマンドの使い方の行です。あればメッセージの末尾に `\n\n  Usage: <usage>` として付きます。コマンドを解決している間に出るエラー（引数の不足と過剰、オプションの不足・不正・未知、検証）はすべて持つため、ヒントはどれも同じ形になります。
-- `optionName` は、定義のあるオプションでは、ダッシュなしで kebab-case の綴りのままの正の long 名（`dry-run`）です。定義のない `UnknownOptionError` では、入力されたフラグからダッシュを除いたものです。同じオプションの `ctx.options` でのキーは camelCase の形（`dryRun`）です。
+- `optionName` は、定義のあるオプションでは、ダッシュなしで kebab-case の綴りのままの正規のロング名（`dry-run`）です。定義のない `UnknownOptionError` では、入力されたフラグからダッシュを除いたものです。同じオプションの `ctx.options` でのキーは camelCase の形（`dryRun`）です。
 - `flag` は、未知のフラグ 1 つを正規化した綴りです。`--xyz=3` は `--xyz`、まとめ書き `-vx` の中の未知の `x` は `-x` と報告されます。
 - `InvalidOptionError` と `ValidationError` の `value` は、拒否された値です。型変換や `parse` が失敗した場合は入力の生の文字列、`validate` の検査が失敗した場合は `validate` に渡した値です。コマンドレベルの検証の失敗は、`value` も `optionName` も持ちません。
 - `ExtraArgumentError` の `extras` は、余った値をすべて入力順に並べたもので、空になることはありません。空の配列を渡すと `RangeError`（`ERR_INVALID_ARG_VALUE`）を投げます。メッセージは 1 件なら `Unexpected argument: "a"`、複数なら `Unexpected arguments: "a", "b"` です。
@@ -230,7 +230,7 @@ cli
 Cancelled
 ```
 
-キャンセルは `commandError` も `error` も発火しません。どの入口でも扱いは同じです。`cli.exec()`、`cli.execLine()`、`cli.start()`、対話シェルは `CancelledError` を reject または報告し、signal が中止されている間に起きた生の `AbortError` は、signal の `reason` を `cause` にして一度だけ包まれます。すでに中止された signal を `exec()` や `execLine()` に渡すと、フック、検証、アクションのどれも走らず、`CancelledError` で reject されます。中止を無視して正常に戻ったアクションは、そのまま resolve します。
+キャンセルは `commandError` も `error` も発火しません。どの入口でも扱いは同じです。`cli.exec()`、`cli.execLine()`、`cli.start()`、対話シェルは `CancelledError` を reject または報告し、signal が中断されている間に起きた生の `AbortError` は、signal の `reason` を `cause` にして一度だけ包まれます。すでに中断された signal を `exec()` や `execLine()` に渡すと、フック、検証、アクションのどれも走らず、`CancelledError` で reject されます。中断を無視して正常に戻ったアクションは、そのまま resolve します。
 
 投げられた値を分類し、整形するためのヘルパーが 2 つエクスポートされています。
 
@@ -239,9 +239,9 @@ Cancelled
 その値が利用者によるキャンセルを表す場合に `true` を返します。
 
 - すべての `CancelledError`。`signal` の状態は問いません
-- `name` が `"AbortError"` の `Error` のうち、**渡された `signal` が中止されている**もの
+- `name` が `"AbortError"` の `Error` のうち、**渡された `signal` が中断されている**もの
 
-`signal` 引数は必須です。`signal` が中止されていない限り、素の `AbortError` は**キャンセルとは見なされません**。無関係なコードが起こした中止を「利用者がキャンセルした」と黙って報告してしまわないためです。
+`signal` 引数は必須です。`signal` が中断されていない限り、素の `AbortError` は**キャンセルとは見なされません**。無関係なコードが起こした中断を「利用者がキャンセルした」と黙って報告してしまわないためです。
 
 ```typescript
 import { isCancellationError } from "@libraz/node-cli";

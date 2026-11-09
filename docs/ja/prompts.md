@@ -228,7 +228,7 @@ cli.command("greet").action(async (ctx) => {
 });
 ```
 
-`AbortSignal` を渡すと、プロンプトに制限時間や外部からの中止ボタンを与えられます。
+`AbortSignal` を渡すと、プロンプトに制限時間や外部からの中断ボタンを与えられます。
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -259,7 +259,7 @@ const answer = await prompt.text("Quick — a word:", {
 
 ## インタラクティブシェルの中で
 
-[インタラクティブシェル](interactive-shell.md)では、コマンドと mode の action の `ctx.stdin` は、行エディターと共有する端末です。入力はここで説明した関数だけで読み、最後まで読み切らないでください。`prompt.text("Name?", ctx)` は、シェルでも単発の実行でも同じように動きます。
+[インタラクティブシェル](interactive-shell.md)では、コマンドとモードのアクションの `ctx.stdin` は、行エディタと共有する端末です。入力はここで説明した関数だけで読み、最後まで読み切らないでください。`prompt.text("Name?", ctx)` は、シェルでも単発の実行でも同じように動きます。
 
 ## よくある落とし穴
 
