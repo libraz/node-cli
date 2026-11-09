@@ -109,6 +109,8 @@ export function openLineReader(options: LineReaderOptions): LineReader {
   // An input that already ended emits no further `end`, so readline never
   // closes on its own; the stream state is checked on every read instead.
   let inputDone = streamFinished(input);
+  // Readline rejects every later call once it has closed, even while queued lines remain.
+  let rlClosed = false;
   let failure: { error: unknown } | undefined;
   let pending:
     | { resolve: (line: string | null) => void; reject: (err: unknown) => void }
@@ -135,7 +137,11 @@ export function openLineReader(options: LineReaderOptions): LineReader {
   };
 
   rl.on("line", onLine);
-  rl.on("close", onDone);
+  const onRlClose = () => {
+    rlClosed = true;
+    onDone();
+  };
+  rl.on("close", onRlClose);
   // Readline re-emits input errors on the interface.
   rl.on("error", onError);
   // A destroyed input never ends, so readline does not close for it.
@@ -145,7 +151,7 @@ export function openLineReader(options: LineReaderOptions): LineReader {
     if (closed) return;
     closed = true;
     rl.off("line", onLine);
-    rl.off("close", onDone);
+    rl.off("close", onRlClose);
     rl.off("error", onError);
     input.off("close", onDone);
     // A destroy this reader already saw emits its error on a later tick; take
@@ -162,6 +168,11 @@ export function openLineReader(options: LineReaderOptions): LineReader {
   };
 
   const prompt = (query?: string) => {
+    if (rlClosed) {
+      // The question is still drawn; the answer comes from the queued lines.
+      if (query !== undefined) options.output.write(query);
+      return;
+    }
     if (query !== undefined) rl.setPrompt(query);
     rl.prompt();
     if (terminal && state.partial !== "") {

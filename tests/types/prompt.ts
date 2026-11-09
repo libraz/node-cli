@@ -42,7 +42,7 @@ void syncValidate;
 // Choices and defaults accept readonly arrays.
 const envs = ["dev", "prod"] as const;
 void prompt.select("Env:", envs, { default: "dev" });
-const many: MultiselectOptions<string> = { default: envs, min: 1 };
+const many: MultiselectOptions<(typeof envs)[number]> = { default: envs, min: 1 };
 void prompt.multiselect("Pick:", envs, many);
 
 // required exists on text and password only.
@@ -80,3 +80,70 @@ import { maskInput } from "../../src/index.js";
 void maskInput;
 
 export type { PromptBaseOptions };
+
+// multiselect returns a readonly array and hands validate a readonly array.
+async function multiselectReadonly(): Promise<void> {
+  const picked = await prompt.multiselect("Pick:", ["a", "b"]);
+  // @ts-expect-error the result is readonly
+  picked.push("c");
+  const validated: MultiselectOptions<string> = {
+    validate: (values) => {
+      // @ts-expect-error the validated array is readonly
+      values.push("c");
+    },
+  };
+  void validated;
+}
+void multiselectReadonly;
+
+// select and multiselect infer literal unions without `as const`.
+async function literalInference(): Promise<void> {
+  const env = await prompt.select("Env:", ["dev", "prod"]);
+  const typedEnv: "dev" | "prod" = env;
+  void typedEnv;
+
+  const modes = await prompt.multiselect("Modes:", ["a", "b"]);
+  const typedModes: readonly ("a" | "b")[] = modes;
+  void typedModes;
+
+  const ports = await prompt.select("Port:", [80, 443]);
+  const typedPort: 80 | 443 = ports;
+  void typedPort;
+
+  const described = await prompt.select("Env:", [
+    { label: "Development", value: "dev" },
+    { label: "Production", value: "prod" },
+  ]);
+  const typedDescribed: "dev" | "prod" = described;
+  void typedDescribed;
+}
+void literalInference;
+
+// A default must be one of the inferred choices.
+// @ts-expect-error "stage" is not a choice
+void prompt.select("Env:", ["dev", "prod"], { default: "stage" });
+void prompt.select("Env:", ["dev", "prod"], { default: "prod" });
+// @ts-expect-error "z" is not a choice
+void prompt.multiselect("Pick:", ["a", "b"], { default: ["a", "z"] });
+void prompt.multiselect("Pick:", ["a", "b"], { default: ["a"] });
+
+// A value object that carries a `label` must be wrapped in a descriptor.
+interface Labeled {
+  label: string;
+  id: number;
+}
+declare const labeled: Labeled;
+// @ts-expect-error a bare value with a label member is not a descriptor
+void prompt.select<Labeled>("Pick:", [labeled]);
+void prompt.select<Labeled>("Pick:", [{ label: "Item", value: labeled }]);
+
+// A value object without a label can be a bare choice.
+interface Plain {
+  id: number;
+}
+declare const plain: Plain;
+void prompt.select<Plain>("Pick:", [plain]);
+
+// Explicitly undefined optional members are accepted.
+const explicitUndefined: SelectOptions<string> = { default: undefined, validate: undefined };
+void explicitUndefined;

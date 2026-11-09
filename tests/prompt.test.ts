@@ -1,7 +1,7 @@
 import type { Readable, Writable } from "node:stream";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { CancelledError } from "../src/errors.js";
+import { CancelledError, InputEndedError } from "../src/errors.js";
 import type { Choice, PromptOptions, SelectChoice, TextOptions } from "../src/index.js";
 import { setColorEnabled } from "../src/output/color.js";
 import { createMockStdin, createMockStdout, restoreProcessStateAfterEach } from "./helpers.js";
@@ -493,7 +493,7 @@ describe("prompt", () => {
     ];
 
     expect(answers).toEqual(["a", true, "prod", "secret", ["a", "b"]]);
-    await expect(prompt.text("More", io)).rejects.toBeInstanceOf(CancelledError);
+    await expect(prompt.text("More", io)).rejects.toBeInstanceOf(InputEndedError);
   });
 
   it("keeps unanswered lines for the next prompt after the input ends", async () => {
@@ -582,27 +582,27 @@ describe("prompt", () => {
     expect(redraws).toBe(4);
   });
 
-  it("text rejects with CancelledError on EOF", async () => {
+  it("text rejects with InputEndedError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
     const promise = prompt.text("Name", { stdin: streams.stdin, stderr: streams.stderr });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(CancelledError);
+    await expect(promise).rejects.toBeInstanceOf(InputEndedError);
   });
 
-  it("confirm rejects with CancelledError on EOF", async () => {
+  it("confirm rejects with InputEndedError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
     const promise = prompt.confirm("Continue?", { stdin: streams.stdin, stderr: streams.stderr });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(CancelledError);
+    await expect(promise).rejects.toBeInstanceOf(InputEndedError);
   });
 
-  it("select rejects with CancelledError on EOF", async () => {
+  it("select rejects with InputEndedError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
@@ -612,10 +612,10 @@ describe("prompt", () => {
     });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(CancelledError);
+    await expect(promise).rejects.toBeInstanceOf(InputEndedError);
   });
 
-  it("multiselect rejects with CancelledError on EOF", async () => {
+  it("multiselect rejects with InputEndedError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
@@ -625,10 +625,10 @@ describe("prompt", () => {
     });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(CancelledError);
+    await expect(promise).rejects.toBeInstanceOf(InputEndedError);
   });
 
-  it("password rejects with CancelledError on EOF", async () => {
+  it("password rejects with InputEndedError on EOF", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
 
@@ -638,7 +638,7 @@ describe("prompt", () => {
     });
     streams.stdin.push(null);
 
-    await expect(promise).rejects.toBeInstanceOf(CancelledError);
+    await expect(promise).rejects.toBeInstanceOf(InputEndedError);
   });
 
   it("text with an empty-string default resolves immediately on Enter", async () => {
@@ -765,7 +765,7 @@ describe("prompt options shared with the command context", () => {
     expect(ctx.stdout.readableLength).toBe(0);
   });
 
-  it("treats a null stdin as process.stdin", async () => {
+  it("rejects a null stdin with InputEndedError", async () => {
     const { prompt } = await import("../src/output/prompt.js");
     const streams = createPromptStreams();
     const pending = prompt.text("Name", {
@@ -773,7 +773,7 @@ describe("prompt options shared with the command context", () => {
       stderr: streams.stderr,
       signal: AbortSignal.abort(),
     });
-    await expect(pending).rejects.toBeInstanceOf(CancelledError);
+    await expect(pending).rejects.toBeInstanceOf(InputEndedError);
   });
 
   it("renders the marker in place of the default symbol", async () => {
@@ -946,7 +946,7 @@ describe("terminal state is handled the same way by every prompt kind", () => {
     const stdin = createMockStdin();
     stdin.destroy();
 
-    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(CancelledError);
+    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(InputEndedError);
   });
 
   it.each(Object.keys(kinds))("rejects when input is destroyed while pending: %s", async (name) => {
@@ -956,26 +956,29 @@ describe("terminal state is handled the same way by every prompt kind", () => {
     await vi.waitFor(() => expect(stderr.getOutput()).not.toBe(""));
     stdin.destroy();
 
-    await expect(pending).rejects.toBeInstanceOf(CancelledError);
+    await expect(pending).rejects.toBeInstanceOf(InputEndedError);
   });
 
-  it.each(Object.keys(kinds))("rejects when input errors while pending: %s", async (name) => {
-    const stdin = createMockStdin();
-    const stderr = createMockStdout();
-    const pending = kinds[name](stdin, stderr);
-    await vi.waitFor(() => expect(stderr.getOutput()).not.toBe(""));
-    stdin.destroy(new Error("EIO"));
+  it.each(Object.keys(kinds))(
+    "rejects with the input error when input errors while pending: %s",
+    async (name) => {
+      const stdin = createMockStdin();
+      const stderr = createMockStdout();
+      const pending = kinds[name](stdin, stderr);
+      await vi.waitFor(() => expect(stderr.getOutput()).not.toBe(""));
+      stdin.destroy(new Error("EIO"));
 
-    await expect(pending).rejects.toBeInstanceOf(CancelledError);
-    await vi.waitFor(() => expect(stdin.closed).toBe(true));
-    expect(stdin.listenerCount("error")).toBe(0);
-  });
+      await expect(pending).rejects.toMatchObject({ message: "EIO" });
+      await vi.waitFor(() => expect(stdin.closed).toBe(true));
+      expect(stdin.listenerCount("error")).toBe(0);
+    },
+  );
 
   it.each(Object.keys(kinds))("rejects when input already ended: %s", async (name) => {
     const stdin = createMockStdin();
     stdin.push(null);
     await new Promise((resolve) => stdin.once("end", resolve).resume());
 
-    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(CancelledError);
+    await expect(kinds[name](stdin, createMockStdout())).rejects.toBeInstanceOf(InputEndedError);
   });
 });
