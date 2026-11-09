@@ -23,7 +23,7 @@ Define a command once and it works two ways: as `myapp deploy prod` typed at a s
 
 ## Install
 
-Node.js 22 or later, ESM only.
+Node.js 22 or later, ESM only. The type definitions need TypeScript 5.4 or later.
 
 ```bash
 npm install @libraz/node-cli

@@ -11,7 +11,14 @@
  *   npx tsx examples/09-database-admin.ts      # interactive shell with sql mode
  */
 import type { Writable } from "node:stream";
-import { c, createCLI, createColorizer, PromptCancelError, prompt, table } from "../src/index.js";
+import {
+  CancelledError,
+  colorTag,
+  createCLI,
+  createColorizer,
+  prompt,
+  table,
+} from "../src/index.js";
 
 // Simulated database
 const mockDb = {
@@ -33,7 +40,7 @@ const mockDb = {
   connected: true,
 };
 
-const cli = createCLI({ name: "dbadmin", prompt: c`{cyan db}> ` });
+const cli = createCLI({ name: "dbadmin", prompt: colorTag`{cyan db}> ` });
 
 const db = cli.command("db").description("Database operations");
 
@@ -90,7 +97,7 @@ dbTable
   .description("Show table contents")
   .option("-l, --limit <n>", { type: "number", default: 10, description: "Max rows" })
   .validate((ctx) => {
-    const name = ctx.args.name as string;
+    const name = ctx.args.name;
     if (!mockDb.tables[name]) {
       const available = Object.keys(mockDb.tables).join(", ");
       throw new Error(`Table "${name}" not found. Available: ${available}`);
@@ -98,8 +105,8 @@ dbTable
   })
   .action((ctx) => {
     const col = createColorizer(ctx.stdout);
-    const name = ctx.args.name as string;
-    const limit = ctx.options.limit as number;
+    const name = ctx.args.name;
+    const limit = ctx.options.limit;
     const rows = mockDb.tables[name].slice(0, limit);
 
     ctx.stdout.write(
@@ -116,13 +123,13 @@ dbTable
   .alias("desc")
   .description("Show table schema")
   .validate((ctx) => {
-    if (!mockDb.tables[ctx.args.name as string]) {
+    if (!mockDb.tables[ctx.args.name]) {
       throw new Error(`Table "${ctx.args.name}" not found.`);
     }
   })
   .action((ctx) => {
     const col = createColorizer(ctx.stdout);
-    const name = ctx.args.name as string;
+    const name = ctx.args.name;
     const sample = mockDb.tables[name][0] || {};
     const schema = Object.entries(sample).map(([col, val]) => ({
       column: col,
@@ -141,7 +148,7 @@ db.command("query <sql>")
   .alias("q")
   .description("Execute a SQL query (simulated)")
   .action((ctx) => {
-    const sql = ctx.args.sql as string;
+    const sql = ctx.args.sql;
     executeQuery(sql, ctx.stdout);
   });
 
@@ -151,7 +158,7 @@ db.command("drop <name>")
   .description("Drop a table (with confirmation)")
   .action(async (ctx) => {
     const col = createColorizer(ctx.stdout);
-    const name = ctx.args.name as string;
+    const name = ctx.args.name;
     if (!mockDb.tables[name]) {
       throw new Error(`Table "${name}" not found.`);
     }
@@ -168,8 +175,8 @@ db.command("drop <name>")
         ctx.stdout.write(`${col.dim("Cancelled.")}\n`);
       }
     } catch (err) {
-      if (err instanceof PromptCancelError) {
-        ctx.stdout.write(`${col.dim("Cancelled.")}\n`);
+      if (err instanceof CancelledError) {
+        ctx.stderr.write(`${col.dim("Cancelled.")}\n`);
       } else {
         throw err;
       }
@@ -188,8 +195,8 @@ cli
     }
 
     ctx.shell.enterMode({
-      prompt: c`{magenta sql}> `,
-      banner: c`{bold SQL Mode} — Enter queries. Type 'exit' to return.`,
+      prompt: colorTag`{magenta sql}> `,
+      banner: colorTag`{bold SQL Mode} — Enter queries. Type 'exit' to return.`,
       action: (input, { stdout }) => {
         executeQuery(input, stdout);
       },

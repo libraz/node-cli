@@ -65,13 +65,13 @@ Available commands:
   help [...command]    Show help information
 
 Options:
+  -h, --help       Show help
   -V, --version    Show the CLI version
 
-Shell commands: exit, quit
 Type "help <command>" for more information.
 ```
 
-A missing required argument fails before the action runs, and the process exits with status 1:
+A missing required argument fails before the action runs, and the process exits with status 64:
 
 ```text
 $ hello greet
@@ -188,8 +188,8 @@ cli
     required: true,
     description: "Release tag to deploy",
     validate: (value) => {
-      if (!/^v\d+\.\d+\.\d+$/.test(String(value))) {
-        throw new Error(`expected a tag like v1.2.3, got "${String(value)}"`);
+      if (!/^v\d+\.\d+\.\d+$/.test(value)) {
+        throw new Error(`expected a tag like v1.2.3, got "${value}"`);
       }
     },
   })
@@ -214,7 +214,7 @@ cli
         }
       } catch (err) {
         if (isCancellationError(err, ctx.signal)) {
-          ctx.stdout.write("Aborted.\n");
+          ctx.stderr.write("Aborted.\n");
           return;
         }
         throw err;
@@ -222,7 +222,7 @@ cli
     }
 
     const steps = ["build", "upload", "migrate", "switch", "verify"];
-    const bar = progress.bar({ total: steps.length, label: "deploy", stream: ctx.stderr });
+    const bar = progress.bar({ total: steps.length, label: "deploy", stderr: ctx.stderr });
     for (let done = 0; done < steps.length; done++) {
       await sleep(300);
       bar.tick();
@@ -252,17 +252,23 @@ $ deployer deploy prod --tag v1.2.3
 Aborted.
 ```
 
-Each rejection names the check that produced it:
+Each rejection names the check that produced it, and each exits with status 64:
 
 ```text
 $ deployer deploy prod --tag latest --yes
-Error: Invalid value for --tag: expected a tag like v1.2.3, got "latest"
+Error: Invalid value "latest" for --tag: expected a tag like v1.2.3, got "latest"
+
+  Usage: deploy <env> [options]
 
 $ deployer deploy edge --tag v1.0.0 --yes
 Error: Unknown environment "edge". Expected one of: dev, staging, prod
 
+  Usage: deploy <env> [options]
+
 $ deployer deploy prod --yes
-Error: Option --tag is required
+Error: Missing required option: --tag
+
+  Usage: deploy <env> [options]
 ```
 
 The bar writes to `ctx.stderr`, which is where progress belongs when stdout may be piped into another program, and the confirmation question is asked on `ctx.stderr` for the same reason. Passing `ctx` to the prompt hands it the command's `stdin`, `stderr` and `signal`. Builds on [`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts). See [Progress](progress.md) and [Prompts](prompts.md).
@@ -303,7 +309,7 @@ cli
           { key: "state", label: "State", align: "center" },
         ],
         headerStyle: "cyan.bold",
-        borderColor: "dim",
+        borderStyle: "dim",
       })}\n`,
     );
   });
@@ -326,11 +332,11 @@ $ fleet status
 
 ## A setup wizard built from prompts
 
-Four prompts run in sequence. `PromptCancelError` is the only failure that escapes a prompt — a `validate` that throws prints its message and asks again — so one catch around the whole sequence handles Ctrl-C at any step.
+Five prompts run in sequence, each given the command context so that the question, the input and the abort signal belong to the command. Two failures escape a prompt: `CancelledError` when the user presses Ctrl-C, and `InputEndedError` when no input is left to read, for example when standard input is closed. A `validate` that throws does not escape; it prints its message and asks again. One catch around the whole sequence therefore handles Ctrl-C at any step, and `InputEndedError` is left to the framework, which reports it and exits with status 66.
 
 ```typescript
 #!/usr/bin/env node
-import { createCLI, PromptCancelError, prompt } from "@libraz/node-cli";
+import { CancelledError, createCLI, prompt } from "@libraz/node-cli";
 
 const cli = createCLI({ name: "scaffold", description: "Create a new project" });
 
@@ -340,6 +346,7 @@ cli
   .action(async (ctx) => {
     try {
       const name = await prompt.text("Project name:", {
+        ...ctx,
         default: "my-app",
         validate: (value) => {
           if (!/^[a-z0-9-]+$/.test(value)) {
@@ -355,7 +362,7 @@ cli
           { label: "HTTP server", value: "server" },
           { label: "Library", value: "lib" },
         ],
-        { default: "minimal" },
+        { ...ctx, default: "minimal" },
       );
 
       const features = await prompt.multiselect(
@@ -365,18 +372,24 @@ cli
           { label: "Tests", value: "tests" },
           { label: "Dockerfile", value: "docker" },
         ],
-        { min: 1 },
+        { ...ctx, min: 1 },
       );
 
-      const git = await prompt.confirm("Initialize a git repository?", { default: true });
+      const git = await prompt.confirm("Initialize a git repository?", { ...ctx, default: true });
 
-      ctx.stdout.write(`\nname:     ${name}\n`);
+      ctx.stderr.write("\n");
+      if (!(await prompt.confirm("Create the project?", ctx))) {
+        ctx.stdout.write("Nothing created.\n");
+        return;
+      }
+
+      ctx.stdout.write(`name:     ${name}\n`);
       ctx.stdout.write(`template: ${template}\n`);
       ctx.stdout.write(`features: ${features.join(", ")}\n`);
       ctx.stdout.write(`git:      ${git ? "yes" : "no"}\n`);
     } catch (err) {
-      if (err instanceof PromptCancelError) {
-        ctx.stdout.write("\nCancelled.\n");
+      if (err instanceof CancelledError) {
+        ctx.stderr.write("\nCancelled.\n");
         return;
       }
       throw err;
@@ -403,6 +416,7 @@ Enter number (default 1): 2
 Enter numbers: 1,2
 ? Initialize a git repository? (Y/n) 
 
+? Create the project? (y/N) y
 name:     my-app
 template: server
 features: ts, tests
@@ -417,7 +431,7 @@ An invalid answer is reported and the same question is asked again:
 ? Project name: (my-app) 
 ```
 
-Ctrl-C at any question rejects with `PromptCancelError`, whose exit code is 130:
+Ctrl-C at any question rejects with `CancelledError`, whose exit code is 130:
 
 ```text
 ? Template:
@@ -428,7 +442,7 @@ Enter number (default 1): ^C
 Cancelled.
 ```
 
-Condensed from [`05-interactive-prompts.ts`](../../examples/05-interactive-prompts.ts). See [Prompts](prompts.md).
+A prompt message and marker are drawn on one line, so a blank line before a question is written to `ctx.stderr` separately rather than put in the message as `\n`. The cancellation notice goes to `ctx.stderr` as well, which keeps `stdout` for the command's result. Condensed from [`05-interactive-prompts.ts`](../../examples/05-interactive-prompts.ts). See [Prompts](prompts.md).
 
 ## Extending a CLI with a plugin
 
@@ -493,12 +507,12 @@ Condensed from [`06-plugin-system.ts`](../../examples/06-plugin-system.ts). See 
 
 ## Chaining commands with a pipe and a mode sub-prompt
 
-A pipeline is built from string input only — the interactive shell, or `cli.exec("a | b")`. Direct mode receives an array of arguments and never splits on a pipe character. Stages run concurrently, and each stage after the first reads the previous stage's output from `ctx.stdin`.
+A pipeline is built from a line of text only — the interactive shell, or `cli.execLine("a | b")`. Direct mode and `cli.exec()` receive an array of arguments and never split on a pipe character. Stages run concurrently, and each stage after the first reads the previous stage's output from `ctx.stdin`.
 
 ```typescript
 #!/usr/bin/env node
 import type { Readable } from "node:stream";
-import { createCLI } from "@libraz/node-cli";
+import { createCLI, isTTY } from "@libraz/node-cli";
 
 const files = ["index.ts", "cli.ts", "README.md", "app.js", "parser.ts"];
 
@@ -521,7 +535,7 @@ cli
   .command("filter <pattern>")
   .description("Keep only the lines that contain a pattern")
   .action(async (ctx) => {
-    if (!ctx.stdin) {
+    if (!ctx.stdin || isTTY(ctx.stdin)) {
       ctx.stderr.write("filter reads standard input; use it after a pipe\n");
       return;
     }
@@ -535,7 +549,7 @@ cli
   .command("count")
   .description("Count the lines on standard input")
   .action(async (ctx) => {
-    if (!ctx.stdin) {
+    if (!ctx.stdin || isTTY(ctx.stdin)) {
       ctx.stderr.write("count reads standard input; use it after a pipe\n");
       return;
     }
@@ -583,13 +597,13 @@ pipes> exit
 
 `exit` inside a mode leaves the mode rather than the shell, because a mode does not dispatch through the command registry and a command of that name would be unreachable there.
 
-The same pipeline runs programmatically, since `exec` accepts a string:
+The same pipeline runs programmatically through `execLine`, which accepts a line of text:
 
 ```typescript
-await cli.exec("list | filter ts | count");
+await cli.execLine("list | filter ts | count");
 ```
 
-`ctx.shell` is `null` under `exec`, so `calc` prints its guard message instead of opening a sub-prompt. Condensed from [`07-pipe-and-mode.ts`](../../examples/07-pipe-and-mode.ts). See [Interactive shell](interactive-shell.md).
+A command that is the first stage, or runs alone, has the terminal as `ctx.stdin` in the shell, and that stream does not end, so the `isTTY` check makes it print a hint instead of waiting. `ctx.shell` is `null` under `execLine`, so `calc` prints its guard message instead of opening a sub-prompt. Condensed from [`07-pipe-and-mode.ts`](../../examples/07-pipe-and-mode.ts). See [Interactive shell](interactive-shell.md).
 
 ## A task runner with concurrent progress bars
 
@@ -627,7 +641,7 @@ cli
 
     if (selected.length === 0) throw new Error("No matching task");
 
-    const multi = progress.multi({ stream: ctx.stderr });
+    const multi = progress.multi({ stderr: ctx.stderr });
     const started = Date.now();
 
     try {
@@ -902,7 +916,9 @@ cache:  on
 no changes
 
 $ infra plan --since nope
-Error: Invalid value for --since: not a date: nope
+Error: Invalid value "nope" for --since: not a date: nope
+
+  Usage: plan [stack] [options]
 ```
 
 A failing `parse` is wrapped in a `ValidationError` naming the option. The generated help lists the defaults and the negated form of every boolean:
@@ -951,7 +967,7 @@ Condensed from [`10-advanced-api.ts`](../../examples/10-advanced-api.ts). See [O
 
 ## Testing a CLI with in-memory streams
 
-`cli.exec(input, { stdout, stderr })` runs a command against streams of the caller's choosing, which is what makes a CLI testable without spawning a process. `stdin` defaults to `null`, `stdout` to `process.stdout` and `stderr` to `process.stderr`, so a test supplies at least `stdout`.
+`cli.exec(argv, { stdout, stderr })` runs a command against streams of the caller's choosing, which is what makes a CLI testable without spawning a process. It takes an array of arguments and never interprets them as shell syntax; `cli.execLine(line, options)` takes the same options and one line of text with quoting and pipes. `stdin` defaults to `null`, `stdout` to `process.stdout` and `stderr` to `process.stderr`, so a test supplies at least `stdout`.
 
 ```typescript
 import { PassThrough } from "node:stream";
@@ -978,7 +994,7 @@ function collect(): { stream: PassThrough; text: () => string } {
 const out = collect();
 const err = collect();
 
-await buildCli().exec("add 2 40", { stdout: out.stream, stderr: err.stream });
+await buildCli().exec(["add", "2", "40"], { stdout: out.stream, stderr: err.stream });
 
 console.log(JSON.stringify(out.text())); // "42\n"
 console.log(JSON.stringify(err.text())); // ""
@@ -990,20 +1006,20 @@ A failure rejects the returned promise after the `commandError` and `error` even
 import { CLIError } from "@libraz/node-cli";
 
 try {
-  await buildCli().exec("add 1", { stdout: out.stream, stderr: err.stream });
+  await buildCli().exec(["add", "1"], { stdout: out.stream, stderr: err.stream });
 } catch (err) {
   if (err instanceof CLIError) {
     console.log(err.code); // "MISSING_ARGUMENT"
-    console.log(err.exitCode); // 1
+    console.log(err.exitCode); // 64
   }
 }
 ```
 
 Three details matter when writing tests this way:
 
-- `ctx.shell` is `null` under `exec`, so a command that opens a mode must guard for it. Test the guard, not the mode.
-- `exec` does not emit the `exit` event on the normal path; only `cli.start(argv)` does, and it resolves to the exit code. An assertion on `exit` needs `start(argv)`.
-- Colour from `createColorizer`, the logger and `progress` is decided from the stream they are bound to, and a `PassThrough` is not a terminal, so that output is plain. `color` and `c` follow `process.stdout` instead. Call `setColorEnabled(true)` when the escape codes themselves are what is being asserted, and `setColorEnabled("auto")` afterwards.
+- `ctx.shell` is `null` under `exec` and `execLine`, so a command that opens a mode must guard for it. Test the guard, not the mode.
+- `exec` and `execLine` do not emit the `exit` event on the normal path; only `cli.start(argv)` does, and it resolves to the exit code. An assertion on `exit` needs `start(argv)`.
+- Colour from `createColorizer`, the logger and `progress` is decided from the stream they are bound to, and a `PassThrough` is not a terminal, so that output is plain. `color` and `colorTag` follow `process.stdout` instead. Call `setColorEnabled(true)` when the escape codes themselves are what is being asserted, and `setColorEnabled("auto")` afterwards.
 
 A fresh `CLI` per test keeps registrations from leaking between cases; `cli.start(argv)` throws if called twice on one instance.
 

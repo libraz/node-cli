@@ -5,7 +5,8 @@
 ## 動作要件
 
 - **Node.js 22 以降。** インストール済みのバージョンは `node --version` で確認できます。
-- **ESM プロジェクトであること。** このパッケージは ECMAScript モジュールとしてのみ公開しています。
+- **ESM プロジェクトであること。** このパッケージは ECMAScript モジュールとしてのみ公開しています。CommonJS プロジェクトからは、Node.js 22.12 以降なら `require()` で読み込めます。
+- **TypeScript 5.4 以降。** 型宣言を使うプロジェクトが対象で、`@types/node` も必要です。
 
 ### ここでいう ESM
 
@@ -19,7 +20,7 @@ ECMAScript モジュール（ESM）は JavaScript 標準のモジュール形式
 
 `"type": "module"` を指定すると、プロジェクト内のすべての `.js` ファイルが ECMAScript モジュールとして扱われます。指定しなければ Node は CommonJS とみなし、`import` 文は構文解析に失敗します。
 
-このライブラリは ECMAScript モジュールしか公開していないため、`"type": "module"` が必須で、CommonJS 用の別ビルドはありません。Node.js 22.12 以降なら ES モジュールを `require("@libraz/node-cli")` で読み込めます。それ以前の 22.x では、CommonJS プロジェクトから動的インポートの `await import("@libraz/node-cli")` で到達できます。これはモジュールの Promise を返します。
+このライブラリは ECMAScript モジュールしか公開しておらず、CommonJS 用の別ビルドもないため、`import` で使います。`.js` ファイルで `import` を使うには `"type": "module"` が必要です。Node.js 22.12 以降なら ES モジュールを `require("@libraz/node-cli")` で読み込めます。それ以前の 22.x では、CommonJS プロジェクトから動的インポートの `await import("@libraz/node-cli")` で到達できます。これはモジュールの Promise を返します。
 
 ## インストール
 
@@ -64,11 +65,11 @@ await cli.start();
 各行の意味は次のとおりです。
 
 - `#!/usr/bin/env node` は**シバン**です。次の節で説明します。
-- `createCLI({ ... })` はアプリケーションオブジェクトを組み立てます。`name` はヘルプ出力と履歴ファイルのパス導出に使われ、`version` は `--version` が表示する値です。どちらも省略できます。`version` がなければ、`--version` と `-V` はライブラリ側で一切横取りされません。設定はすべてこのオブジェクトで渡します。構築した後で変える手段はなく、履歴の設定が不正ならこの時点で例外を投げます。
+- `createCLI({ ... })` はアプリケーションオブジェクトを組み立てます。`name` は必須で、ヘルプ出力と履歴ファイルのパス（`~/.<name>_history`）の導出に使われます。先頭は英数字で、使える文字は英数字、`.`、`_`、`-` です。`version` は省略でき、`--version` が表示する値です。`version` がなければバージョンのフラグは定義されず、`--version` と `-V` は未知のオプションとして報告されます。設定はすべてこのオブジェクトで渡します。構築した後で変える手段はなく、名前や履歴の設定が不正ならこの時点で例外を投げます。
 - `cli.command("greet <name>")` は、`name` という必須の位置引数を 1 つ取る `greet` というコマンドを宣言します。山括弧が必須を表し、`[name]` のように角括弧にすると省略可能になります。
 - `.description(...)` は、生成されるヘルプでコマンドの横に並ぶ説明文を与えます。
 - `.action((ctx) => { ... })` は、コマンドが呼び出されたときに走る関数を登録します。`ctx` は[コマンドコンテキスト](commands.md)です。`ctx.args` には名前をキーとした位置引数、`ctx.options` には解析済みのオプションが入り、`ctx.stdout` は結果を書き出すストリームです。
-- `ctx.args.name` の型は `string` です。型は定義文字列から決まります。`<name>` は `string`、`[name]` は `string | undefined`、`<...name>` は `readonly string[]` です。位置引数は変換されないため、数値として使う場合はアクションの中で解析します。
+- `ctx.args.name` の型は `string` です。型は定義文字列から決まります。`<name>` は `string`、`[name]` は `string | undefined`、`<...name>` は `readonly string[]` です。位置引数は変換されないため、数値として使う場合はアクションの中で解析します。キーは camelCase で、`<file-name>` は `ctx.args.fileName` で読みます。
 - `await cli.start()` で制御をライブラリに渡します。ライブラリは端末の引数を読み、実行モードを選び、一致したコマンドを実行して、終了コードで resolve します。
 
 出力には `console.log` ではなく `ctx.stdout` を使ってください。`ctx.stdout` はその実行に紐づいたストリームです。だからこそ、対話シェルの中で出力を別のコマンドにパイプしても同じコマンドがそのまま動き、代わりのストリームを渡してテストすることもできます。
@@ -95,7 +96,7 @@ JavaScript から見るとこの行はコメントなので、import される�
     "build": "tsc"
   },
   "dependencies": {
-    "@libraz/node-cli": "^1"
+    "@libraz/node-cli": "^2"
   },
   "devDependencies": {
     "@types/node": "^22",
@@ -125,7 +126,7 @@ JavaScript から見るとこの行はコメントなので、import される�
 
 - `module` と `moduleResolution` を `Node16` にすると、TypeScript は ESM パッケージに対する Node と同じやり方で import を解決します。これによって `import { createCLI } from "@libraz/node-cli"` が公開されたエントリポイントに解決されます。
 - `outDir` と `rootDir` は、`src/` の構成をそのまま写した形でコンパイル後の JavaScript を `dist/` に出します。`src/cli.ts` は `dist/cli.js` になり、これが `bin` に書いたパスです。
-- `"types": ["node"]` は必須です。公開している型宣言は `NodeJS` グローバル名前空間と `node:stream` モジュールを参照しています。Node の型定義が読み込まれていないとこれらの参照が解決できず、名前が見つからないというエラーでビルドが失敗します。`@types/node` は Node 22 以降向けのものを入れてください。
+- `"types": ["node"]` は必須です。公開している型宣言は `node:stream` を import し、`AbortSignal` と `Symbol.dispose` のグローバルを使っており、いずれも `@types/node` が提供します。Node の型定義が読み込まれていないとこれらの参照が解決できず、名前が見つからないというエラーでビルドが失敗します。`@types/node` は Node 22 以降向けのものを入れてください。
 
 ### ビルド
 
@@ -187,11 +188,12 @@ $ myapp greet World
 Hello, World!
 ```
 
-知らないコマンドを指定すると、標準エラーに失敗を報告し、0 以外の終了コードで終わります。
+知らないコマンドを指定すると、標準エラーに失敗を報告し、入力の誤りを表す終了コード 64 で終わります。
 
 ```
 $ myapp greetings World
 Error: Command not found: "greetings"
+Available commands: greet, help
 ```
 
 必須の引数が足りない場合も同じように報告され、そのコマンドの usage 行が添えられます。
@@ -221,6 +223,7 @@ Available commands:
   help [...command]    Show help information
 
 Options:
+  -h, --help       Show help
   -V, --version    Show the CLI version
 
 Shell commands: exit, quit
@@ -247,9 +250,9 @@ Available commands:
   help [...command]    Show help information
 
 Options:
+  -h, --help       Show help
   -V, --version    Show the CLI version
 
-Shell commands: exit, quit
 Type "help <command>" for more information.
 ```
 
@@ -293,7 +296,7 @@ cli
   });
 ```
 
-`"-u, --uppercase"` は、同じオプションの長形式と短いエイリアスを宣言します。`ctx.options` では値は常に長い名前、つまり `ctx.options.uppercase` の下にあり、エイリアス側には入りません。
+`"-u, --uppercase"` は、同じオプションの長形式と短いエイリアスを宣言します。`ctx.options` では値は常に長い名前を camelCase にしたキー、つまり `ctx.options.uppercase` の下にあり、エイリアス側には入りません。ダッシュを含む名前は連結され、`--dry-run` は `ctx.options.dryRun` で読みます。flags 文字列に長い名前が複数あるときは、最初のものがキーになります。
 
 ```
 $ myapp greet World --uppercase
@@ -368,7 +371,7 @@ log.error("Could not reach the server");
 ✖ [myapp] Could not reach the server
 ```
 
-ストリームが端末でないときは、色付きの記号が素のラベル（`[INFO]`、`[OK]`、`[ERROR]`）に置き換わり、ログファイルでも読める出力になります。ログレベル、タイムスタンプ、子ロガーは[ログ出力](logging.md)で扱います。
+ストリームが端末でないときは、記号が素のラベル（`[INFO]`、`[OK]`、`[ERROR]`）に置き換わり、ログファイルでも読める出力になります。ログレベル、タイムスタンプ、子ロガーは[ログ出力](logging.md)で扱います。
 
 ### テーブル
 

@@ -65,13 +65,13 @@ Available commands:
   help [...command]    Show help information
 
 Options:
+  -h, --help       Show help
   -V, --version    Show the CLI version
 
-Shell commands: exit, quit
 Type "help <command>" for more information.
 ```
 
-必須の引数が欠けている場合はアクションが走る前に失敗し、プロセスは終了コード 1 で終わります。
+必須の引数が欠けている場合はアクションが走る前に失敗し、プロセスは終了コード 64 で終わります。
 
 ```text
 $ hello greet
@@ -188,8 +188,8 @@ cli
     required: true,
     description: "Release tag to deploy",
     validate: (value) => {
-      if (!/^v\d+\.\d+\.\d+$/.test(String(value))) {
-        throw new Error(`expected a tag like v1.2.3, got "${String(value)}"`);
+      if (!/^v\d+\.\d+\.\d+$/.test(value)) {
+        throw new Error(`expected a tag like v1.2.3, got "${value}"`);
       }
     },
   })
@@ -214,7 +214,7 @@ cli
         }
       } catch (err) {
         if (isCancellationError(err, ctx.signal)) {
-          ctx.stdout.write("Aborted.\n");
+          ctx.stderr.write("Aborted.\n");
           return;
         }
         throw err;
@@ -222,7 +222,7 @@ cli
     }
 
     const steps = ["build", "upload", "migrate", "switch", "verify"];
-    const bar = progress.bar({ total: steps.length, label: "deploy", stream: ctx.stderr });
+    const bar = progress.bar({ total: steps.length, label: "deploy", stderr: ctx.stderr });
     for (let done = 0; done < steps.length; done++) {
       await sleep(300);
       bar.tick();
@@ -252,17 +252,23 @@ $ deployer deploy prod --tag v1.2.3
 Aborted.
 ```
 
-拒否のたびに、どのチェックによるものかがメッセージに現れます。
+拒否のたびに、どのチェックによるものかがメッセージに現れ、終了コードはいずれも 64 です。
 
 ```text
 $ deployer deploy prod --tag latest --yes
-Error: Invalid value for --tag: expected a tag like v1.2.3, got "latest"
+Error: Invalid value "latest" for --tag: expected a tag like v1.2.3, got "latest"
+
+  Usage: deploy <env> [options]
 
 $ deployer deploy edge --tag v1.0.0 --yes
 Error: Unknown environment "edge". Expected one of: dev, staging, prod
 
+  Usage: deploy <env> [options]
+
 $ deployer deploy prod --yes
-Error: Option --tag is required
+Error: Missing required option: --tag
+
+  Usage: deploy <env> [options]
 ```
 
 プログレスバーの出力先は `ctx.stderr` です。stdout が別のプログラムへパイプされる可能性がある以上、進捗はこちらに出すべきものです。確認の質問も同じ理由で `ctx.stderr` に出ます。プロンプトに `ctx` を渡すと、コマンドの `stdin`、`stderr`、`signal` がそのまま使われます。[`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts) を土台にしています。[プログレス](progress.md) と [プロンプト](prompts.md) も参照してください。
@@ -303,7 +309,7 @@ cli
           { key: "state", label: "State", align: "center" },
         ],
         headerStyle: "cyan.bold",
-        borderColor: "dim",
+        borderStyle: "dim",
       })}\n`,
     );
   });
@@ -326,11 +332,11 @@ $ fleet status
 
 ## プロンプトで組み立てたセットアップウィザード
 
-4 つのプロンプトが順に走ります。プロンプトから外へ抜ける失敗は `PromptCancelError` だけで、`validate` が投げた場合はメッセージを表示して同じ質問をやり直します。そのため、シーケンス全体を 1 つの catch で囲めば、どの段階での Ctrl-C にも対応できます。
+5 つのプロンプトが順に走ります。どのプロンプトにもコマンドのコンテキストを渡し、質問、入力、中断シグナルをコマンドのものにしています。プロンプトから外へ抜ける失敗は 2 つあります。利用者が Ctrl-C を押したときの `CancelledError` と、標準入力が閉じているなど読める入力が残っていないときの `InputEndedError` です。`validate` が投げた場合は外へ抜けず、メッセージを表示して同じ質問をやり直します。そのため、シーケンス全体を 1 つの catch で囲めばどの段階での Ctrl-C にも対応でき、`InputEndedError` はフレームワークに任せます。フレームワークはこれを報告し、終了コード 66 で終わります。
 
 ```typescript
 #!/usr/bin/env node
-import { createCLI, PromptCancelError, prompt } from "@libraz/node-cli";
+import { CancelledError, createCLI, prompt } from "@libraz/node-cli";
 
 const cli = createCLI({ name: "scaffold", description: "Create a new project" });
 
@@ -340,6 +346,7 @@ cli
   .action(async (ctx) => {
     try {
       const name = await prompt.text("Project name:", {
+        ...ctx,
         default: "my-app",
         validate: (value) => {
           if (!/^[a-z0-9-]+$/.test(value)) {
@@ -355,7 +362,7 @@ cli
           { label: "HTTP server", value: "server" },
           { label: "Library", value: "lib" },
         ],
-        { default: "minimal" },
+        { ...ctx, default: "minimal" },
       );
 
       const features = await prompt.multiselect(
@@ -365,18 +372,24 @@ cli
           { label: "Tests", value: "tests" },
           { label: "Dockerfile", value: "docker" },
         ],
-        { min: 1 },
+        { ...ctx, min: 1 },
       );
 
-      const git = await prompt.confirm("Initialize a git repository?", { default: true });
+      const git = await prompt.confirm("Initialize a git repository?", { ...ctx, default: true });
 
-      ctx.stdout.write(`\nname:     ${name}\n`);
+      ctx.stderr.write("\n");
+      if (!(await prompt.confirm("Create the project?", ctx))) {
+        ctx.stdout.write("Nothing created.\n");
+        return;
+      }
+
+      ctx.stdout.write(`name:     ${name}\n`);
       ctx.stdout.write(`template: ${template}\n`);
       ctx.stdout.write(`features: ${features.join(", ")}\n`);
       ctx.stdout.write(`git:      ${git ? "yes" : "no"}\n`);
     } catch (err) {
-      if (err instanceof PromptCancelError) {
-        ctx.stdout.write("\nCancelled.\n");
+      if (err instanceof CancelledError) {
+        ctx.stderr.write("\nCancelled.\n");
         return;
       }
       throw err;
@@ -403,6 +416,7 @@ Enter number (default 1): 2
 Enter numbers: 1,2
 ? Initialize a git repository? (Y/n) 
 
+? Create the project? (y/N) y
 name:     my-app
 template: server
 features: ts, tests
@@ -417,7 +431,7 @@ git:      yes
 ? Project name: (my-app) 
 ```
 
-どの質問でも Ctrl-C は `PromptCancelError` による reject になり、その終了コードは 130 です。
+どの質問でも Ctrl-C は `CancelledError` による reject になり、その終了コードは 130 です。
 
 ```text
 ? Template:
@@ -428,7 +442,7 @@ Enter number (default 1): ^C
 Cancelled.
 ```
 
-[`05-interactive-prompts.ts`](../../examples/05-interactive-prompts.ts) を要約したものです。[プロンプト](prompts.md) も参照してください。
+プロンプトのメッセージとマーカーは 1 行で描画されるため、質問の前の空行はメッセージに `\n` として入れず、`ctx.stderr` に別に書きます。キャンセルの通知も `ctx.stderr` に書き、`stdout` はコマンドの結果のために空けておきます。[`05-interactive-prompts.ts`](../../examples/05-interactive-prompts.ts) を要約したものです。[プロンプト](prompts.md) も参照してください。
 
 ## プラグインによる CLI の拡張
 
@@ -493,12 +507,12 @@ Unknown command: wat
 
 ## パイプとモードサブプロンプトによるコマンドの連結
 
-パイプラインは文字列入力からのみ組み立てられます。対話シェル、または `cli.exec("a | b")` です。直接実行モードは引数の配列を受け取るため、パイプ文字で分割されることはありません。各ステージは並行して走り、2 番目以降のステージは前段の出力を `ctx.stdin` から読みます。
+パイプラインは 1 行のテキストからのみ組み立てられます。対話シェル、または `cli.execLine("a | b")` です。直接実行モードと `cli.exec()` は引数の配列を受け取るため、パイプ文字で分割されることはありません。各ステージは並行して走り、2 番目以降のステージは前段の出力を `ctx.stdin` から読みます。
 
 ```typescript
 #!/usr/bin/env node
 import type { Readable } from "node:stream";
-import { createCLI } from "@libraz/node-cli";
+import { createCLI, isTTY } from "@libraz/node-cli";
 
 const files = ["index.ts", "cli.ts", "README.md", "app.js", "parser.ts"];
 
@@ -521,7 +535,7 @@ cli
   .command("filter <pattern>")
   .description("Keep only the lines that contain a pattern")
   .action(async (ctx) => {
-    if (!ctx.stdin) {
+    if (!ctx.stdin || isTTY(ctx.stdin)) {
       ctx.stderr.write("filter reads standard input; use it after a pipe\n");
       return;
     }
@@ -535,7 +549,7 @@ cli
   .command("count")
   .description("Count the lines on standard input")
   .action(async (ctx) => {
-    if (!ctx.stdin) {
+    if (!ctx.stdin || isTTY(ctx.stdin)) {
       ctx.stderr.write("count reads standard input; use it after a pipe\n");
       return;
     }
@@ -583,13 +597,13 @@ pipes> exit
 
 モード内の `exit` はシェルではなくモードを抜けます。モードはコマンドレジストリを経由せずに入力を処理するため、同名のコマンドがあってもそこからは到達できないからです。
 
-`exec` は文字列を受け取るので、同じパイプラインをプログラムから実行できます。
+`execLine` は 1 行のテキストを受け取るので、同じパイプラインをプログラムから実行できます。
 
 ```typescript
-await cli.exec("list | filter ts | count");
+await cli.execLine("list | filter ts | count");
 ```
 
-`exec` の下では `ctx.shell` が `null` になるため、`calc` はサブプロンプトを開かずガード用のメッセージを出力します。[`07-pipe-and-mode.ts`](../../examples/07-pipe-and-mode.ts) を要約したものです。[対話シェル](interactive-shell.md) も参照してください。
+シェルで先頭のステージになるコマンドや単独で走るコマンドでは、`ctx.stdin` は端末になります。このストリームは終わらないため、`isTTY` の確認で待たずにヒントを出力します。`execLine` の下では `ctx.shell` が `null` になるため、`calc` はサブプロンプトを開かずガード用のメッセージを出力します。[`07-pipe-and-mode.ts`](../../examples/07-pipe-and-mode.ts) を要約したものです。[対話シェル](interactive-shell.md) も参照してください。
 
 ## 並行するプログレスバーを持つタスクランナー
 
@@ -627,7 +641,7 @@ cli
 
     if (selected.length === 0) throw new Error("No matching task");
 
-    const multi = progress.multi({ stream: ctx.stderr });
+    const multi = progress.multi({ stderr: ctx.stderr });
     const started = Date.now();
 
     try {
@@ -902,7 +916,9 @@ cache:  on
 no changes
 
 $ infra plan --since nope
-Error: Invalid value for --since: not a date: nope
+Error: Invalid value "nope" for --since: not a date: nope
+
+  Usage: plan [stack] [options]
 ```
 
 `parse` が失敗すると、そのオプション名を含む `ValidationError` に包まれます。生成されたヘルプには既定値と、ブール値オプションの否定形が並びます。
@@ -951,7 +967,7 @@ Interrupted. Press Ctrl-C again to force quit.
 
 ## メモリ上のストリームによる CLI のテスト
 
-`cli.exec(input, { stdout, stderr })` は呼び出し側が用意したストリームに対してコマンドを実行します。プロセスを起動せずに CLI をテストできるのはこの仕組みによるものです。`stdin` の既定値は `null`、`stdout` は `process.stdout`、`stderr` は `process.stderr` なので、テストでは少なくとも `stdout` を渡します。
+`cli.exec(argv, { stdout, stderr })` は呼び出し側が用意したストリームに対してコマンドを実行します。プロセスを起動せずに CLI をテストできるのはこの仕組みによるものです。引数の配列を受け取り、シェルの構文としては一切解釈しません。`cli.execLine(line, options)` は同じオプションを取り、引用とパイプを備えた 1 行のテキストを受け取ります。`stdin` の既定値は `null`、`stdout` は `process.stdout`、`stderr` は `process.stderr` なので、テストでは少なくとも `stdout` を渡します。
 
 ```typescript
 import { PassThrough } from "node:stream";
@@ -978,7 +994,7 @@ function collect(): { stream: PassThrough; text: () => string } {
 const out = collect();
 const err = collect();
 
-await buildCli().exec("add 2 40", { stdout: out.stream, stderr: err.stream });
+await buildCli().exec(["add", "2", "40"], { stdout: out.stream, stderr: err.stream });
 
 console.log(JSON.stringify(out.text())); // "42\n"
 console.log(JSON.stringify(err.text())); // ""
@@ -990,20 +1006,20 @@ console.log(JSON.stringify(err.text())); // ""
 import { CLIError } from "@libraz/node-cli";
 
 try {
-  await buildCli().exec("add 1", { stdout: out.stream, stderr: err.stream });
+  await buildCli().exec(["add", "1"], { stdout: out.stream, stderr: err.stream });
 } catch (err) {
   if (err instanceof CLIError) {
     console.log(err.code); // "MISSING_ARGUMENT"
-    console.log(err.exitCode); // 1
+    console.log(err.exitCode); // 64
   }
 }
 ```
 
 この書き方でテストを書くときに効いてくる点が 3 つあります。
 
-- `exec` の下では `ctx.shell` が `null` になるため、モードを開くコマンドはガードが必要です。テスト対象になるのはモードではなくガードのほうです。
-- `exec` は通常の経路で `exit` イベントを発火しません。発火するのは `cli.start(argv)` だけで、これは終了コードで解決されます。`exit` を検証するテストには `start(argv)` が必要です。
-- `createColorizer`、ロガー、`progress` の色付けは、それぞれが結び付けられたストリームから判定されます。`PassThrough` は端末ではないため、その出力はプレーンになります。`color` と `c` は代わりに `process.stdout` に従います。エスケープシーケンスそのものを検証したい場合は `setColorEnabled(true)` を呼び、終わったら `setColorEnabled("auto")` を呼んでください。
+- `exec` と `execLine` の下では `ctx.shell` が `null` になるため、モードを開くコマンドはガードが必要です。テスト対象になるのはモードではなくガードのほうです。
+- `exec` と `execLine` は通常の経路で `exit` イベントを発火しません。発火するのは `cli.start(argv)` だけで、これは終了コードで解決されます。`exit` を検証するテストには `start(argv)` が必要です。
+- `createColorizer`、ロガー、`progress` の色付けは、それぞれが結び付けられたストリームから判定されます。`PassThrough` は端末ではないため、その出力はプレーンになります。`color` と `colorTag` は代わりに `process.stdout` に従います。エスケープシーケンスそのものを検証したい場合は `setColorEnabled(true)` を呼び、終わったら `setColorEnabled("auto")` を呼んでください。
 
 テストごとに新しい `CLI` を作れば、登録内容がケース間で漏れることはありません。`cli.start(argv)` は同じインスタンスで 2 回呼ぶと例外を投げます。
 

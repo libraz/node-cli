@@ -11,43 +11,84 @@ Major release. The public interface is renamed and reshaped so that one concept 
 
 ### Breaking changes
 
-1. `new CLI()` is `createCLI()`; `CLI` and `CommandBuilder` are exported as types only; `logger()` is `createLogger()`.
-2. The `CLI` setters `prompt`, `description`, `banner`, `history`, `historySize` and `historyFilter` are removed. Pass the values in `createCLI({ ... })`, where `historySize`, `historyFilter` and `historyFile` are validated immediately and `~` / `~/` in `historyFile` expands to the home directory.
-3. `.complete()` is `.completer()`, `.cancel()` is `.onCancel()` and `OptionSchema.autocomplete` is `completer`. Completers receive a `CompletionContext` instead of the current word.
-4. `cli.catch()` is `cli.fallback()`, `PluginContext.catch` is `fallback`, and `CatchContext` is `FallbackContext` (now with `stdin` and `signal`).
-5. A mode completer returns `readonly string[]`; `CompletionResult` is removed.
-6. `ModeConfig.message` is `banner`.
-7. `start()` resolves to the exit code (`Promise<number>`).
-8. `use()` throws a synchronous plugin's error in place.
-9. Error constructors take an options object (`{ code, exitCode?, cause? }` and per-class fields); `code` and `exitCode` are `readonly`; `isCancellationError` requires the signal; `formatErrorMessage` takes no signal; surplus arguments are reported by one `ExtraArgumentError` with `extras`.
-10. Programmer mistakes throw `TypeError`, `RangeError` or `Error` with a `UsageErrorCode` `code`.
-11. Option placeholders `<number>` and `<boolean>` must agree with `type`; a mismatch throws `ERR_INVALID_DEFINITION` at definition time.
-12. `CommandContext` members are `readonly`; `rawArgv` is `null` for string input.
-13. Removed from the root: `stripOptionPrefix`, `splitPipes`, `activePipeSegment`, `maskInput`, `restoreCursor`, top-level `releaseAll`, `resetColorEnabled`, `CompletionResult`, `TableStyle`, `CatchContext`, `PromptBaseOptions`, `ExecOptions`.
-14. `color.<unknown>` is a type error and a `RangeError`; `setColorEnabled` accepts `"auto"`; stream parameters are `Writable`; `sanitizeTerminalText` closes open styles.
-15. Prompts ask on stderr; the `stdout` option is removed; `prefix` is `marker`; `required` remains on `text()` and `password()` only.
-16. Progress: `finish()` is `succeed()`; `stop()` keeps the last frame; `Spinner.start()` is removed and drawing starts at creation; `update()` is `setLabel()`; `interval` is `intervalMs`; `BarState` fields are renamed; `multi({ stream })` selects the output; invalid `total`, unknown `color` and a busy output throw at creation; non-TTY bars and multi-bars write one result line.
-17. Table options are rebuilt around `ColumnSpec`; `TableChars` keys are camelCase; invalid names and widths throw.
-18. `truncateAnsi(text, width, ellipsis?)` throws `RangeError` for a width of 0 or less, `NaN`, `-Infinity` or a fraction.
-19. A prompt given `ctx` reads `ctx.stdin`, falling back to `process.stdin` when it is `null`; tests pass `stdin` to `exec()`.
+#### Entry points
+
+- `new CLI()` is `createCLI()`, and `name` is required: letters, digits, `.`, `_` and `-`, starting with a letter or digit. `CLI` and `CommandBuilder` are exported as types only; `logger()` is `createLogger()`.
+- `cli.exec()` takes an argument array only. A command line string goes to the new `cli.execLine()`: `cli.exec("a b | c")` → `cli.execLine("a b | c")`. `exec("x")` and `execLine(["x"])` throw `TypeError`.
+- The `CLI` setters `prompt`, `description`, `banner`, `history`, `historySize` and `historyFilter` are removed. Pass the values in `createCLI({ ... })`, where `historySize`, `historyFilter` and `historyFile` are validated immediately and `~` / `~/` in `historyFile` expands to the home directory.
+- `start()` resolves to the exit code (`Promise<number>`). `use()` throws a synchronous plugin's error in place; a plugin whose asynchronous initialization fails rejects `use()`, `exec()`, `execLine()` and `start()` with one `Error` (`code: "ERR_PLUGIN_FAILED"`, the original value as `cause`).
+- `cli.catch()` is `cli.fallback()`, `PluginContext.catch` is `fallback`, and `CatchContext` is `FallbackContext` (now with `stdin`, `signal` and `rawArgv`).
+- Top level: `--help <cmd>` and `-h <cmd>` print that command's help. An unknown top-level flag, and `--version` without a configured version, is `UnknownOptionError` (was `Command not found`). The command list always shows `-h, --help`, and `Shell commands` appears only in the interactive shell.
+- Commands and aliases are limited to letters and digits joined by single dashes; others throw `ERR_INVALID_DEFINITION`.
+
+#### Commands and options
+
+- `ctx.options` and `ctx.args` are keyed by camelCase: `ctx.options["dry-run"]` → `ctx.options.dryRun`, `<file-name>` → `ctx.args.fileName`. With several long names the first is canonical (was the last): `--colour, --color <n>` → `ctx.options.colour`. Names are limited to letters and digits joined by single dashes, and keys that collide after conversion throw `ERR_DEFINITION_CONFLICT`. An independent `--no-x` option has the key `noX`.
+- `choices` must match the value type (`type: "number"` takes numbers) and values are compared with `===` after conversion; `choices` cannot be combined with `parse` or `type: "boolean"`, and an empty list throws. `default` is typed as the value and is not passed through `parse`.
+- A command `validate` that throws is wrapped in `ValidationError`, as option `validate` and `parse` already were; a thrown `CLIError` passes through. Exit code: 1 → 64.
+- `.complete()` is `.completer()`, `.cancel()` is `.onCancel()` and `OptionSchema.autocomplete` is `completer`. Completers receive a `CompletionContext` instead of the current word, whose `args` and `options` use the camelCase keys.
+- Option placeholders `<number>` and `<boolean>` must agree with `type`; a mismatch throws `ERR_INVALID_DEFINITION` at definition time.
+- `CommandContext` members are `readonly`; `rawArgv` is `null` for string input.
+
+#### Errors and cancellation
+
+- Error constructors take an options object: `new CLIError(message, { code?, exitCode?, cause? })` (`code` defaults to `"FAILED"`, `exitCode` is an integer from 1 to 255). `code` and `exitCode` are `readonly`; `isCancellationError` requires the signal; `formatErrorMessage` takes no signal and returns terminal-safe, possibly multi-line text.
+- `PromptCancelError` is `CancelledError`. Codes are named by state: `PROMPT_CANCELLED` → `CANCELLED`, `VALIDATION_ERROR` → `VALIDATION_FAILED`, `PARSE_ERROR` → `PARSE_FAILED`. `ExtraArgumentError.extra` is removed; `extras` lists every surplus argument.
+- Errors caused by user input exit with 64 (was 1); `InputEndedError` exits with 66 and `CancelledError` with 130.
+- Cancellation rejects `exec()`, `execLine()` and `start()` with `CancelledError` (`cause` is the signal's reason) and fires no `commandError` or `error` event; a signal that is already aborted rejects before dispatch. `exec()` and `execLine()` no longer listen for `SIGINT`: cancel with `options.signal`.
+- Programmer mistakes throw `TypeError`, `RangeError` or `Error` with a `UsageErrorCode` `code`.
+
+#### Prompts
+
+- Prompts ask on stderr; the `stdout` option is removed and `prefix` is `marker`. `required` remains on `text()` and `password()` only. The message and marker are drawn on one line.
+- A prompt whose `stdin` is `null` rejects with `InputEndedError` before asking (was: read `process.stdin`), and end of input rejects with it too (was: a cancellation). Stream read errors are rethrown unchanged. In the interactive shell, the `ctx.stdin` of commands and mode actions is the terminal shared with the line editor, and `ModeContext` carries `stdin`.
+- `prompt.multiselect()` resolves to `readonly T[]`. `select` and `multiselect` infer a literal union without `as const`, and a `default` matching no choice throws `RangeError`.
+
+#### Progress and logger
+
+- The output option of `bar`, `spinner`, `multi` and `createLogger` is `stderr` (was `stream`), so a context can be passed directly: `{ stream: ctx.stderr }` → `{ ...ctx }`. `color` is `style`. `MultiBar.add()` takes no output option.
+- `finish()` is `succeed()`; `stop()` keeps the last frame; `Spinner.start()` is removed and drawing starts at creation; `update()` is `setLabel()`; `interval` is `intervalMs`; `BarState` fields are renamed and `readonly`.
+- Invalid `total`, unknown `style`, a `filled` or `empty` wider than one column and a busy output throw at creation. Non-TTY bars and multi-bars write one result line, and `TERM=dumb` counts as non-TTY.
+- Indicators created while a command runs are released when that command ends; other commands' indicators stay. `progress.releaseAll()` releases every indicator.
+- Status-line symbols follow the terminal and colours follow the colour policy: a TTY with `NO_COLOR` shows `✔`/`✖`/`⚠` (was `[OK]`/`[ERROR]`/`[WARN]`), and a non-TTY with `FORCE_COLOR` shows coloured `[OK]`/`[ERROR]`/`[WARN]` (was symbols).
+
+#### Tables and colour
+
+- Table options are rebuilt around `ColumnSpec`; `style.border` is `borderStyle`; `TableChars` keys are camelCase and every glyph is one column wide. `ColumnSpec.width` and `maxWidth` measure the content without padding. Invalid names and widths throw.
+- `color.<unknown>` is a type error and a `RangeError`; `setColorEnabled` accepts `"auto"`; `NO_COLOR` and `setColorEnabled(false)` switch off every style, modifiers included; stream parameters are `Writable`; `sanitizeTerminalText` closes open styles.
+- `splitAnsi` returns `readonly AnsiSegment[]`; `splitGraphemes` and `tokenize` return `readonly string[]`.
+- `truncateAnsi(text, width, ellipsis?)` throws `RangeError` for a width of 0 or less, `NaN`, `-Infinity` or a fraction.
+
+#### Shell
+
+- `ModeConfig` is `ModeOptions` and `ModeConfig.message` is `banner`. A mode completer returns `readonly string[]` (`CompletionResult` is removed), and its candidates are filtered by prefix on `ctx.current` like every other completer.
+
+#### Package root
+
+- Renamed: `streamIsTTY` → `isTTY`, `ModeConfig` → `ModeOptions`, `PromptCancelError` → `CancelledError`.
+- Removed: `stripOptionPrefix`, `splitPipes`, `activePipeSegment`, `maskInput`, `restoreCursor`, top-level `releaseAll`, `resetColorEnabled`, `CompletionResult`, `TableStyle`, `CatchContext`, `PromptBaseOptions`, `ExecOptions`.
+- The type definitions need TypeScript 5.4 or later.
 
 ### Added
 
 - `ctx.args` and `ctx.options` are typed from a literal definition string and option schemas, including `choices` unions and optionality.
+- `CLI.execLine()`, `CancelledError`, `InputEndedError`, `CLIErrorOptions`, `ModeOptions`, `ModeAction`, `ColorTag`, `Colorizer` and `isLogLevel`.
+- `colorTag` and `createColorTag(stream)` (template tags for styled text), `isStyleName`, `StyleName`, `StyleSpec`.
 - `exec()` accepts an array of arguments and a `StdioOptions` object; `CommandStreams`, `StdioOptions`, `ModeContext` and named handler types (`Plugin`, `FallbackHandler`, `HistoryFilter`, `CommandValidator`, `CancelHandler`) are exported.
-- Option `parse` and `validate`, command `validate`, prompt `validate`, `fallback` and completers may be asynchronous.
-- `createTemplateTag(stream)`, `isStyleName`, `StyleName`, `StyleSpec`, `ColorProxy`.
-- `isBuiltinCLIError`, `BuiltinCLIError`, `UsageErrorCode`, `ExtraArgumentError.extras`, `UnknownOptionError.optionName` and `PromptCancelError` `cause`.
-- `TableOptions.stream`, `ColumnSpec`.
-- Configuring methods (`PluginContext.on` / `off` / `fallback`, `Logger.setLevel`, `Shell.setPrompt`) return `this`.
+- Option `parse` and `validate`, command `validate`, prompt `validate`, `fallback` and completers may be asynchronous; option callbacks receive typed values.
+- `isBuiltinCLIError`, `BuiltinCLIError`, `UsageErrorCode`, `ValidationError.value`, `UnknownOptionError.optionName` and `flag`, and a `usage` hint on every error raised while resolving a command.
+- `Bar.setLabel()`, `TableOptions.stream` (colour detection only), `ColumnSpec`.
+- Mode `completer` and `CommandBuilder.completer()` accept a static `readonly string[]`.
+- Configuring methods (`PluginContext.on` / `off` / `fallback`, `Logger.setLevel`, `Shell.setPrompt`, `enterMode`, `exitMode`) return `this`.
 
 ### Migration
 
-- Detect a cancelled prompt in a process-wide `error` handler with `err instanceof PromptCancelError`; that handler receives no signal.
+- Detect a cancelled prompt with `err instanceof CancelledError`; the process-wide `error` event no longer receives cancellations.
 - A test that calls `start()` must restore `process.exitCode` afterwards.
 - Prompts write to stderr. Pass `{ stderr: process.stdout }` to ask on stdout again.
 - Finish a bar or spinner (`succeed`, `fail`, `warn` or `stop`) before prompting.
-- Pass `stdin` to `exec()` in tests that run commands calling `prompt.*(..., ctx)`.
+- Pass `stdin` to `exec()` or `execLine()` in tests that run commands calling `prompt.*(..., ctx)`.
+- Scripts that treat exit code 1 as a usage error must also accept 64.
 
 ## [1.4.2] - 2026-10-28
 

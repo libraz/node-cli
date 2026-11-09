@@ -31,7 +31,7 @@ cli.command("init").action(async (ctx) => {
 });
 ```
 
-テストでは、`exec()` は stdin を渡さない限り stdin なしで実行されます。コマンドがプロンプトを出すときは `exec(input, { stdin })` で stdin を渡してください。
+テストでは、`exec()` は stdin を渡さない限り stdin なし（`null`）で実行され、入力のないプロンプトは `InputEndedError` で reject されます。コマンドがプロンプトを出すときは `exec(argv, { stdin })` でストリームを渡してください。
 
 ### プロンプトの前にインジケーターを終わらせる
 
@@ -50,14 +50,16 @@ cli.command("init").action(async (ctx) => {
 | `validate` | `(value: T) => void \| Promise<void>` | — | 中で例外を投げるか reject すると値を拒否します。 |
 | `marker` | `string` | `"?"` | 質問の前に置く記号。 |
 | `stderr` | `Writable` | `process.stderr` | 質問を書き出す先。 |
-| `stdin` | `Readable \| null` | `process.stdin` | 答えを読み取る先。`null` または省略は `process.stdin` を意味します。 |
+| `stdin` | `Readable \| null` | `process.stdin` | 答えを読み取る先。省略すると `process.stdin` を使います。`null` は入力がないことを表し、質問を書く前に `InputEndedError` で reject されます。 |
 | `signal` | `AbortSignal` | — | abort されると、待機中のプロンプトをキャンセルします。 |
 
 `required` は共通ではありません。`text` と `password` にだけあります。
 
+`message` と `marker` は1行で描画します。改行は空白に置き換わり、カーソル制御シーケンスは取り除かれます。質問の前に空行を出したいときは、先に stderr のストリームへ書いてください。
+
 ### `validate` は Promise を拒否しません
 
-`validate` の中で例外を投げる（または reject する Promise を返す）と、質問の下にエラーメッセージが表示され、もう一度質問します。非同期の検証関数は await されます。返された Promise は、受け入れられる値が来るまで待機したままです。このループから抜け出せるのはキャンセルだけです。
+`validate` の中で例外を投げる（または reject する Promise を返す）と、質問の下にエラーメッセージが表示され、もう一度質問します。非同期の検証関数は await されます。返された Promise は、受け入れられる値が来るまで待機したままです。このループから抜け出せるのはキャンセルと入力の終了だけです。
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -109,7 +111,9 @@ if (await prompt.confirm("Delete all local branches?", { default: false })) {
 
 ## `prompt.select(message, choices, options?)`
 
-`Promise<T>` を返します。`choices` が空の配列だと、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+`Promise<T>` を返します。`choices` が空の配列だと、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。`default` がどの選択肢にも一致しないときも同じで、検査は質問を書く前に行われます。
+
+`select` と `multiselect` は `T` を `const` 型パラメーターとして宣言しているため、リテラルの配列は `as const` なしでも値のユニオンとして推論され、`default` はそのユニオンに対して検査されます。
 
 選択肢は番号付きのリストとして表示されます。入力は **1 始まりの番号** か、大文字小文字を区別しない選択肢ラベルの一致です。何も入力せずに Enter を押すと、既定値が設定されていればそれが選ばれます。ラベルが重複している場合は警告を出したうえで最初の1つに解決するため、後ろのほうを選ぶには番号を入力します。
 
@@ -123,15 +127,15 @@ const env = await prompt.select("Environment:", ["dev", "staging", "prod"], {
 
 ## `prompt.multiselect(message, choices, options?)`
 
-`Promise<T[]>` を返します。
+`Promise<readonly T[]>` を返します。結果は読み取り専用です。
 
 | フィールド | 挙動 |
 | --- | --- |
-| `default` | あらかじめ選択しておく値の `T[]`。 |
+| `default` | あらかじめ選択しておく値の `readonly T[]`。どの要素も選択肢のいずれかに一致する必要があり、一致しないと質問を出す前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。 |
 | `min` | 選択する項目数の下限。 |
 | `max` | 選択する項目数の上限。 |
 
-`min` と `max` は非負の安全な整数である必要があり、`min` は `max` を超えてはならず、選択肢の数も超えてはなりません。いずれかに反すると、質問を出す前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+`choices` が空の配列のとき、`min` または `max` が非負の安全な整数でないとき、`min` が `max` を超えるとき、`min` が選択肢の数を超えるときは、質問を出す前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
 
 入力はカンマ区切りの 1 始まりの番号です。同じ番号の重複は `min` と `max` を数える **前に** 取り除かれるため、`1,1,2` は2件の選択として数えられます。空の入力は既定値を使います。
 
@@ -167,10 +171,10 @@ const token = await prompt.password("API token:");
 
 ```ts
 type SelectChoice<T> = { label: string; value: T; hint?: string };
-type Choice<T> = T | SelectChoice<T>;
+type Choice<T> = SelectChoice<T> | Exclude<T, { label: unknown }>;
 ```
 
-選択肢は、文字列化した形がそのままラベルになる裸の値か、説明用のオブジェクトのどちらかです。
+選択肢は、文字列化した形がそのままラベルになる裸の値か、説明用のオブジェクトのどちらかです。`label` を持つ値オブジェクトを裸のまま渡すことはできず、`{ label, value }` で包む必要があります。型がこれを強制します。
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -189,15 +193,21 @@ const region = await prompt.select("Region:", [
 
 既定値の照合には、選択肢の `value` または選択肢オブジェクト自身に対する `Object.is` を使います。**構造的な等価ではありません。** その場で書いたオブジェクトリテラルを既定値にしても、見た目が同じ選択肢とは一致しません。プリミティブな値で照合するか、同じオブジェクト参照を渡してください。
 
-## キャンセル
+## キャンセルと入力の終了
 
-次のいずれの状況でも、プロンプトは解決せずに `PromptCancelError`（コード `PROMPT_CANCELLED`、終了コード `130`）を投げます。
+プロンプトは、次のいずれの状況でも解決せずに reject します。
+
+`CancelledError`（コード `CANCELLED`、終了コード `130`）になる場合です。
 
 - Ctrl+C が押された
-- Ctrl+D が押された、または入力がそれ以外の理由で終端に達した
-- プロンプトを始める前から入力ストリームが既に終端だった
-- プロンプトの開始前または途中で、入力ストリームが破棄された、またはエラーを報告した
 - 渡された `signal` が abort された（最初から abort 済みの signal を含む）。エラーの `cause` は signal の `reason` です
+
+`InputEndedError`（コード `INPUT_ENDED`、終了コード `66`、`promptMessage` に質問文を保持）になる場合です。
+
+- `stdin` が `null` で、読み取る入力がない
+- Ctrl+D が押された、または答えが届く前に入力が終端に達した、もしくは閉じられた（値を拒否して再質問している最中も含む）
+
+入力ストリームの I/O エラーは、包まずにそのストリームのエラーで reject されます。
 
 検出には `isCancellationError` を使います。
 
@@ -236,10 +246,10 @@ const answer = await prompt.text("Quick — a word:", {
 
 入力がパイプの場合は状況が変わります。
 
-- SIGINT のイベントが起きないため、Ctrl+C は `PromptCancelError` を発生させず、通常どおりプロセスを終了させます
+- SIGINT のイベントが起きないため、Ctrl+C は `CancelledError` を発生させず、通常どおりプロセスを終了させます
 - 文字のエコーがないため、伏せ字にする対象も画面に現れません
 - パイプから読んだ行が、質問の順に1行ずつ答えになります。ある質問が使わなかった行はストリームに残って次のプロンプトの答えになるため、答えの一式をまとめて流し込めます
-- 入力が終端に達すると `PromptCancelError` になります
+- 入力が終端に達すると `InputEndedError` になります
 
 着色はストリームごとに判定されるので、リダイレクトされた stderr に色のコードは届きません。ただし質問は届きます。さらに stdin が端末の場合は、readline がエコーする内容、つまり入力された答えと行編集のカーソル制御シーケンスも届きます。このエコーを伏せ字にするのは `password` で、ほかのプロンプトは伏せません。
 
@@ -249,7 +259,7 @@ const answer = await prompt.text("Quick — a word:", {
 
 ## インタラクティブシェルの中で
 
-[インタラクティブシェル](interactive-shell.md)では、パイプ入力を与えられていないコマンドの `ctx.stdin` は `null` です。入力は `ctx.stdin` を読むのではなく、ここで説明した関数で受け取ってください。シェルでも単発の実行でも、実際の端末に正しく接続します。
+[インタラクティブシェル](interactive-shell.md)では、コマンドと mode の action の `ctx.stdin` は、行エディターと共有する端末です。入力はここで説明した関数だけで読み、最後まで読み切らないでください。`prompt.text("Name?", ctx)` は、シェルでも単発の実行でも同じように動きます。
 
 ## よくある落とし穴
 
@@ -261,11 +271,11 @@ const answer = await prompt.text("Quick — a word:", {
 - **質問は stderr に出ます。** stdout に出したいときは `{ stderr: process.stdout }` を渡します。
 - **`required` があるのは `text` と `password` だけです。**
 - **選択の番号は 1 始まりです。** `multiselect` の答えに含まれる重複は、`min` と `max` の判定前にまとめられます。
-- **キャンセルは `null` の結果ではなく例外です。** 答えを作れないプロンプトの経路は、どれも `PromptCancelError` を投げます。
+- **キャンセルは `null` の結果ではなく例外です。** 答えを作れないプロンプトは `CancelledError` か `InputEndedError` を投げます。
 
 ## 関連ページ
 
-- [エラー](errors.md) — `PromptCancelError`、`isCancellationError`、終了コード。
+- [エラー](errors.md) — `CancelledError`、`InputEndedError`、`isCancellationError`、終了コード。
 - [インタラクティブシェル](interactive-shell.md) — セッションの中でプロンプトを動かす方法。
 - [カラー](color.md) — 書記素の分割とテキストの無害化。
 - [サンプル](examples.md) — 対話的なプログラムの完全な例。

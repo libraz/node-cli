@@ -1,6 +1,6 @@
 # Events and plugins
 
-Events let code observe a command run without modifying the command. Plugins let a separate module register commands and events against an existing CLI. Both are registered on the `CLI` instance, and both are used by the same programmatic entry point, `cli.exec()`, which is also the way a CLI is tested.
+Events let code observe a command run without modifying the command. Plugins let a separate module register commands and events against an existing CLI. Both are registered on the `CLI` instance, and both are used by the same programmatic entry points, `cli.exec()` and `cli.execLine()`, which are also the way a CLI is tested.
 
 ## Lifecycle events
 
@@ -11,8 +11,8 @@ Five events are defined by `CLIEventMap`.
 | `beforeExecute` | `(ctx) => void \| Promise<void>` | After option resolution and the command's `validate`, immediately before its action |
 | `afterExecute` | `(ctx) => void \| Promise<void>` | Only after the action resolves successfully |
 | `commandError` | `(error, ctx) => void \| Promise<void>` | A resolved command failed |
-| `error` | `(error) => void \| Promise<void>` | Any failure at all, including failures before a command was resolved |
-| `exit` | `() => void \| Promise<void>` | Once, when `cli.start()` ends or a force-quit or SIGTERM ends the process |
+| `error` | `(error) => void \| Promise<void>` | Any failure, including failures before a command was resolved and a failed asynchronous plugin initialization; never a cancellation |
+| `exit` | `() => void \| Promise<void>` | Once, when `cli.start()` ends or a force-quit or SIGTERM ends the process; never from `cli.exec()` or `cli.execLine()` |
 
 `ctx` is the `CommandContext` — the same object the action receives, with `args`, `options`, `commandPath`, the streams, and `signal`. See [Commands](commands.md).
 
@@ -85,13 +85,14 @@ Error in error handler: <message>
 - the action throwing,
 - an option-syntax failure, once the command path itself has resolved.
 
-`error` fires for **every** failure, including ones that happen before any command is resolved:
+`error` fires for **every** failure, with the exception of a cancellation, including ones that happen before any command is resolved:
 
 - unbalanced quoting or another parse failure,
 - an unrecognized command,
 - a `fallback` handler throwing,
 - a `cancel` handler rejecting,
-- another event handler throwing.
+- another event handler throwing,
+- an asynchronous plugin failing to initialize (once, with the `ERR_PLUGIN_FAILED` error; see [When a plugin fails](#when-a-plugin-fails)).
 
 The two are not alternatives. When a resolved command fails, **`commandError` fires and then `error` fires** — `error` is not an "else" branch. A handler that counts failures on both events counts the same failure twice.
 
@@ -108,7 +109,7 @@ cli.on("error", (error) => {
 });
 ```
 
-Neither event fires when a pipe stage is cancelled as an expected cancellation: a stage stopped early because a downstream stage finished, or a sibling stage torn down by the pipeline's primary failure. Only the primary failure is reported. See [Interactive shell](interactive-shell.md) for how pipes behave.
+A cancellation is not a failure, so neither event fires for it. That covers a command cancelled by Ctrl+C or by the `signal` passed to `cli.exec()` or `cli.execLine()`, which rejects with `CancelledError`; a pipe stage stopped early because a downstream stage finished; and a sibling stage torn down by the pipeline's primary failure. Only the primary failure is reported. See [Interactive shell](interactive-shell.md) for how pipes behave.
 
 ### The `exit` event
 
@@ -120,7 +121,7 @@ Neither event fires when a pipe stage is cancelled as an expected cancellation: 
 - the interactive shell ending, or receiving SIGTERM,
 - a force-quit (Ctrl+C twice).
 
-It does **not** fire on the normal `cli.exec()` path. Only a force-quit during `cli.exec()` triggers it, because that ends the process.
+It never fires from `cli.exec()` or `cli.execLine()`, which leave the lifecycle of the process to the host.
 
 A signal the CLI does not handle ends the process with Node's default action, so neither `exit` handlers nor cancel handlers run. That covers SIGTERM and SIGHUP in direct mode, and SIGHUP in the interactive shell.
 
@@ -147,7 +148,7 @@ cli.fallback((input, { stdout }) => {
 Three properties matter:
 
 - **There is one handler.** A later `fallback()` call replaces the previous one.
-- **The context carries only the streams.** `FallbackContext` is exactly `{ stdin, stdout, stderr, signal }`, the same four members every `CommandContext` has. There are no `args` and no `shell`, because no command was resolved. `signal` is the one passed to `cli.exec()`, or a signal that never aborts when none was passed.
+- **The context carries the streams and the raw argv.** `FallbackContext` is `{ stdin, stdout, stderr, signal, rawArgv }`. There are no `args` and no `shell`, because no command was resolved. `signal` is the one passed to `cli.exec()` or `cli.execLine()`, or a signal that never aborts when none was passed. `rawArgv` is the whole argv the execution was given when the input was an array, even when only a nested child was unknown, and `null` for a command line string; it keeps quoting intact when the input is forwarded to an external command.
 - **It also receives unparseable input.** Input that fails to tokenize or split into pipe stages goes to the handler rather than raising a `ParseError`.
 
 Without a `fallback` handler, unrecognized input raises `CommandNotFoundError`. See [Errors](errors.md).
@@ -245,7 +246,7 @@ A plugin body that returns a promise, and every plugin registered while one is p
 
 Plugins are awaited at three points:
 
-- at the start of `cli.exec()`,
+- at the start of `cli.exec()` and `cli.execLine()`,
 - at the start of `cli.start()`,
 - before **every** command run in the interactive shell.
 
@@ -253,31 +254,47 @@ The third point means a plugin registered in the middle of a session — by an e
 
 ### When a plugin fails
 
-A synchronous throw from a plugin body that `use()` ran immediately is thrown from that `use()` call, so the caller can catch it. Whatever the plugin registered before throwing stays registered, and the CLI remains usable.
+A synchronous throw from a plugin body that `use()` ran immediately propagates from that `use()` call as it was thrown, so the caller can catch it and see where the plugin was registered. Whatever the plugin registered before throwing stays registered, and the CLI remains usable.
 
-An asynchronous failure is **sticky**. Once a queued plugin has thrown or rejected:
+A failure of an asynchronous plugin body is wrapped once in an `Error` with `code: "ERR_PLUGIN_FAILED"`, the original value as `cause`, and the message `Plugin initialization failed: <message>`. The failure is **sticky**. Once a queued plugin has thrown or rejected:
 
-- every later `cli.use()` call re-throws that same error,
-- every later `cli.exec()` call re-throws it.
+- the `error` event fires once with the wrapped error,
+- every later `cli.use()` call throws that same error,
+- every later `cli.exec()` and `cli.execLine()` call rejects with it.
 
 At the `cli.start()` boundary the failure is fatal: the error is reported on the standard error stream, the `exit` event fires, and no command runs. A partly initialized CLI never dispatches.
 
 ## Programmatic execution
 
-`cli.exec(input, options?)` runs a command string as if it had been typed. It also accepts an array of arguments, which is used as argv as is: no tokenizing and no pipe splitting. `""` and `[]` resolve without doing anything. Any other input — a value that is neither a string nor an array of strings — rejects with a `TypeError` whose `code` is `ERR_INVALID_ARG_TYPE`.
+Two methods run a command from code. Both resolve when the command finishes and reject with its failure.
+
+`cli.exec(argv, options?)` takes an array of strings and uses it as argv as is: no tokenizing and no pipe splitting, so a `|` is an ordinary character. `[]` resolves without doing anything.
 
 ```typescript
-await cli.exec("deploy prod --force");
-```
-
-Because the input is a string, it is split into pipe stages the same way shell input is:
-
-```typescript
-await cli.exec("produce | transform | consume");
+await cli.exec(["deploy", userInput, "--force"]);
 await cli.exec(["note", "add", "a | b"]); // one argument, not a pipe
 ```
 
-Inside the action, `ctx.rawArgv` is the array for array input and `null` for string input.
+`cli.execLine(line, options?)` takes a command line as a string and runs it as if it had been typed at the prompt: the line is tokenized by POSIX shell word rules (single quotes, double quotes, backslash) and split at an unquoted `|` into a pipeline. `""` resolves without doing anything.
+
+```typescript
+await cli.execLine("deploy prod --force");
+await cli.execLine("produce | transform | consume");
+```
+
+Pass untrusted data through `exec([...])`. A value interpolated into an `execLine` string can contain a `|` or a quote and start another command. A Windows path in a line needs quoting (`'C:\Users\me'`) or an array.
+
+A value of the wrong kind — a string given to `exec`, a non-string given to `execLine`, or an array with a non-string element — rejects with a `TypeError` whose `code` is `ERR_INVALID_ARG_TYPE`.
+
+Inside the action, `ctx.rawArgv` is the array for `exec` and `null` for `execLine`.
+
+### Cancellation
+
+`options.signal` is the only way to cancel a run from outside. `cli.exec()` and `cli.execLine()` do not subscribe to the process's SIGINT, so embedding them in a larger program never takes over its interrupt handling.
+
+- A signal that is already aborted rejects with `CancelledError` before anything runs, including pending plugin initialization. No validator, event handler, action, or `onCancel` callback is called.
+- A command cancelled while it runs rejects with `CancelledError`, with the signal's `reason` as `cause`. Neither `commandError` nor `error` fires.
+- A command that ignores the abort and finishes normally resolves.
 
 ### `StdioOptions`
 
@@ -288,13 +305,13 @@ Inside the action, `ctx.rawArgv` is the array for array input and `null` for str
 | `stderr` | `process.stderr` | Writable stream for diagnostics |
 | `signal` | none | An `AbortSignal` (see [Glossary](glossary.md)) that cancels the run |
 
-Every field is optional. A `CommandContext` is itself a valid `StdioOptions`, so an action can run another command on its own streams and signal with `cli.exec(line, ctx)`.
+Every field is optional. A `CommandContext` is itself a valid `StdioOptions`, so an action can run another command on its own streams and signal with `cli.exec(argv, ctx)`.
 
-`cli.exec()` passes no shell, so `ctx.shell` is `null` inside the action and `ctx.shell?.enterMode(...)` does nothing. It also does not fire the `exit` event on the normal path.
+`cli.exec()` and `cli.execLine()` pass no shell, so `ctx.shell` is `null` inside the action and `ctx.shell?.enterMode(...)` does nothing. Neither fires the `exit` event.
 
 ### Testing a CLI
 
-`cli.exec()` with a captured `stdout` is the way a CLI is tested: register the commands, run a line, assert on the text produced.
+`cli.exec()` with a captured `stdout` is the way a CLI is tested: register the commands, run an argv, assert on the text produced.
 
 ```typescript
 import { Writable } from "node:stream";
@@ -322,7 +339,7 @@ cli
   });
 
 const out = captureStream();
-await cli.exec("greet Alice --loud", { stdout: out.stream });
+await cli.exec(["greet", "Alice", "--loud"], { stdout: out.stream });
 
 // out.text() === "HELLO, ALICE!\n"
 ```
@@ -330,7 +347,7 @@ await cli.exec("greet Alice --loud", { stdout: out.stream });
 A failing command rejects the promise returned by `cli.exec()`, so a test asserts on the rejection:
 
 ```typescript
-const err = await cli.exec("greet").catch((e: unknown) => e);
+const err = await cli.exec(["greet"]).catch((e: unknown) => e);
 // err is a MissingArgumentError with code "MISSING_ARGUMENT"
 ```
 

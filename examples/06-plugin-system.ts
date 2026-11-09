@@ -10,7 +10,7 @@
  *   npx tsx examples/06-plugin-system.ts greet World
  */
 import type { PluginContext } from "../src/index.js";
-import { c, createCLI, createColorizer } from "../src/index.js";
+import { colorTag, createCLI, createColorizer } from "../src/index.js";
 
 // ── Plugin: Timing ──
 // Adds execution timing to all commands
@@ -61,7 +61,7 @@ function healthPlugin(ctx: PluginContext) {
     });
 
   ctx.on("commandError", (error) => {
-    process.stderr.write(c`{red [health]} Error detected: ${error.message}\n`);
+    process.stderr.write(colorTag`{red [health]} Error detected: ${error.message}\n`);
   });
 }
 
@@ -82,8 +82,8 @@ function greetingPlugin() {
         default: "casual",
       })
       .action((cmdCtx) => {
-        const name = cmdCtx.args.name as string;
-        const style = cmdCtx.options.style as string;
+        const name = cmdCtx.args.name;
+        const style = cmdCtx.options.style;
 
         const greetings: Record<string, string> = {
           formal: `Good day, ${name}. How do you do?`,

@@ -1,6 +1,6 @@
 # イベントとプラグイン
 
-イベントを使うと、コマンドに手を入れないまま実行を観察できます。プラグインを使うと、別のモジュールから既存の CLI にコマンドやイベントを登録できます。どちらも `CLI` インスタンスに登録し、どちらもプログラムからの実行の入口である `cli.exec()` から使われます。この `cli.exec()` は、CLI をテストする手段でもあります。
+イベントを使うと、コマンドに手を入れないまま実行を観察できます。プラグインを使うと、別のモジュールから既存の CLI にコマンドやイベントを登録できます。どちらも `CLI` インスタンスに登録し、どちらもプログラムからの実行の入口である `cli.exec()` と `cli.execLine()` から使われます。この 2 つは、CLI をテストする手段でもあります。
 
 ## ライフサイクルイベント
 
@@ -11,8 +11,8 @@
 | `beforeExecute` | `(ctx) => void \| Promise<void>` | オプションの解決とコマンドの `validate` のあと、アクションの直前 |
 | `afterExecute` | `(ctx) => void \| Promise<void>` | アクションが成功して解決したときだけ |
 | `commandError` | `(error, ctx) => void \| Promise<void>` | 解決済みのコマンドが失敗したとき |
-| `error` | `(error) => void \| Promise<void>` | あらゆる失敗。コマンドが解決される前の失敗も含みます |
-| `exit` | `() => void \| Promise<void>` | `cli.start()` が終わったとき、または強制終了や SIGTERM でプロセスが終わるときに一度だけ |
+| `error` | `(error) => void \| Promise<void>` | あらゆる失敗。コマンドが解決される前の失敗と、非同期プラグインの初期化失敗も含みます。キャンセルでは発生しません |
+| `exit` | `() => void \| Promise<void>` | `cli.start()` が終わったとき、または強制終了や SIGTERM でプロセスが終わるときに一度だけ。`cli.exec()` と `cli.execLine()` からは発生しません |
 
 `ctx` は `CommandContext` で、アクションが受け取るものと同じオブジェクトです。`args`、`options`、`commandPath`、各ストリーム、`signal` を持ちます。[コマンド](commands.md)を参照してください。
 
@@ -85,13 +85,14 @@ Error in error handler: <message>
 - アクションが投げた例外
 - コマンドパス自体が解決したあとで起きたオプション構文の失敗
 
-`error` は**あらゆる**失敗で発生します。コマンドが解決される前に起きたものも含みます。
+`error` はキャンセルを除く**あらゆる**失敗で発生します。コマンドが解決される前に起きたものも含みます。
 
 - 引用符の対応が取れていないなど、解析の失敗
 - 認識できないコマンド
 - `fallback` ハンドラが投げた例外
 - `cancel` ハンドラのプロミスの失敗
 - 別のイベントハンドラが投げた例外
+- 非同期プラグインの初期化の失敗（`ERR_PLUGIN_FAILED` のエラーで一度だけ。[プラグインが失敗した場合](#プラグインが失敗した場合)を参照）
 
 この 2 つは二者択一ではありません。解決済みのコマンドが失敗したときは、**`commandError` に続いて `error`** が発生します。`error` は「そうでない場合」の分岐ではありません。両方のイベントで失敗を数えるハンドラは、同じ失敗を 2 回数えることになります。
 
@@ -108,7 +109,7 @@ cli.on("error", (error) => {
 });
 ```
 
-パイプのステージが想定内のキャンセルで止まった場合、どちらのイベントも発生しません。下流のステージが終わったために早めに止まったステージや、パイプライン全体の主たる失敗によって破棄された兄弟ステージがこれにあたります。報告されるのは主たる失敗だけです。パイプの挙動については[対話シェル](interactive-shell.md)を参照してください。
+キャンセルは失敗ではないため、どちらのイベントも発生しません。Ctrl+C や、`cli.exec()`・`cli.execLine()` に渡した `signal` でキャンセルされ、`CancelledError` で reject されたコマンドがこれにあたります。下流のステージが終わったために早めに止まったパイプのステージや、パイプライン全体の主たる失敗によって破棄された兄弟ステージも同じです。報告されるのは主たる失敗だけです。パイプの挙動については[対話シェル](interactive-shell.md)を参照してください。
 
 ### `exit` イベント
 
@@ -120,7 +121,7 @@ cli.on("error", (error) => {
 - 対話シェルが終了したとき、または SIGTERM を受け取ったとき
 - 強制終了（Ctrl+C を 2 回）したとき
 
-通常の `cli.exec()` の経路では**発生しない**ことに注意してください。`cli.exec()` の実行中に強制終了した場合だけは、プロセスが終わるため発生します。
+`cli.exec()` と `cli.execLine()` からは**発生しません**。この 2 つは、プロセスのライフサイクルを呼び出し側に任せます。
 
 CLI が処理しないシグナルを受けると、プロセスは Node の既定の動作で終わるため、`exit` ハンドラもキャンセルハンドラも実行されません。直接実行モードの SIGTERM と SIGHUP、対話シェルの SIGHUP がこれにあたります。
 
@@ -147,7 +148,7 @@ cli.fallback((input, { stdout }) => {
 押さえておきたい性質が 3 つあります。
 
 - **ハンドラは 1 つだけです。** あとから `fallback()` を呼ぶと、前のハンドラを置き換えます。
-- **コンテキストはストリームだけを持ちます。** `FallbackContext` はちょうど `{ stdin, stdout, stderr, signal }` で、どの `CommandContext` も持つ 4 つのメンバーと同じです。コマンドが解決されていないため、`args` も `shell` もありません。`signal` は `cli.exec()` に渡したもので、渡していなければ中断されることのない signal です。
+- **コンテキストはストリームと生の argv を持ちます。** `FallbackContext` は `{ stdin, stdout, stderr, signal, rawArgv }` です。コマンドが解決されていないため、`args` も `shell` もありません。`signal` は `cli.exec()` か `cli.execLine()` に渡したもので、渡していなければ中断されることのない signal です。`rawArgv` は、入力が配列だった場合に実行へ渡された argv 全体で、入れ子の子だけが未知でも全体が入ります。コマンドライン文字列では `null` です。入力を外部コマンドへ転送するときに、引用の情報を失わずに済みます。
 - **解析できない入力も届きます。** トークン分割やパイプステージへの分割に失敗した入力は、`ParseError` を投げる代わりにハンドラへ渡されます。
 
 `fallback` ハンドラがない場合、認識できない入力は `CommandNotFoundError` を投げます。[エラー](errors.md)を参照してください。
@@ -245,7 +246,7 @@ cli.use(metricsPlugin("https://metrics.example.com"));
 
 プラグインが await されるのは次の 3 か所です。
 
-- `cli.exec()` の開始時
+- `cli.exec()` と `cli.execLine()` の開始時
 - `cli.start()` の開始時
 - 対話シェルで**あらゆる**コマンドを実行する前
 
@@ -253,31 +254,47 @@ cli.use(metricsPlugin("https://metrics.example.com"));
 
 ### プラグインが失敗した場合
 
-`use()` がその場で実行したプラグインの本体が同期的に例外を投げると、その例外は当の `use()` の呼び出しからそのまま投げられるので、呼び出し側で捕まえられます。例外の前にプラグインが登録したものは残り、CLI もそのまま使えます。
+`use()` がその場で実行したプラグインの本体が同期的に例外を投げると、その例外は当の `use()` の呼び出しから投げられたまま伝播するので、呼び出し側で捕まえられ、プラグインを登録した位置も分かります。例外の前にプラグインが登録したものは残り、CLI もそのまま使えます。
 
-非同期の失敗は**後を引く**性質を持ちます。キューに入ったプラグインが例外を投げるか、プロミスが失敗すると、それ以降はこうなります。
+非同期のプラグインの本体が失敗すると、その失敗は一度だけ `Error` に包まれます。`code` は `"ERR_PLUGIN_FAILED"`、元の値は `cause`、メッセージは `Plugin initialization failed: <message>` です。この失敗は**後を引く**性質を持ちます。キューに入ったプラグインが例外を投げるか、プロミスが失敗すると、それ以降はこうなります。
 
-- 以降の `cli.use()` の呼び出しは、いずれも同じエラーを投げ直します
-- 以降の `cli.exec()` の呼び出しも、同じエラーを投げ直します
+- `error` イベントが、包まれたエラーで一度だけ発生します
+- 以降の `cli.use()` の呼び出しは、いずれも同じエラーを投げます
+- 以降の `cli.exec()` と `cli.execLine()` の呼び出しは、同じエラーで reject します
 
 `cli.start()` の境界では、この失敗は致命的です。エラーが標準エラーストリームに報告され、`exit` イベントが発生し、コマンドは 1 つも実行されません。中途半端に初期化された CLI がディスパッチを行うことはありません。
 
 ## プログラムからの実行
 
-`cli.exec(input, options?)` は、コマンド文字列を、あたかも入力されたかのように実行します。引数の配列も受け付け、その場合は配列をそのまま argv として使います。トークン分割もパイプ分割もしません。`""` と `[]` は何もせずに resolve します。それ以外の入力、つまり文字列でも文字列の配列でもない値は、`code` が `ERR_INVALID_ARG_TYPE` の `TypeError` で reject します。
+コードからコマンドを実行するメソッドは 2 つあります。どちらもコマンドが終わると resolve し、コマンドが失敗するとその失敗で reject します。
+
+`cli.exec(argv, options?)` は文字列の配列を受け取り、そのまま argv として使います。トークン分割もパイプ分割もしないので、`|` は通常の文字です。`[]` は何もせずに resolve します。
 
 ```typescript
-await cli.exec("deploy prod --force");
-```
-
-入力が文字列なので、シェルの入力と同じようにパイプステージへ分割されます。
-
-```typescript
-await cli.exec("produce | transform | consume");
+await cli.exec(["deploy", userInput, "--force"]);
 await cli.exec(["note", "add", "a | b"]); // パイプではなく 1 つの引数
 ```
 
-アクションの中の `ctx.rawArgv` は、配列を渡した場合はその配列、文字列を渡した場合は `null` です。
+`cli.execLine(line, options?)` はコマンドラインを文字列で受け取り、プロンプトに入力されたかのように実行します。行は POSIX シェルの単語規則（シングルクォート、ダブルクォート、バックスラッシュ）でトークンに分割され、クォートされていない `|` でパイプラインに分割されます。`""` は何もせずに resolve します。
+
+```typescript
+await cli.execLine("deploy prod --force");
+await cli.execLine("produce | transform | consume");
+```
+
+信頼できないデータは `exec([...])` で渡してください。`execLine` の文字列に埋め込んだ値は、`|` や引用符を含んで別のコマンドを起動させることがあります。行の中の Windows のパスはクォートする（`'C:\Users\me'`）か、配列で渡す必要があります。
+
+種類の違う値、つまり `exec` に渡した文字列、`execLine` に渡した文字列以外、文字列でない要素を含む配列は、`code` が `ERR_INVALID_ARG_TYPE` の `TypeError` で reject します。
+
+アクションの中の `ctx.rawArgv` は、`exec` では配列、`execLine` では `null` です。
+
+### キャンセル
+
+実行を外部からキャンセルする手段は `options.signal` だけです。`cli.exec()` と `cli.execLine()` はプロセスの SIGINT を購読しないので、より大きなプログラムに組み込んでも、そのプログラムの割り込み処理を奪うことはありません。
+
+- すでに abort 済みの signal は、保留中のプラグインの初期化も含めて何かが走る前に、`CancelledError` で reject します。バリデータ、イベントハンドラ、アクション、`onCancel` のコールバックは呼ばれません。
+- 実行中にキャンセルされたコマンドは、signal の `reason` を `cause` にした `CancelledError` で reject します。`commandError` も `error` も発生しません。
+- abort を無視して正常に終わったコマンドは resolve します。
 
 ### `StdioOptions`
 
@@ -288,13 +305,13 @@ await cli.exec(["note", "add", "a | b"]); // パイプではなく 1 つの引�
 | `stderr` | `process.stderr` | 診断出力用の書き込み可能ストリーム |
 | `signal` | なし | 実行をキャンセルする `AbortSignal`（[用語集](glossary.md)を参照） |
 
-どのフィールドも省略できます。`CommandContext` もそのまま `StdioOptions` として渡せるので、アクションの中から `cli.exec(line, ctx)` と書けば、自分のストリームと signal のまま別のコマンドを実行できます。
+どのフィールドも省略できます。`CommandContext` もそのまま `StdioOptions` として渡せるので、アクションの中から `cli.exec(argv, ctx)` と書けば、自分のストリームと signal のまま別のコマンドを実行できます。
 
-`cli.exec()` はシェルを渡さないため、アクションの中では `ctx.shell` が `null` になり、`ctx.shell?.enterMode(...)` は何もしません。通常の経路では `exit` イベントも発生しません。
+`cli.exec()` と `cli.execLine()` はシェルを渡さないため、アクションの中では `ctx.shell` が `null` になり、`ctx.shell?.enterMode(...)` は何もしません。どちらも `exit` イベントは発生させません。
 
 ### CLI をテストする
 
-CLI のテストは、`stdout` を捕捉した `cli.exec()` で行います。コマンドを登録し、1 行を実行し、出力されたテキストを検証します。
+CLI のテストは、`stdout` を捕捉した `cli.exec()` で行います。コマンドを登録し、argv を実行し、出力されたテキストを検証します。
 
 ```typescript
 import { Writable } from "node:stream";
@@ -322,7 +339,7 @@ cli
   });
 
 const out = captureStream();
-await cli.exec("greet Alice --loud", { stdout: out.stream });
+await cli.exec(["greet", "Alice", "--loud"], { stdout: out.stream });
 
 // out.text() === "HELLO, ALICE!\n"
 ```
@@ -330,7 +347,7 @@ await cli.exec("greet Alice --loud", { stdout: out.stream });
 コマンドが失敗すると `cli.exec()` の返すプロミスも失敗するため、テストではその失敗を検証します。
 
 ```typescript
-const err = await cli.exec("greet").catch((e: unknown) => e);
+const err = await cli.exec(["greet"]).catch((e: unknown) => e);
 // err is a MissingArgumentError with code "MISSING_ARGUMENT"
 ```
 

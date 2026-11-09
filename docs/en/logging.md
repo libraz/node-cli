@@ -26,12 +26,12 @@ db.debug("Query executed in 12ms");
 
 The reason is that stdout is the channel a command's *data* travels on. A user who runs `mycli list --json > out.json` expects `out.json` to contain JSON and nothing else; diagnostics on stdout would corrupt it. Keeping all diagnostics on stderr means they stay visible on the terminal while the redirected file stays clean.
 
-To send log output to stdout instead, say so:
+To send log output to stdout instead, pass that stream as `stderr`; the option has the name of the role it plays by default. A command context works as the options, so `createLogger(ctx)` logs to the command's `stderr`.
 
 ```ts
 import { createLogger } from "@libraz/node-cli";
 
-const log = createLogger({ stream: process.stdout });
+const log = createLogger({ stderr: process.stdout });
 ```
 
 ## Options
@@ -43,14 +43,16 @@ const log = createLogger({ stream: process.stdout });
 | `level` | `LogLevel` | `"info"` | Minimum level that is emitted. Any other value throws a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"`, as does the same value passed to `setLevel`. |
 | `prefix` | `string` | — | Rendered as `[prefix]` before the message. |
 | `timestamp` | `boolean` | `false` | Adds the local time as `HH:MM:SS`. |
-| `stream` | `Writable` | `process.stderr` | Destination for every level. |
-| `bufferLimit` | `number` | `1000` | Lines queued while the stream is busy. Must be a non-negative safe integer, or a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"` is thrown. |
+| `stderr` | `Writable` | `process.stderr` | Destination for every level. |
+| `bufferLimit` | `number` | `1000` | Lines queued while the stream is busy. When the queue is full the oldest line is dropped; `0` drops every line written while the stream is busy, until it drains. Must be a non-negative safe integer, or a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"` is thrown. |
 
 ## Levels
 
 ```ts
 type LogLevel = "debug" | "info" | "warn" | "error" | "silent";
 ```
+
+`isLogLevel(value)` is a type guard that reports whether an `unknown` value is one of these five strings.
 
 They are ordered `debug < info < warn < error < silent`. A message is emitted when its own level is at or above the configured level, so `level: "warn"` shows warnings and errors and drops everything below. `level: "silent"` suppresses all output.
 
@@ -71,7 +73,7 @@ They are ordered `debug < info < warn < error < silent`. A message is emitted wh
 
 `setLevel` returns the logger itself, so calls chain: `log.setLevel("debug").info("verbose on")`. Calling it again replaces the level.
 
-`success` is not a separate level. It is gated at the **`info`** level and rendered with the `✔` marker, so it disappears together with `info` when the level is raised to `warn`.
+`success` is not a separate level. It is gated at the **`info`** level and rendered with the `✔` marker (or `[OK]`, see below), so it disappears together with `info` when the level is raised to `warn`.
 
 ## Formatting
 
@@ -105,17 +107,27 @@ A line is assembled from four parts joined by a single space, with the optional 
 ℹ 09:42:15 [app] Server started on port 3000
 ```
 
-The icon depends on whether color is enabled for the target stream — see [Color](color.md) for how that is decided.
+The icon and its color are decided independently:
 
-| Level | With color | Without color |
+- The icon is a symbol when the stream is a terminal and `TERM` is not `dumb`; otherwise it is an ASCII tag.
+- The color is applied to the icon whenever color is enabled for the stream. See [Color](color.md) for how that is decided.
+
+| Level | Symbol | ASCII tag | Color |
+| --- | --- | --- | --- |
+| `debug` | `●` | `[DEBUG]` | dim |
+| `info` | `ℹ` | `[INFO]` | blue |
+| `success` | `✔` | `[OK]` | green |
+| `warn` | `⚠` | `[WARN]` | yellow |
+| `error` | `✖` | `[ERROR]` | red |
+
+| Stream | Color | Icon |
 | --- | --- | --- |
-| `debug` | `●` dim | `[DEBUG]` |
-| `info` | `ℹ` blue | `[INFO]` |
-| `success` | `✔` green | `[OK]` |
-| `warn` | `⚠` yellow | `[WARN]` |
-| `error` | `✖` red | `[ERROR]` |
+| Terminal | enabled | colored symbol |
+| Terminal | disabled (`NO_COLOR`) | plain symbol |
+| Not a terminal | forced (`FORCE_COLOR`) | colored ASCII tag |
+| Not a terminal | disabled | plain ASCII tag |
 
-Redirecting output to a file therefore produces plain, greppable `[WARN]`-style labels with no escape sequences in them.
+Redirecting output to a file therefore produces plain, greppable `[WARN]`-style labels with no escape sequences in them. The timestamp and the `[prefix]` are dimmed whenever color is enabled. [Progress](progress.md) result lines follow the same rule.
 
 ## Child loggers
 
@@ -129,7 +141,7 @@ const db = log.child("db"); // prefix "app:db"
 const pool = db.child("pool"); // prefix "app:db:pool"
 ```
 
-A child inherits `timestamp`, `stream`, and `bufferLimit` from its parent, and shares the stream's write queue with it: lines from a parent and its children reach the stream in call order. The level is inherited **dynamically**: a later `parent.setLevel("debug")` reaches every child that never set a level of its own, while `child.setLevel(...)` overrides that one child and nothing else.
+A child inherits `timestamp`, `stderr`, and `bufferLimit` from its parent, and shares the stream's write queue with it: lines from a parent and its children reach the stream in call order. The level is inherited **dynamically**: a later `parent.setLevel("debug")` reaches every child that never set a level of its own, while `child.setLevel(...)` overrides that one child and nothing else.
 
 ```ts
 import { createLogger } from "@libraz/node-cli";
@@ -152,7 +164,7 @@ This cooperation only applies to output written through the logger. A raw `strea
 
 A stream can accept only so much at once; when it is full, further writes have to wait. That waiting state is **backpressure**. While it lasts, the logger queues lines in memory up to `bufferLimit` and, once the queue is full, discards the **oldest** line to make room for the newest. With `bufferLimit: 0` a line arriving during backpressure is dropped immediately.
 
-If the stream emits an error or closes at any time, the buffered lines are discarded and every pending and later `flush()` rejects; the logger handles the error event itself, so it does not crash the process.
+If the stream emits an error or closes at any time, the buffered lines are discarded and every pending and later `flush()` rejects with that failure. From then on the logger and all of its children are no-ops: later lines are dropped silently, and the failure is not reported again. The logger keeps its own `error` listener on the stream, so the failure does not crash the process.
 
 `flush()` resolves once the buffered lines have reached the stream and the stream has accepted every earlier write. Parent and children share one queue per stream, so one call covers the whole tree.
 
@@ -171,13 +183,14 @@ Awaiting `flush()` before exiting is what keeps the last lines from being lost w
 ## Common surprises
 
 - **The default stream is stderr, for every level.** `mycli run > out.txt` still shows the log on the terminal; `2> log.txt` is what captures it.
-- **There is no stdout/stderr split by severity.** Pass `stream: process.stdout` to move everything to stdout.
+- **There is no stdout/stderr split by severity.** Pass `stderr: process.stdout` to move everything to stdout.
 - **`success` is gated at `info`.** Raising the level to `warn` hides it.
 - **`success` is not a `LogLevel`.** It cannot be passed to `setLevel`.
 - **A child's level tracks its parent until the child sets its own**, after which the parent no longer affects it.
-- **Icons change without color.** Log files contain `[INFO]`, not `ℹ`.
+- **Icons follow the terminal, color follows the color policy.** A stream that is not a terminal gets `[INFO]`, not `ℹ`, whether or not it is colored.
 - **Newlines survive, tabs do not.** Stack traces stay multi-line; tabs become spaces.
 - **Lines can be dropped under backpressure.** The oldest go first; `flush()` reports failures.
+- **A failed stream silences the logger.** After the stream errors or closes, every later line is dropped.
 
 ## Related pages
 

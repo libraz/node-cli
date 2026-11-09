@@ -1,16 +1,16 @@
 # Color
 
-`color` applies terminal colors and text styles to strings, `c` does the same inside a template literal (`createTemplateTag` binds that tag to another stream), and a group of string utilities measures, trims, and sanitizes text that already contains escape sequences. All of them are plain functions exported from the package: none of them needs a `CLI` instance, and they can be imported into any Node script.
+`color` applies terminal colors and text styles to strings, `colorTag` does the same inside a template literal (`createColorTag` binds that tag to another stream), and a group of string utilities measures, trims, and sanitizes text that already contains escape sequences. All of them are plain functions exported from the package: none of them needs a `CLI` instance, and they can be imported into any Node script.
 
 ![Terminal showing a bold green success line, a bold red error prefix, the foreground color names rendered in their own colors, and the bold, dim and underline modifiers](../assets/color.svg)
 
 ## A first example
 
 ```ts
-import { c, color } from "@libraz/node-cli";
+import { color, colorTag } from "@libraz/node-cli";
 
 console.log(color.bold.green("Success!"));
-console.log(c`{bold.red Error}: Something went wrong`);
+console.log(colorTag`{bold.red Error}: Something went wrong`);
 
 console.log(
   [
@@ -44,7 +44,7 @@ console.log(color.bold.underline("Title"));
 console.log(color.bgYellow.black("  WARNING  "));
 ```
 
-Accessing a name that is not a style is a type error in TypeScript and, at run time, throws a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"` whose message lists the valid names, so a typo fails loudly instead of silently returning plain text. When a name is only known at run time, check it with `isStyleName(name)`, which narrows the string to `StyleName`. The properties `then`, `toString`, `valueOf`, `toJSON`, `constructor`, and any symbol pass through untouched, so awaiting, stringifying, or serializing a colorizer does not throw.
+Accessing a name that is not a style is a type error in TypeScript and, at run time, throws a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"` whose message lists the valid names, so a typo fails loudly instead of silently returning plain text. When a name is only known at run time, check it with `isStyleName(value)`, which accepts any `unknown` value and narrows it to `StyleName`. The properties `then`, `toString`, `valueOf`, `toJSON`, `constructor`, and any symbol pass through untouched, so awaiting, stringifying, or serializing a colorizer does not throw.
 
 ## The complete style list
 
@@ -61,7 +61,8 @@ These are all the styles the package supports. There are no bright variants, no 
 ### Style types
 
 - `StyleName` is the union of the 23 names above.
-- `ColorProxy` is the type of `color` and of what `createColorizer` returns: one chainable `ColorFn` per `StyleName`. Chain keys are limited to `StyleName`, so `color.red.bol` does not compile.
+- `Colorizer` is the type of `color` and of what `createColorizer` returns: one chainable `ColorFn` per `StyleName`. Chain keys are limited to `StyleName`, so `color.red.bol` does not compile.
+- `ColorTag` is the type of `colorTag` and of what `createColorTag` returns: a tagged-template function that renders `{style content}` markup.
 - `StyleSpec` is a style name or a dot-separated chain of them (`"cyan"`, `"cyan.bold"`, `"cyan.bold.underline"`), as taken by options that accept a style. The first two links are checked by the compiler; any further link is checked when the value is used.
 
 ```ts
@@ -81,23 +82,23 @@ Styles nest safely. Each layer re-opens itself after any escape sequence an inne
 ```ts
 import { color } from "@libraz/node-cli";
 
-console.log(color.red(`a ${color.green("b")} c`));
-// "a" and "c" stay red; only "b" is green
+console.log(color.red(`x ${color.green("y")} z`));
+// "x" and "z" stay red; only "y" is green
 ```
 
-## Inline markup with the `c` tag
+## Inline markup with the `colorTag` tag
 
-`c` is a tagged template literal: it is written directly before a backtick string and transforms that string. It renders `{style content}` markup instead of nesting function calls.
+`colorTag` is a tagged template literal: it is written directly before a backtick string and transforms that string. It renders `{style content}` markup instead of nesting function calls.
 
 ```ts
-import { c } from "@libraz/node-cli";
+import { colorTag } from "@libraz/node-cli";
 
 const port = 3000;
 
-console.log(c`Status: {green OK}`);
-console.log(c`{bold.red Error}: broken`);
-console.log(c`Listening on {cyan http://localhost:${port}}`);
-console.log(c`{yellow outer {bold inner} outer}`);
+console.log(colorTag`Status: {green OK}`);
+console.log(colorTag`{bold.red Error}: broken`);
+console.log(colorTag`Listening on {cyan http://localhost:${port}}`);
+console.log(colorTag`{yellow outer {bold inner} outer}`);
 ```
 
 The syntax is strict:
@@ -109,21 +110,21 @@ The syntax is strict:
 
 Braces are counted, so markup can be nested.
 
-When the style name is unknown, the space is missing, or a brace is unbalanced, the `{` is emitted **literally** and the rest of the text is left alone. Unlike `color.foo`, `c` never throws on bad markup. The one exception is depth: markup nested more than 64 levels deep throws a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"`.
+When the style name is unknown, the space is missing, or a brace is unbalanced, the `{` is emitted **literally** and the rest of the text is left alone. Unlike `color.foo`, `colorTag` never throws on bad markup. The one exception is depth: markup nested more than 64 levels deep throws a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"`.
 
 Interpolated values are converted to strings and substituted **after** the markup has been rendered. A `{` inside an interpolated value is therefore never parsed as markup, so untrusted data cannot inject styling.
 
 ## When color is enabled
 
-Enablement is decided **at the moment a style function is called**, not when the module is imported. `color` and `c` evaluate it against `process.stdout`. `createColorizer(stream)` returns the same chainable object bound to a different stream, and `createTemplateTag(stream)` does the same for the `c` tag (`c` is that tag bound to `process.stdout`). Both take any `Writable`:
+Enablement is decided **at the moment a style function is called**, not when the module is imported. `color` and `colorTag` evaluate it against `process.stdout`. `createColorizer(stream)` returns the same chainable object bound to a different stream, and `createColorTag(stream)` does the same for the tag (`colorTag` is that tag bound to `process.stdout`). Both take any `Writable`:
 
 ```ts
-import { createColorizer, createTemplateTag } from "@libraz/node-cli";
+import { createColorizer, createColorTag } from "@libraz/node-cli";
 
 const errColor = createColorizer(process.stderr);
 console.error(errColor.red("failed"));
 
-const e = createTemplateTag(process.stderr);
+const e = createColorTag(process.stderr);
 console.error(e`{bold.red Error}: broken`);
 ```
 
@@ -142,6 +143,8 @@ setColorEnabled(false); // force plain text, e.g. inside a test
 isColorEnabled(); // false
 setColorEnabled("auto"); // drop the override, return to automatic detection
 ```
+
+When color is disabled, by `NO_COLOR`, `FORCE_COLOR=0` or `setColorEnabled(false)`, every style is dropped, modifiers such as `bold` and `underline` included. The functions return the text unchanged and inline markup is removed.
 
 `setColorEnabled` sets a single module-wide flag. It is not per stream: once set, every colorizer follows it until `setColorEnabled("auto")` clears it.
 
@@ -181,13 +184,22 @@ import { truncateAnsi } from "@libraz/node-cli";
 truncateAnsi("a very long line", 8); // "a very …"
 ```
 
-### `splitAnsi(text): AnsiSegment[]`
+### `splitAnsi(text): readonly AnsiSegment[]`
 
 Splits the text into ordered runs, each `{ ansi: boolean; text: string }`. Segments with `ansi: true` are escape sequences; the rest is visible text. Concatenating every `.text` reproduces the input exactly, so this is the building block for transforming visible text while leaving escapes intact.
 
-### `splitGraphemes(text): string[]`
+### `splitGraphemes(text): readonly string[]`
 
-Splits text into grapheme clusters.
+Splits text into grapheme clusters. The input must not contain escape sequences: an escape is split like any other text, so its characters would count as graphemes. Split with `splitAnsi` first and split only the segments whose `ansi` is `false`:
+
+```ts
+import { splitAnsi, splitGraphemes } from "@libraz/node-cli";
+
+const input = "\x1b[31m日本語\x1b[39m";
+const units = splitAnsi(input).flatMap((segment) =>
+  segment.ansi ? [segment.text] : splitGraphemes(segment.text),
+);
+```
 
 ### `sanitizeTerminalText(text, options?): string`
 
@@ -210,16 +222,17 @@ const fromDatabase = "release \x1b[2J\x1b[Hv2";
 console.log(sanitizeTerminalText(fromDatabase)); // "release v2" — the screen is not cleared
 ```
 
-### `streamIsTTY(value: unknown): boolean`
+### `isTTY(value: unknown): boolean`
 
-Reports whether a value is a terminal stream rather than a file or a pipe. Any value is accepted; anything that is not an object with `isTTY === true` gives `false`.
+Reports whether a value is a terminal stream rather than a file or a pipe. Any value is accepted; anything that is not an object with `isTTY === true` gives `false`. The predicates `isStyleName(value)` and `isLogLevel(value)` (see [Logging](logging.md)) take the same kind of argument: any value, answered with a type guard.
 
 ## Common surprises
 
 - **Enablement is evaluated per call.** Setting `FORCE_COLOR` after the module was imported still takes effect, and `setColorEnabled` applies to calls made afterwards.
+- **Disabling color removes modifiers too.** `NO_COLOR` and `setColorEnabled(false)` drop `bold` and `underline` along with the colors.
 - **`setColorEnabled` is global, not per stream.** A colorizer built with `createColorizer` still obeys it; `setColorEnabled("auto")` returns to detection.
-- **`color.foo` throws; `c` does not.** An unknown style name is a `RangeError` on the proxy (and a type error at compile time) and a literal `{` in inline markup.
-- **A missing space breaks inline markup silently.** `` c`{green OK}` `` colors `OK`; `` c`{greenOK}` `` prints `{greenOK}`.
+- **`color.foo` throws; `colorTag` does not.** An unknown style name is a `RangeError` on the proxy (and a type error at compile time) and a literal `{` in inline markup.
+- **A missing space breaks inline markup silently.** `` colorTag`{green OK}` `` colors `OK`; `` colorTag`{greenOK}` `` prints `{greenOK}`.
 - **`.length` is not width.** Escape sequences add length, and wide characters add width; use `stringWidth`.
 - **There is no `bgBlack` and no bright or RGB colors.** The list above is complete.
 

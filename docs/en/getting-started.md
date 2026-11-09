@@ -5,7 +5,8 @@ This page goes from an empty directory to a command that can be typed at a termi
 ## Requirements
 
 - **Node.js 22 or newer.** Check the installed version with `node --version`.
-- **An ESM project.** The package is published as ECMAScript modules only.
+- **An ESM project.** The package is published as ECMAScript modules only. A CommonJS project can `require()` it on Node.js 22.12 and later.
+- **TypeScript 5.4 or newer**, for projects that use the type declarations, together with `@types/node`.
 
 ### What ESM means here
 
@@ -19,7 +20,7 @@ ECMAScript modules (ESM) are JavaScript's standard module format: files that use
 
 With `"type": "module"`, every `.js` file in the project is treated as an ECMAScript module. Without it, Node treats them as CommonJS and `import` statements fail to parse.
 
-This library publishes only ECMAScript modules, so `"type": "module"` is required and there is no separate CommonJS build. Node.js 22.12 and later can `require("@libraz/node-cli")` the ES module; on earlier 22.x releases a CommonJS project reaches it with a dynamic `await import("@libraz/node-cli")`, which returns a promise for the module.
+This library publishes only ECMAScript modules and has no separate CommonJS build, so a project uses it with `import`, which requires `"type": "module"` for `.js` files. Node.js 22.12 and later can `require("@libraz/node-cli")` the ES module from CommonJS; on earlier 22.x releases a CommonJS project reaches it with a dynamic `await import("@libraz/node-cli")`, which returns a promise for the module.
 
 ## Installation
 
@@ -64,11 +65,11 @@ await cli.start();
 Line by line:
 
 - `#!/usr/bin/env node` is the **shebang**, explained in the next section.
-- `createCLI({ ... })` builds the application object. `name` is used in help output and to derive the history file path; `version` is what `--version` prints. Both are optional — without `version`, the `--version` and `-V` flags are not intercepted by the library at all. Every setting goes into this object; none can be changed after construction, and an invalid history setting throws here.
+- `createCLI({ ... })` builds the application object. `name` is required: it is used in help output and to derive the history file path (`~/.<name>_history`), and it must start with a letter or digit and contain only letters, digits, `.`, `_`, and `-`. `version` is optional and is what `--version` prints; without it, no version flag is defined and `--version` and `-V` are reported as unknown options. Every setting goes into this object; none can be changed after construction, and an invalid name or history setting throws here.
 - `cli.command("greet <name>")` declares a command called `greet` that takes one required positional argument named `name`. Angle brackets mark it required; square brackets, as in `[name]`, would make it optional.
 - `.description(...)` supplies the text that appears next to the command in generated help.
 - `.action((ctx) => { ... })` registers the function that runs when the command is invoked. `ctx` is the [command context](commands.md): `ctx.args` holds the positional arguments keyed by name, `ctx.options` holds the parsed options, and `ctx.stdout` is the stream to write results to.
-- `ctx.args.name` is typed `string`. The type comes from the definition string: `<name>` is a `string`, `[name]` is `string | undefined`, and `<...name>` is a `readonly string[]`. Positional arguments are never converted, so a numeric value is parsed in the action.
+- `ctx.args.name` is typed `string`. The type comes from the definition string: `<name>` is a `string`, `[name]` is `string | undefined`, and `<...name>` is a `readonly string[]`. Positional arguments are never converted, so a numeric value is parsed in the action. Keys are camelCase: `<file-name>` is read as `ctx.args.fileName`.
 - `await cli.start()` hands control to the library. It reads the terminal arguments, picks an execution mode, runs the matching command, and resolves to the exit code.
 
 Write to `ctx.stdout` rather than calling `console.log`. `ctx.stdout` is the stream belonging to the current execution, which is what makes the same command work when its output is piped into another command inside the interactive shell, and what makes it testable by passing a substitute stream.
@@ -95,7 +96,7 @@ The line is a comment as far as JavaScript is concerned, so it is harmless to le
     "build": "tsc"
   },
   "dependencies": {
-    "@libraz/node-cli": "^1"
+    "@libraz/node-cli": "^2"
   },
   "devDependencies": {
     "@types/node": "^22",
@@ -125,7 +126,7 @@ When the package is installed — globally, or linked as described below — npm
 
 - `module` and `moduleResolution` set to `Node16` tell TypeScript to resolve imports the way Node does for an ESM package, which is what makes `import { createCLI } from "@libraz/node-cli"` resolve to the published entry point.
 - `outDir` and `rootDir` put compiled JavaScript in `dist/` mirroring the layout of `src/`, so `src/cli.ts` becomes `dist/cli.js` — the path named in `bin`.
-- `"types": ["node"]` is required. The published type declarations refer to the `NodeJS` global namespace and to the `node:stream` module. Without Node's type definitions loaded, those references do not resolve and the build fails with errors about unknown names. Install `@types/node` for Node 22 or newer.
+- `"types": ["node"]` is required. The published type declarations import `node:stream` and use the `AbortSignal` and `Symbol.dispose` globals, all of which `@types/node` provides. Without Node's type definitions loaded, those references do not resolve and the build fails with errors about unknown names. Install `@types/node` for Node 22 or newer.
 
 ### Building
 
@@ -187,11 +188,12 @@ $ myapp greet World
 Hello, World!
 ```
 
-An unknown command reports the failure on standard error and exits with a non-zero code:
+An unknown command reports the failure on standard error and exits with code 64, the code for a mistake in what was typed:
 
 ```
 $ myapp greetings World
 Error: Command not found: "greetings"
+Available commands: greet, help
 ```
 
 A missing required argument is reported the same way, with the command's usage line attached:
@@ -221,6 +223,7 @@ Available commands:
   help [...command]    Show help information
 
 Options:
+  -h, --help       Show help
   -V, --version    Show the CLI version
 
 Shell commands: exit, quit
@@ -247,9 +250,9 @@ Available commands:
   help [...command]    Show help information
 
 Options:
+  -h, --help       Show help
   -V, --version    Show the CLI version
 
-Shell commands: exit, quit
 Type "help <command>" for more information.
 ```
 
@@ -293,7 +296,7 @@ cli
   });
 ```
 
-`"-u, --uppercase"` declares a long form and a short alias for the same option. In `ctx.options` the value is always found under the long name — `ctx.options.uppercase` — never under the alias.
+`"-u, --uppercase"` declares a long form and a short alias for the same option. In `ctx.options` the value is always found under the camelCase form of the long name — `ctx.options.uppercase` — never under the alias. A name with a dash is joined: `--dry-run` is read as `ctx.options.dryRun`. When a flags string has several long names, the first is the one used for the key.
 
 ```
 $ myapp greet World --uppercase
@@ -368,7 +371,7 @@ log.error("Could not reach the server");
 ✖ [myapp] Could not reach the server
 ```
 
-When the stream is not a terminal, the coloured glyphs are replaced with plain labels (`[INFO]`, `[OK]`, `[ERROR]`) so the output stays readable in a log file. Levels, timestamps, and child loggers are covered in [Logging](logging.md).
+When the stream is not a terminal, the glyphs are replaced with plain labels (`[INFO]`, `[OK]`, `[ERROR]`) so the output stays readable in a log file. Levels, timestamps, and child loggers are covered in [Logging](logging.md).
 
 ### Tables
 

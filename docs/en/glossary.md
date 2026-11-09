@@ -4,11 +4,11 @@ Terms used throughout this documentation, in alphabetical order.
 
 ### AbortSignal
 
-A standard JavaScript object that carries a "stop now" notification to code that is already running. Code holding a signal can check `signal.aborted` or listen for its `abort` event, and many built-in APIs — `fetch`, timers, stream operations — accept one directly and give up when it fires. Every command receives one as `ctx.signal`; it is aborted when the command is cancelled, which happens when the user presses Ctrl-C. Long-running actions should pass it along or watch it so cancellation actually takes effect. See [Commands](commands.md).
+A standard JavaScript object that carries a "stop now" notification to code that is already running. Code holding a signal can check `signal.aborted` or listen for its `abort` event, and many built-in APIs — `fetch`, timers, stream operations — accept one directly and give up when it fires. Every command receives one as `ctx.signal`; it is aborted when the command is cancelled, which happens when the user presses Ctrl-C. Long-running actions should pass it along or watch it so cancellation actually takes effect. A signal passed to `cli.exec()` or `cli.execLine()` that is already aborted rejects before any command code runs. See [Commands](commands.md).
 
 ### Alias
 
-An alternative name for a command or an option. `.alias("g")` makes `myapp g World` equivalent to `myapp greet World`, and `"-u, --uppercase"` declares `-u` as an alias of `--uppercase`. Aliases exist only at the input surface: `ctx.commandPath` always reports the canonical command name, and `ctx.options` is always keyed by the long option name. See [Commands](commands.md) and [Options](options.md).
+An alternative name for a command or an option. `.alias("g")` makes `myapp g World` equivalent to `myapp greet World`, and `"-u, --uppercase"` declares `-u` as an alias of `--uppercase`. Aliases exist only at the input surface: `ctx.commandPath` always reports the canonical command name, and `ctx.options` is always keyed by the camelCase form of the long option name. See [Commands](commands.md) and [Options](options.md).
 
 ### ANSI escape sequence
 
@@ -16,7 +16,7 @@ A short run of characters, beginning with the escape character, that a terminal 
 
 ### Argument (positional)
 
-An input identified by its position on the command line rather than by a name. In `myapp greet World`, `World` is the positional argument bound to `name`, because the command was declared as `greet <name>`. Angle brackets mark an argument required, square brackets optional. Positional values arrive in `ctx.args` keyed by the declared name and are always strings — the library applies no type conversion to them. See [Commands](commands.md).
+An input identified by its position on the command line rather than by a name. In `myapp greet World`, `World` is the positional argument bound to `name`, because the command was declared as `greet <name>`. Angle brackets mark an argument required, square brackets optional. Positional values arrive in `ctx.args` keyed by the declared name in camelCase (`<file-name>` becomes `fileName`) and are always strings — the library applies no type conversion to them. See [Commands](commands.md).
 
 ### argv
 
@@ -25,6 +25,18 @@ The list of words the operating system hands to a program when it starts. In Nod
 ### Banner
 
 The line printed once when the interactive shell opens, above the first prompt. It defaults to the application name and version (`myapp v1.0.0`), or just the name when no version was configured. Setting `banner` to a specific string replaces it; setting it to the empty string suppresses it entirely. It is not printed in direct mode. See [Interactive shell](interactive-shell.md).
+
+### Cancellation
+
+Stopping a running command because the user pressed Ctrl-C or because the `AbortSignal` passed to `cli.exec()` or `cli.execLine()` aborted. A cancelled command rejects with `CancelledError` (code `CANCELLED`, exit code 130), which is reported as a cancellation rather than as a failure: no `error` event fires. The same class is what a prompt rejects with when the user cancels the question. See [Errors](errors.md) and [Prompts](prompts.md).
+
+### Color tag
+
+A tagged template literal that applies styles through inline markup, such as ``colorTag`{bold.red Error}: not found` ``. `colorTag` is bound to standard output, and `createColorTag(stream)` returns the same tag bound to another stream. Its type is `ColorTag`. See [Colour](color.md).
+
+### Colorizer
+
+The chainable style object exported as `color` and returned by `createColorizer(stream)`, as in `color.red.bold("text")`. A colorizer decides whether to emit escape codes from the stream it is bound to, so the same call yields plain text when that stream is redirected. Its type is `Colorizer`. See [Colour](color.md).
 
 ### Command path
 
@@ -36,11 +48,15 @@ The execution mode used when arguments are present: one command is parsed, run o
 
 ### ESM (ECMAScript modules)
 
-JavaScript's standard module format, using `import` and `export`. Node also supports the older CommonJS format, which uses `require()`; a project declares which one it uses with `"type": "module"` in `package.json`. This library is published as ECMAScript modules only, so a consuming project needs `"type": "module"` and has no separate CommonJS build. Node.js 22.12 and later can still `require()` it; earlier 22.x releases need `await import()`. See [Getting started](getting-started.md).
+JavaScript's standard module format, using `import` and `export`. Node also supports the older CommonJS format, which uses `require()`; a project declares which one it uses with `"type": "module"` in `package.json`. This library is published as ECMAScript modules only and has no separate CommonJS build, so a project uses it with `import`, which for `.js` files requires `"type": "module"`. A CommonJS project can `require()` it on Node.js 22.12 and later; earlier 22.x releases need `await import()`. See [Getting started](getting-started.md).
+
+### exec and execLine
+
+The two methods that run commands programmatically, without `cli.start()`. `cli.exec(argv)` takes an array of arguments and never interprets them as shell syntax, so user data in an element cannot start another command. `cli.execLine(line)` takes one line of text with shell-style quoting and `|` pipes, as typed at the interactive shell. Both resolve when the command finishes and reject with the failure. See [Commands](commands.md).
 
 ### Exit code
 
-A small integer a process reports when it ends, telling whatever started it whether the run succeeded. Zero means success; anything else means failure, and shell scripts and CI systems branch on it. The library sets `process.exitCode` rather than terminating the process abruptly, so buffered output is flushed first. A cancelled command exits with 130, and the interactive shell shut down by a termination signal exits with 143. See [Errors](errors.md).
+A small integer a process reports when it ends, telling whatever started it whether the run succeeded. Zero means success; anything else means failure, and shell scripts and CI systems branch on it. The library sets `process.exitCode` rather than terminating the process abruptly, so buffered output is flushed first. Input that does not match the command definitions (an unknown command, a missing argument, an invalid option) exits with 64, a prompt whose input ended exits with 66, a cancelled command exits with 130, and the interactive shell shut down by a termination signal exits with 143. See [Errors](errors.md).
 
 ### Flag
 
@@ -49,6 +65,10 @@ An option that takes no value and means something by its presence alone, such as
 ### Grapheme
 
 One unit of text as a reader perceives it, which may be built from several Unicode code points — an emoji with a skin-tone modifier, or a letter followed by a combining accent. Counting a string's `.length` counts code units, not graphemes, which is why naive alignment breaks on emoji and accented text. The library segments text into graphemes so table columns and truncation line up; `splitGraphemes()` exposes this, and `stringWidth()` also accounts for East Asian characters that occupy two terminal columns. See [Colour](color.md) and [Tables](table.md).
+
+### Input ended
+
+The condition in which a prompt cannot be answered because no input is left: the input stream is `null`, or it reached end of file before an answer. The prompt rejects with `InputEndedError` (code `INPUT_ENDED`, exit code 66), which carries the question as `promptMessage`. It is distinct from cancellation, which is a deliberate Ctrl-C. See [Prompts](prompts.md) and [Errors](errors.md).
 
 ### Interactive shell
 
@@ -60,7 +80,7 @@ A temporary state the interactive shell can be pushed into, in which every line 
 
 ### Option
 
-A named input written with a leading dash, supplied in any order: `--port 8080`, `-p 8080`, `--uppercase`. An option is declared with `.option()` and an [option schema](#option-schema). Parsed values appear in `ctx.options`, always keyed by the long name without the dashes, never by an alias. Unlike positional arguments, options can be typed, defaulted, and validated. See [Options](options.md).
+A named input written with a leading dash, supplied in any order: `--port 8080`, `-p 8080`, `--uppercase`. An option is declared with `.option()` and an [option schema](#option-schema). Parsed values appear in `ctx.options`, always keyed by the first long name in camelCase (`--dry-run` becomes `dryRun`), never by an alias. Unlike positional arguments, options can be typed, defaulted, and validated. See [Options](options.md).
 
 ### Option schema
 
@@ -68,7 +88,7 @@ The object describing one option's behaviour: its `type` (`string`, `number`, `b
 
 ### Pipe
 
-Connecting one command's output to another command's input, written with the `|` character. Inside the interactive shell, `list | grep alpha` runs both commands and streams the first one's standard output into the second one's `ctx.stdin`. This works only for commands defined in the same application, and only for lines typed at the shell prompt — it is the shell's own pipe, not the operating system's. Writing to `ctx.stdout` rather than `console.log` is what makes a command usable in a pipeline. See [Interactive shell](interactive-shell.md).
+Connecting one command's output to another command's input, written with the `|` character. Inside the interactive shell, `list | grep alpha` runs both commands and streams the first one's standard output into the second one's `ctx.stdin`. This works only for commands defined in the same application, and only for lines typed at the shell prompt or passed to `cli.execLine()` — it is the library's own pipe, not the operating system's. Writing to `ctx.stdout` rather than `console.log` is what makes a command usable in a pipeline. See [Interactive shell](interactive-shell.md).
 
 ### Plugin
 
@@ -76,7 +96,7 @@ A function that receives a context object and uses it to register commands, even
 
 ### Prompt (input function)
 
-`prompt` is an exported object whose methods ask the user a question and resolve with the answer: `prompt.text()`, `prompt.confirm()`, `prompt.select()`, `prompt.multiselect()`, and `prompt.password()`. These are used from inside a command action, and they need a terminal to read from. They write the question to standard error by default, so passing the command context, as in `prompt.text("Name?", ctx)`, routes the question and the input through the command's own streams. Not to be confused with the prompt string below. See [Prompts](prompts.md).
+`prompt` is an exported object whose methods ask the user a question and resolve with the answer: `prompt.text()`, `prompt.confirm()`, `prompt.select()`, `prompt.multiselect()`, and `prompt.password()`. These are used from inside a command action, and they need a terminal to read from. They write the question to standard error by default, so passing the command context, as in `prompt.text("Name?", ctx)`, routes the question and the input through the command's own streams. A prompt rejects with `CancelledError` when the user cancels and with `InputEndedError` when no input is left. Not to be confused with the prompt string below. See [Prompts](prompts.md).
 
 ### Prompt (string)
 
@@ -92,7 +112,7 @@ The `#!/usr/bin/env node` line at the top of an executable script. When the file
 
 ### SIGINT / SIGTERM
 
-Signals an operating system sends to a running process. SIGINT is what Ctrl-C sends, meaning "interrupt this"; SIGTERM is a polite request to shut down, typically from a process manager. The library turns SIGINT into a cancellation: `ctx.signal` aborts and any registered cancel handler runs, so a command can remove a lock file or close a connection before stopping. A second Ctrl-C force-quits with exit code 130, and the interactive shell handles SIGTERM by tearing down and exiting with 143. See [Errors](errors.md).
+Signals an operating system sends to a running process. SIGINT is what Ctrl-C sends, meaning "interrupt this"; SIGTERM is a polite request to shut down, typically from a process manager. The library turns SIGINT into a cancellation during `cli.start()` and the interactive shell: `ctx.signal` aborts and any registered cancel handler runs, so a command can remove a lock file or close a connection before stopping. A second Ctrl-C force-quits with exit code 130, and the interactive shell handles SIGTERM by tearing down and exiting with 143. See [Errors](errors.md).
 
 ### stderr
 
@@ -100,7 +120,7 @@ Standard error: the second output stream every process has, conventionally used 
 
 ### stdin
 
-Standard input: the stream a process reads input from, normally the keyboard, but a file when redirected with `<` or another command's output when piped. A command reads it through `ctx.stdin`, which is `null` when no input stream is available. Whether standard input is a terminal is one of the two conditions `cli.start()` checks before opening the interactive shell. See [Getting started](getting-started.md).
+Standard input: the stream a process reads input from, normally the keyboard, but a file when redirected with `<` or another command's output when piped. A command reads it through `ctx.stdin`. In direct mode it is `process.stdin`, in the interactive shell it is the terminal shared with the line editor, and under `cli.exec()` and `cli.execLine()` it is `null` unless a stream is supplied. Whether standard input is a terminal is one of the two conditions `cli.start()` checks before opening the interactive shell. See [Getting started](getting-started.md).
 
 ### stdout
 
@@ -116,7 +136,7 @@ Pressing the Tab key to have the tool fill in or suggest the rest of what is bei
 
 ### TTY
 
-Short for teletype; in practice, "attached to a terminal". A stream is a TTY when it is connected to an interactive terminal window, and is not one when it has been redirected to a file or connected to a pipe. Two behaviours turn on this distinction: colour and progress animation are emitted only to a TTY, and the interactive shell opens only when both standard input and standard output are TTYs. `streamIsTTY()` performs the check. See [Getting started](getting-started.md).
+Short for teletype; in practice, "attached to a terminal". A stream is a TTY when it is connected to an interactive terminal window, and is not one when it has been redirected to a file or connected to a pipe. Two behaviours turn on this distinction: colour and progress animation are emitted only to a TTY, and the interactive shell opens only when both standard input and standard output are TTYs. `isTTY()` performs the check. See [Getting started](getting-started.md).
 
 ### Variadic argument
 

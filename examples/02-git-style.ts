@@ -46,7 +46,7 @@ repo
   .action((ctx) => {
     ctx.stdout.write(`Listing up to ${ctx.options.limit} repos (sorted by ${ctx.options.sort})\n`);
     const repos = ["api-server", "frontend", "docs", "infra", "cli-tools"];
-    const limit = ctx.options.limit as number;
+    const limit = ctx.options.limit;
     for (const name of repos.slice(0, limit)) {
       ctx.stdout.write(`  ${name}\n`);
     }
@@ -79,7 +79,7 @@ issue
   .action((ctx) => {
     ctx.stdout.write(`Created issue: ${ctx.options.title}\n`);
     if (ctx.options.label) {
-      ctx.stdout.write(`  Labels: ${(ctx.options.label as string[]).join(", ")}\n`);
+      ctx.stdout.write(`  Labels: ${ctx.options.label.join(", ")}\n`);
     }
     if (ctx.options.assignee) {
       ctx.stdout.write(`  Assignee: ${ctx.options.assignee}\n`);

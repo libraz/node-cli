@@ -1,7 +1,19 @@
 [
-  { "name": "new CLI", "scope": "docs", "patterns": ["new CLI\\("] },
-  { "name": "CLI value export", "scope": "exports", "patterns": ["export \\{[^}]*\\bCLI\\b"] },
-  { "name": "logger()", "scope": "both", "patterns": ["\\blogger\\("] },
+  {
+    "name": "new CLI",
+    "scope": "docs",
+    "patterns": ["new CLI\\("]
+  },
+  {
+    "name": "CLI value export",
+    "scope": "exports",
+    "patterns": ["export \\{[^}]*\\bCLI\\b"]
+  },
+  {
+    "name": "logger()",
+    "scope": "both",
+    "patterns": ["\\blogger\\("]
+  },
   {
     "name": "CLI setters",
     "scope": "docs",
@@ -16,7 +28,11 @@
     "scope": "docs",
     "patterns": ["\\)\\s*\\.(complete|cancel)\\(", "^\\s*\\.(complete|cancel)\\("]
   },
-  { "name": "autocomplete", "scope": "docs", "patterns": ["\\bautocomplete\\b"] },
+  {
+    "name": "autocomplete",
+    "scope": "docs",
+    "patterns": ["\\bautocomplete\\b"]
+  },
   {
     "name": "catch",
     "scope": "both",
@@ -60,7 +76,11 @@
       "`update\\(label"
     ]
   },
-  { "name": "interval", "scope": "docs", "patterns": ["\\binterval\\s*:", "`interval`"] },
+  {
+    "name": "interval",
+    "scope": "docs",
+    "patterns": ["\\binterval\\s*:", "`interval`"]
+  },
   {
     "name": "old BarState fields",
     "scope": "docs",
@@ -118,5 +138,82 @@
     "name": "old start signature",
     "scope": "docs",
     "patterns": ["start\\(argv\\?: string\\[\\]\\): Promise<void>"]
+  },
+  {
+    "name": "c tag",
+    "scope": "both",
+    "patterns": [
+      "(^|[\\s(=,:])c`",
+      "import \\{[^}]*\\bc\\b[^}]*\\} from \"@libraz/node-cli\"",
+      "export \\{[^}]*\\bc\\b"
+    ],
+    "files": ["\\.(ts|mjs|md)$"]
+  },
+  {
+    "name": "createTemplateTag",
+    "scope": "both",
+    "patterns": ["\\bcreateTemplateTag\\b"]
+  },
+  {
+    "name": "ColorProxy",
+    "scope": "both",
+    "patterns": ["\\bColorProxy\\b"]
+  },
+  {
+    "name": "streamIsTTY",
+    "scope": "both",
+    "patterns": ["\\bstreamIsTTY\\b"]
+  },
+  {
+    "name": "PromptCancelError",
+    "scope": "both",
+    "patterns": ["\\bPromptCancelError\\b", "PROMPT_CANCELLED"]
+  },
+  {
+    "name": "old error codes",
+    "scope": "both",
+    "patterns": ["VALIDATION_ERROR", "PARSE_ERROR"]
+  },
+  {
+    "name": "ModeConfig",
+    "scope": "both",
+    "patterns": ["\\bModeConfig\\b"]
+  },
+  {
+    "name": "borderColor",
+    "scope": "docs",
+    "patterns": ["\\bborderColor\\s*:"]
+  },
+  {
+    "name": "progress color key",
+    "scope": "docs",
+    "patterns": ["^\\s*color:\\s*\""],
+    "files": ["(progress\\.md|examples/)"]
+  },
+  {
+    "name": "stream key on writers",
+    "scope": "docs",
+    "patterns": ["^\\s*stream:\\s*"],
+    "files": ["(progress\\.md|logging\\.md|examples/)"]
+  },
+  {
+    "name": "ExtraArgumentError.extra",
+    "scope": "docs",
+    "patterns": ["\\berr(or)?\\.extra\\b", "\\be\\.extra\\b"]
+  },
+  {
+    "name": "createCLI without name",
+    "scope": "docs",
+    "patterns": ["createCLI\\(\\s*\\)\\s*[;.]"]
+  },
+  {
+    "name": "exec with a string",
+    "scope": "docs",
+    "patterns": ["\\bcli\\.exec\\(\\s*[\"'\\x60]"]
+  },
+  {
+    "name": "kebab option key",
+    "scope": "docs",
+    "patterns": ["ctx\\.options\\[\\s*[\"'][a-z0-9]+-"]
   }
 ]

@@ -46,7 +46,7 @@ const selectValidateWrong: SelectOptions<number> = {
   validate: (value: string) => void value,
 };
 const multiselectValidate: MultiselectOptions<number> = {
-  validate: (value: number[]) => void value,
+  validate: (value: readonly number[]) => void value,
 };
 const multiselectValidateWrong: MultiselectOptions<number> = {
   // @ts-expect-error A multiselect validator receives an array of choice values.

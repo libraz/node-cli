@@ -12,11 +12,11 @@ The library targets anyone writing a tool that is invoked from a terminal: a bui
 
 The figure shows three parts.
 
-**The application object.** `createCLI()` returns the application object. Its name, version, description, prompt string, banner, and history settings are all passed to `createCLI()` and are fixed from then on, and the object owns the registry every command is registered into. `cli.start()` is the single point where control is handed to the library.
+**The application object.** `createCLI()` returns the application object. Its name (required), version, description, prompt string, banner, and history settings are all passed to `createCLI()` and are fixed from then on, and the object owns the registry every command is registered into. `cli.start()` is the single point where control is handed to the library.
 
 **The command layer.** Each `cli.command(...)` call defines one command: its name, its positional arguments, its options, and the function that runs when it is invoked. Commands can nest into subcommands, so `myapp db migrate` is a `migrate` command under a `db` group. Help text for every command and subcommand is generated from these definitions, so there is no separate usage string to keep in sync. See [Commands](commands.md) and [Options](options.md).
 
-**The output toolkit.** `color`, `c`, `table`, `progress`, `prompt`, and `createLogger` are ordinary exports. They do not read from a CLI object and do not need one to exist. A script that only wants to print an aligned table can import `table` alone:
+**The output toolkit.** `color`, `colorTag`, `table`, `progress`, `prompt`, and `createLogger` are ordinary exports. They do not read from a CLI object and do not need one to exist. A script that only wants to print an aligned table can import `table` alone:
 
 ```typescript
 import { table } from "@libraz/node-cli";
@@ -79,9 +79,9 @@ The first form is called *direct mode*; the second is the *interactive shell*. `
 | Options | Long and short forms, type coercion to number or boolean, defaults, required options, restricted choices, custom parsing and validation. |
 | Generated help | A command index and a per-command page, built from the definitions. |
 | Interactive shell | A prompt inside the tool, with persistent history, a history filter for secrets, and tab completion. |
-| Pipes | Inside the shell, one command's output can be fed into another command's input. |
+| Pipes | Inside the shell, or through `cli.execLine()`, one command's output can be fed into another command's input. |
 | Modes | A command can hand the shell over to a sub-prompt with its own handler and completion. |
-| Colour | Named styles, chained styles, a tagged-template syntax, and automatic disabling when output is not a terminal. |
+| Colour | Named styles, chained styles, a tagged-template syntax (`colorTag`), and automatic disabling when output is not a terminal. |
 | Tables | Aligned columns with border presets, per-column width and alignment, and correct width for East Asian and emoji text. |
 | Progress | Progress bars, multi-bar groups, and spinners. |
 | Prompts | Text, confirmation, single select, multi-select, and masked password input. |
@@ -93,7 +93,7 @@ The first form is called *direct mode*; the second is the *interactive shell*. `
 
 - **No runtime dependencies, and no plugin ecosystem to install.** Everything above is in the one package; anything not listed has to be written by hand.
 - **ESM only.** The package publishes ECMAScript modules. It is loaded with `import`. There is no separate CommonJS build: Node.js 22.12 and later can `require("@libraz/node-cli")`, and earlier 22.x releases need `await import("@libraz/node-cli")`. See [ESM](glossary.md#esm-ecmascript-modules).
-- **Node 22 or newer.** Older Node versions are not supported.
+- **Node 22 or newer.** Older Node versions are not supported. The type declarations require TypeScript 5.4 or newer.
 - **No configuration-file loading.** The library does not look for a `.myapprc`, a `myapp.config.js`, or environment-variable overrides. Reading configuration is the application's job.
 - **No completion scripts for external shells.** Tab completion works inside the interactive shell. The library does not generate bash, zsh, or fish completion scripts, so pressing Tab at a system shell prompt completes filenames, not the tool's commands.
 - **No translation of built-in messages.** Generated help, error messages, and prompt labels are English. Application-supplied text is used verbatim, so command descriptions can be written in any language.
@@ -107,7 +107,7 @@ The first form is called *direct mode*; the second is the *interactive shell*. `
 - [Commands](commands.md) — the command definition string, arguments, subcommands, aliases, validation, and cancellation.
 - [Options](options.md) — the option schema: types, defaults, aliases, choices, custom parsing and validation.
 - [Interactive shell](interactive-shell.md) — the prompt, history, tab completion, pipes, and modes.
-- [Colour](color.md) — the `color` proxy, the `c` template tag, and terminal-width helpers.
+- [Colour](color.md) — the `color` colorizer, the `colorTag` template tag, and terminal-width helpers.
 - [Tables](table.md) — rendering aligned tabular output.
 - [Progress](progress.md) — progress bars, multi-bar groups, and spinners.
 - [Prompts](prompts.md) — asking the user questions from inside a command.

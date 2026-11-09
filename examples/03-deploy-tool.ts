@@ -54,7 +54,7 @@ cli
   .option("--force", { type: "boolean", description: "Skip safety checks" })
   .validate((ctx) => {
     const validEnvs = ["prod", "staging", "dev"];
-    if (!validEnvs.includes(ctx.args.env as string)) {
+    if (!validEnvs.includes(ctx.args.env)) {
       throw new Error(
         `Invalid environment "${ctx.args.env}". Must be one of: ${validEnvs.join(", ")}`,
       );
@@ -62,9 +62,9 @@ cli
   })
   .action((ctx) => {
     const col = createColorizer(ctx.stdout);
-    const env = ctx.args.env as string;
-    const tag = ctx.options.tag as string;
-    const dryRun = ctx.options["dry-run"] as boolean;
+    const { env } = ctx.args;
+    const { tag } = ctx.options;
+    const { dryRun } = ctx.options;
 
     if (dryRun) {
       ctx.stdout.write(
@@ -89,11 +89,9 @@ cli
   })
   .action((ctx) => {
     const col = createColorizer(ctx.stdout);
-    const env = ctx.args.env as string;
-    const steps = ctx.options.steps as number;
-    ctx.stdout.write(
-      `${col.yellow("Rolling back")} ${col.bold(env)} by ${String(steps)} version(s)...\n`,
-    );
+    const { env } = ctx.args;
+    const { steps } = ctx.options;
+    ctx.stdout.write(`${col.yellow("Rolling back")} ${col.bold(env)} by ${steps} version(s)...\n`);
     ctx.stdout.write(`${col.green.bold("Done!")} Rollback complete.\n`);
   });
 

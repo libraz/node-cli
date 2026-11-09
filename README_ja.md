@@ -23,7 +23,7 @@ Node.js / TypeScript 向けの、依存パッケージゼロで一通り揃っ�
 
 ## インストール
 
-Node.js 22 以降、ESM 専用です。
+Node.js 22 以降、ESM 専用です。型定義には TypeScript 5.4 以降が必要です。
 
 ```bash
 npm install @libraz/node-cli

@@ -113,6 +113,8 @@ const cli = createCLI({
 
 With that filter, typing `deploy --token abcd1234` stores `deploy --token ***`.
 
+The filter is synchronous. If it throws, the line is not recorded and a warning is written to `process.stderr`. The shell has no stderr of its own, so this warning goes to the same place as its other diagnostics.
+
 ### File safety
 
 The history file holds whatever was typed, so it is treated as private:
@@ -120,6 +122,8 @@ The history file holds whatever was typed, so it is treated as private:
 - it is kept at file mode `0600` (readable and writable by its owner only), and reset to that mode if it is found otherwise;
 - it is opened without following symbolic links, so a link planted at that path is rejected rather than written through;
 - it is rejected if it is not a regular file, or if it is owned by a different user.
+
+On Windows, file mode bits do not apply, and the no-follow open and the owner check are not performed. The file inherits the access control list of its directory, so place it in a directory that only the user can access.
 
 When several sessions run at once they coordinate through a `.lock` file next to the history file. A lock left behind by a process that no longer exists is broken immediately, so a crashed session does not block later ones.
 
@@ -137,10 +141,10 @@ Pressing Tab asks the shell for candidate completions of the word under the curs
 
 ### The completion context
 
-A command supplies its own candidates through `.completer(fn)`, where `fn` matches the `Completer` type:
+A command supplies its own candidates through `.completer(fnOrList)`, where a function matches the `Completer` type and a list is a readonly array of strings:
 
 ```typescript
-type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
+type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonly string[]>;
 ```
 
 `CompletionContext` carries:
@@ -151,12 +155,12 @@ type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
 | `fullLine` | The whole input line, earlier pipe segments included |
 | `current` | The word being completed |
 | `commandPath` | The resolved command path, with aliases replaced by canonical names |
-| `args` | Positional arguments parsed so far |
-| `options` | Options parsed so far, **raw and uncoerced**: no type conversion, no defaults, no validation |
+| `args` | Positional arguments typed so far, keyed by camelCase name: a raw string, or an array of raw strings for a variadic argument |
+| `options` | Options typed so far, keyed like `ctx.options` and **raw and uncoerced**: no type conversion, no defaults, no validation. A value option holds a string, a flag or its `--no-` form holds `true` or `false`, and an array option holds an array of strings |
 | `iteration` | How many times Tab has been pressed in a row on an unchanged line, starting at `1`. Any edit resets it |
 | `signal` | An `AbortSignal` (see [Glossary](glossary.md)) that is aborted when the completion deadline expires |
 
-Returned candidates are filtered against `current` before they are shown, so a completer returns full candidate values rather than pre-filtered text.
+Candidates are filtered by prefix against `current` before they are shown, whether they come from a function or a fixed list, so a completer returns full candidate values rather than pre-filtered text.
 
 ### Resolution order
 
@@ -196,7 +200,7 @@ cli
     },
   })
   .action((ctx) => {
-    ctx.stdout.write(`Deploying to ${String(ctx.args.env)}\n`);
+    ctx.stdout.write(`Deploying to ${ctx.args.env}\n`);
   });
 ```
 
@@ -220,7 +224,7 @@ cli
     return ctx.iteration === 1 ? hosts.slice(0, 2) : hosts;
   })
   .action((ctx) => {
-    ctx.stdout.write(`Connecting to ${String(ctx.args.host)}\n`);
+    ctx.stdout.write(`Connecting to ${ctx.args.host}\n`);
   });
 ```
 
@@ -270,7 +274,7 @@ cli
   });
 ```
 
-For a command typed at the shell prompt **without** a pipe, `ctx.stdin` is `null`. The shell releases the terminal input before running a command, so there is nothing for the command to read. To ask the user a question from inside an action, use the prompt functions described in [Prompts](prompts.md) rather than reading `ctx.stdin`.
+For a command typed at the shell prompt **without** a pipe, `ctx.stdin` is the terminal that the line editor shares. Read it only through the prompt functions described in [Prompts](prompts.md), and never read it to the end. A mode action receives the same terminal (see [What is different inside a mode](#what-is-different-inside-a-mode)).
 
 ### Stopping early
 
@@ -282,9 +286,20 @@ If any stage throws, the whole chain is torn down in both directions — downstr
 
 ### Pipes exist only for string input
 
-Pipe splitting is applied to a command **string**. That covers the interactive shell and `cli.exec("a | b")` (see [Events and plugins](events-and-plugins.md)).
+Pipe splitting is applied to a command **string**. That covers the interactive shell and `cli.execLine("a | b")` (see [Events and plugins](events-and-plugins.md)).
 
-In direct mode the arguments arrive as an array that is already split into words, and pipe splitting is skipped entirely. A `|` there is an ordinary argument value, not a pipe. (In practice the system shell handles `|` before the program ever sees it.)
+In direct mode the arguments arrive as an array that is already split into words, and pipe splitting is skipped entirely. `cli.exec([...])` takes an array too. A `|` there is an ordinary argument value, not a pipe. (In practice the system shell handles `|` before the program ever sees it.)
+
+### Quoting
+
+A line typed at the prompt is split into words by POSIX shell rules. Single quotes keep their content literally. Double quotes group words and allow backslash escapes. A backslash outside quotes escapes the next character. A `|` inside quotes is an ordinary character.
+
+```
+mycli> note add "a | b"        # one argument: a | b
+mycli> note add 'C:\Users\me'  # single quotes keep the backslashes
+```
+
+A Windows path therefore needs single quotes in a line. A program that passes paths to `cli.exec` avoids the question by using an array: `cli.exec(["note", "add", "C:\\Users\\me"])` carries the string unchanged.
 
 ### Unsupported syntax
 
@@ -324,10 +339,7 @@ cli
       prompt: "sql> ",
       banner: 'Entering SQL mode. Type "exit" to return.',
       history: "session",
-      completer: ({ current }) => {
-        const keywords = ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"];
-        return keywords.filter((k) => k.startsWith(current.toUpperCase()));
-      },
+      completer: ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"],
       action: async (input, { stdout, stderr, signal }) => {
         try {
           const rows = await runQuery(input, { signal });
@@ -340,27 +352,27 @@ cli
   });
 ```
 
-`ctx.shell` is `null` whenever the command is not running in the interactive shell — including under `cli.exec()` — so it must always be guarded.
+`ctx.shell` is `null` whenever the command is not running in the interactive shell — including under `cli.exec()` and `cli.execLine()` — so it must always be guarded.
 
-### The mode configuration
+### The mode options
 
-`ModeConfig` has these fields:
+`enterMode()` takes a `ModeOptions` object with these fields:
 
 | Field | Required | Meaning |
 |---|---|---|
 | `prompt` | yes | The prompt shown while the mode is active |
-| `action` | yes | Called with each input line and a small context |
+| `action` | yes | A `ModeAction`: `(input, ctx) => void \| Promise<void>`, called with each input line and a `ModeContext` |
 | `banner` | no | Printed once, when the mode is entered |
-| `completer` | no | Tab completion inside the mode. **When it is omitted, Tab does nothing in the mode** |
+| `completer` | no | Tab completion inside the mode: a fixed list or a `Completer`. **When it is omitted, Tab does nothing in the mode** |
 | `history` | no | `"session"` (default) or `"none"` |
 
-A mode `completer` is the same `Completer` a command uses: it receives a `CompletionContext` and returns candidates, synchronously or as a promise. `line` and `fullLine` are the input line, `current` is the last word (`""` after a space), `commandPath` is `[]`, and `args` and `options` are empty; `iteration` and `signal` behave as for commands. Candidates are not filtered against `current`, so the completer returns only the ones that match. It is bound by the same 1000 ms cap as any other provider, and a throw or a rejection yields no candidates.
+A mode `completer` is either a fixed list of strings or the same `Completer` a command uses: a function that receives a `CompletionContext` and returns candidates, synchronously or as a promise. Top-level command names are not offered inside a mode. `line` and `fullLine` are the input line, `current` is the last word (`""` after a space), `commandPath` is `[]`, and `args` and `options` are empty; `iteration` and `signal` behave as for commands. Candidates are filtered by prefix against `ctx.current`, from a list and from a function alike, so the completer returns full candidate values. A function is bound by the same 1000 ms cap as any other provider, and a throw or a rejection yields no candidates.
 
 `history: "session"` keeps recall in memory only, capped at `historySize`, skipping consecutive duplicates. Mode input is never written to the history file under either setting.
 
 ### What is different inside a mode
 
-- The context handed to the mode action is only `{ stdout, stderr, signal }`. It is **not** a `CommandContext`: there is no `args`, no `options`, no `shell`, and no `stdin`.
+- The context handed to the mode action is a `ModeContext`: `{ stdin, stdout, stderr, signal }`, the same streams and signal every command execution has. It is **not** a `CommandContext`: there is no `args`, no `options`, and no `shell`. `stdin` is the terminal that the line editor shares, so read it only through the `prompt.*` functions and never to the end.
 - Every line reaches the action verbatim. Nothing is parsed, routed, or matched against registered commands.
 - `exit` and `quit` always leave the mode. A registered command of that name cannot be reached from inside a mode, so honouring it would strand the user there.
 - Ctrl+D leaves the mode and returns to the main prompt. If the input stream has already ended, it ends the session instead.
@@ -406,10 +418,12 @@ Exit codes are listed in full in [Errors](errors.md).
 
 | Method | Effect |
 |---|---|
-| `stop()` | Ends the session after the current command returns |
+| `stop()` | Ends the session after the current command returns; returns nothing |
 | `setPrompt(text)` | Replaces the prompt text and returns the shell |
-| `enterMode(config)` | Enters a mode sub-REPL |
-| `exitMode()` | Leaves the current mode |
+| `enterMode(options)` | Enters a mode sub-REPL and returns the shell |
+| `exitMode()` | Leaves the current mode and returns the shell |
+
+`setPrompt`, `enterMode`, and `exitMode` return the shell, so calls chain: `ctx.shell?.setPrompt("sql> ").enterMode({ ... })`. `stop()` ends the session and returns `void`, so it closes a chain.
 
 `setPrompt` applies immediately, unless a mode is active — then it takes effect after `exitMode()`.
 
@@ -418,7 +432,7 @@ cli
   .command("use <project>")
   .description("Switch the active project")
   .action((ctx) => {
-    const project = String(ctx.args.project);
+    const project = ctx.args.project;
     ctx.shell?.setPrompt(`${project}> `);
     ctx.stdout.write(`Switched to ${project}\n`);
   });

@@ -43,7 +43,7 @@ await cli.start();
 
 | 部分 | 意味 |
 |---|---|
-| `--long` | 正規のロング名。`--` の部分が複数ある場合、**優先されるのは最後のもの**で、それより前のものはロングエイリアスになります |
+| `--long` | 正規のロング名。`--` の部分が複数ある場合、**優先されるのは最初のもの**で、それ以降のものはロングエイリアスになります |
 | `-x` | ショートエイリアス |
 | 各部分の末尾の ` <name>` または ` [name]` | 値のプレースホルダ |
 
@@ -55,7 +55,21 @@ await cli.start();
 
 **`--` の部分がない場合、最初のショートエイリアスがロング名になります。** `.option("-p")` は正規名が `p` のオプションを宣言し、`ctx.options.p` で読み取ります。
 
-名前 — ロング名とすべてのエイリアス — は `/^[A-Za-z0-9][A-Za-z0-9-]*$/` に一致しなければなりません。先頭は英字か数字、以降は英字、数字、ハイフンです。
+名前 — ロング名とすべてのエイリアス — は `/^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$/` に一致しなければなりません。ASCII の英数字を、単一のハイフンでつないだ形です。`_`、連続または末尾のハイフン、ASCII 以外の文字を含む名前は `ERR_INVALID_DEFINITION` を送出します。
+
+### `ctx.options` のキー
+
+キーは正規名を camelCase にしたものです。名前を `-` で分割し、先頭の部分はそのままにして、以降の各部分は先頭を大文字にします。
+
+| フラグ | キー |
+|---|---|
+| `--dry-run` | `dryRun` |
+| `--ipv6-only` | `ipv6Only` |
+| `--x-1` | `x1` |
+| `--Foo` | `Foo` |
+| `-V` | `V` |
+
+ヘルプ、タブ補完、エラーメッセージはフラグの綴り（`--dry-run`）のままで、camelCase のキーを使うのは `ctx.options` だけです。1 つのコマンドの中で、名前から同じキーが作られる 2 つのオプションは、2 つ目の `.option()` の実行時に `ERR_DEFINITION_CONFLICT` を送出します。たとえば `--dry-run` と `--dryRun`、あるいは別のオプションのエイリアスと同じ長い名前です。同じフラグを再度宣言した場合は、先の定義が置き換わります。
 
 `<number>` プレースホルダには `type: "number"` か `"number[]"` が、`<boolean>` プレースホルダには `type: "boolean"` が必要で、ほかの組み合わせは例外を送出します。`<n>` や `<tag>` など、それ以外のプレースホルダ名は自由に付けられます。
 
@@ -66,7 +80,7 @@ cli
   .command("build")
   .option("-f, --force") //              boolean; key: force
   .option("--tag <tag>") //              string;  key: tag
-  .option("--colour, --color <name>") // string;  key: color, alias: colour
+  .option("--colour, --color <name>") // string;  key: colour, alias: color
   .option("-p"); //                      boolean; key: p
 ```
 
@@ -76,18 +90,20 @@ cli
 |---|---|---|---|
 | `description` | `string` | — | ヘルプに表示される文言 |
 | `type` | `"string" \| "number" \| "boolean" \| "string[]" \| "number[]"` | 仕様にプレースホルダがあれば `"string"`、なければ `"boolean"` | 組み込みの型変換を選びます |
-| `alias` | `string \| string[]` | — | 追加の名前。1 文字のエイリアスはショートフラグになります。2 文字以上のエイリアスは、仕様が `--` ですでに宣言した名前に対してのみ受け付けられ、それ以外の複数文字エイリアスは例外を送出します |
+| `alias` | `string \| readonly string[]` | — | 追加のショート名。英字か数字 1 文字で、`"p"` または `"-p"` と書きます。ロングエイリアスはフラグ文字列に書きます（`"--colour, --color"`）。それ以外の複数文字エイリアスは例外を送出します |
 | `required` | `boolean` | `false` | フラグが与えられないとコマンドが `MissingOptionError` で失敗します。`default` とは併用できません |
-| `default` | `unknown` | boolean オプションは `required` でないかぎり `false` を受け取ります | フラグが与えられなかったときにだけ使われます |
-| `choices` | `unknown[]` | — | 受け付ける値を制限します |
+| `default` | オプションの値の型 | boolean オプションは `required` でないかぎり `false` を受け取ります | フラグが与えられなかったときにだけ使われます |
+| `choices` | オプションの値の型の `readonly` 配列 | — | 受け付ける値を制限します |
 | `parse` | `(value: string, ctx) => unknown` | — | 組み込みの型変換を完全に置き換えます |
-| `validate` | `(value: unknown, ctx) => void` | — | 例外を送出して解決済みの値を拒否します |
+| `validate` | `(value, ctx) => void \| Promise<void>` | — | 例外を送出して解決済みの値を拒否します |
 | `hidden` | `boolean` | `false` | ヘルプと補完からオプションを除外します |
-| `completer` | `readonly string[] \| Completer` | — | タブ補完用の値の候補。固定のリストか、`CompletionContext` を受け取る関数で指定します。`choices` より優先されます |
+| `completer` | `readonly string[] \| Completer` | `choices` | タブ補完用の値の候補。固定のリストか、`CompletionContext` を受け取る関数で指定します。`choices` より優先されます |
 
 不正なフラグ文字列や不正なスキーマは、`.option()` の実行時に `code: "ERR_INVALID_DEFINITION"` を持つ `Error` を送出します。同じコマンドの別のオプションがすでに使っている名前やエイリアスは `ERR_DEFINITION_CONFLICT` を送出します。
 
 `alias` で指定したエイリアスは仕様文字列のものとマージされるので、`.option("--port <n>", { alias: "p" })` と `.option("-p, --port <n>")` は同じオプションを宣言します。
+
+`completer` に関数を渡すと、`CompletionContext` を受け取ります。その値は変換前の生の値で、ここまでに入力された状態のままです。`args` は位置引数を camelCase の名前をキーに、文字列（可変長引数では文字列の配列）で保持します。`options` は `ctx.options` と同じキーで、値を取るオプションは文字列、フラグまたはその `--no-` 形は `true` か `false`、配列オプションは文字列の配列です。
 
 ## 型と型変換
 
@@ -127,7 +143,7 @@ cli.command("run").option("--tags <tag>", { type: "string[]" });
 
 ## 既定値と必須
 
-`default` は、フラグが与えられなかったときに使われる値です。
+`default` は、フラグが与えられなかったときに使われる値です。その型はオプションの値の型です（[型付きのオプション](#型付きのオプション)を参照）。
 
 ```typescript
 cli.command("run").option("--retries <n>", { type: "number", default: 3 });
@@ -135,7 +151,7 @@ cli.command("run").option("--retries <n>", { type: "number", default: 3 });
 // myapp run --retries 5 → ctx.options.retries is 5
 ```
 
-宣言された既定値は、オプションの宣言時に組み込みの型変換を通ります。ここから 2 つの帰結が生まれます。型に合わない既定値は、解析時ではなく起動時にただちに例外を送出します。`{ type: "number", default: "abc" }` は `.option()` が走った時点で失敗します。そして型に合う既定値は変換後の形で保持されるので、`{ type: "number", default: "8080" }` は数値の `8080` になります。
+独自の `parse` を持たないオプションでは、宣言された既定値はオプションの宣言時に組み込みの型変換を通ります。ここから 2 つの帰結が生まれます。型に合わない既定値は、解析時ではなく起動時にただちに例外を送出します。`{ type: "number", default: "abc" }` は `.option()` が走った時点で失敗します。そして型に合う既定値は変換後の形で保持されるので、`{ type: "number", default: "8080" }` は数値の `8080` になります。型検査は文字列の形を拒否し、この変換は素の JavaScript の呼び出し元のために残されています。
 
 無条件に拒否される既定値が 3 つあります。
 
@@ -157,23 +173,27 @@ boolean オプションは `required` でないかぎり自動的に `default: f
 
 ## 選択肢
 
-`choices` は受け付ける値を制限します。
+`choices` は受け付ける値を制限します。要素の型はオプションの値の型です。`string` オプションなら文字列、`number` オプションなら数値、配列オプションなら要素の型になります。
 
 ```typescript
 cli.command("deploy").option("--env <env>", { choices: ["dev", "staging", "prod"] });
 // myapp deploy --env qa
 // → InvalidOptionError: Invalid value "qa" for --env. Allowed: dev, staging, prod
+
+cli.command("scale").option("--replicas <n>", { type: "number", choices: [1, 2, 4] });
 ```
 
-比較は緩やかです。宣言された選択肢と等しい候補に加えて、文字列にした形が宣言された選択肢の文字列形と等しい候補も一致します。そのため、選択肢を文字列 `["1", "2"]` で書いた `number` オプションでも入力 `1` を受け付け、これは数値の `1` に変換されます。
+入力はまずオプションの型へ変換され、変換後の値が選択肢と厳密等価（`===`）で比較されます。`--replicas 2` は数値の `2` に変換されて一致します。`number` オプションでは、選択肢の文字列表記は受け付けられません。
 
 配列型のオプションでは、配列全体ではなく各要素が個別に検査されます。
+
+型の違う選択肢、空の `choices` 配列、有限でない数値や `Number.MAX_SAFE_INTEGER` を超える数値、`parse` との併用、`boolean` オプションへの指定は、`.option()` の実行時に `ERR_INVALID_DEFINITION` を送出し、型エラーにもなります。
 
 このチェックが走るのは、そのオプションが解決結果に存在するとき、つまりフラグが与えられたか既定値が適用されたときだけです。
 
 ## 独自の `parse` と `validate`
 
-`parse` は組み込みの型変換を置き換えます。生の文字列とコマンドコンテキストを受け取り、アクションに見せたいものを返します。
+`parse` は組み込みの型変換を置き換えます。生の文字列とコマンドコンテキストを受け取り、アクションに見せたいものを返します。この時点では他のオプションが未解決のことがあるため、コンテキストの `options` は部分的です。
 
 ```typescript
 cli.command("log").option("--since <date>", {
@@ -189,11 +209,11 @@ cli.command("log").option("--since <date>", {
 
 - 組み込みの型変換は完全に飛ばされ、宣言された `type` は何も変換しなくなります。
 - 配列型では、`parse` が各要素へ順に適用されます。
-- 送出された例外は `ValidationError` に包まれ、そのメッセージは `Invalid value for --since: ...` となります。[エラー](errors.md)を参照してください。
+- 送出された `CLIError` はそのまま伝播し、`ctx.signal` のキャンセルはキャンセルのままです。それ以外の例外は `ValidationError` に包まれ、メッセージは `Invalid value "<raw>" for --since: ...`、`value` は生の文字列になります。[エラー](errors.md)を参照してください。
 
-`parse` が `default` に適用されることはありません。既定値はすでに解決された値として扱われ、組み込みの型変換だけを通ります。
+`parse` が `default` に適用されることはなく、`parse` を持つオプションの既定値は型変換もされません。既定値はオプションの値の型で書かれた、解決済みの値として扱われます。`parse: (value) => new Date(value)` なら `default: new Date(0)` と書きます。
 
-`validate` は解決済みの値を検査し、例外を送出して拒否します。コマンド上のすべてのオプションが解決された後、2 回目のパスで走るため、`ctx.options` は完成しており、あるオプションを別のオプションと突き合わせて検査できます。
+`validate` は解決済みの値を検査し、例外を送出して拒否します。`value` パラメータの型はオプションの値の型で、`ctx` はコマンドの完全な `CommandContext` です。コマンド上のすべてのオプションが解決された後、2 回目のパスで走るため、`ctx.options` は完成しており、あるオプションを別のオプションと突き合わせて検査できます。
 
 ```typescript
 cli
@@ -208,7 +228,7 @@ cli
   .action(startServer);
 ```
 
-`validate` が送出した例外も同じように `ValidationError` に包まれます。`choices` のチェックと同様、解決結果に存在するオプションに対してのみ走ります。
+`validate` が送出した例外は `parse` と同じ扱いになります。`choices` のチェックと同様、解決結果に存在するオプションに対してのみ走ります。非同期でもよく、その場合は await されます。
 
 オプション 1 つではなくコマンド全体を検証したい場合は、[コマンドビルダーの `validate()`](commands.md#検証) を使ってください。
 
@@ -274,7 +294,7 @@ cli.command("build").option("--cache", { type: "boolean", default: true });
 - 否定形が効くのは boolean オプションだけです。string オプションに `--no-port` を使うと `InvalidOptionError` が送出されます。
 - `--no-x` は値を取りません。`--no-cache=1` は `InvalidOptionError` を送出します。
 - 否定する名前はロング名でもエイリアスでもかまいません。
-- オプションの名前が文字どおり `no-x` の場合、否定形は適用されません。`.option("--no-color")` はキーが `no-color` のオプションを作るので、トークン `--no-color` は `color` を `false` にするのではなく、そのオプションを `true` にします。
+- `--no-x` が `x` を `false` にするのは、`x` というオプションが定義されている場合だけです。`no-x` という名前で宣言したオプションは独立したオプションとして扱われます。`.option("--no-color")` はキーが `noColor` のオプションを作り、トークン `--no-color` は `color` を `false` にするのではなく、そのオプションを `true` にします。
 
 ヘルプとタブ補完は、否定形が実際に機能する boolean オプションの横にそれを示します。`--no-<name>` という綴りが別のオプションのものである場合は示されません。
 
@@ -293,7 +313,7 @@ cli.command("run <...args>").action((ctx) => {
 
 ## アクションでオプションを読む
 
-`ctx.options` は正規のロング名をキーとし、型変換と既定値の適用と検証がすでに済んだ値を保持します。
+`ctx.options` は最初のロング名を camelCase にしたものをキーとし、型変換と既定値の適用と検証がすでに済んだ値を保持します。
 
 ```typescript
 cli
@@ -301,11 +321,11 @@ cli
   .option("-p, --port <number>", { type: "number", default: 3000 })
   .option("-v, --verbose")
   .option("--tags <tag>", { type: "string[]" })
+  .option("--log-level <level>", { choices: ["debug", "info"] })
   .action((ctx) => {
-    const port: number = ctx.options.port;
-    const verbose: boolean = ctx.options.verbose;
+    const { port, verbose, logLevel } = ctx.options;
     const tags: readonly string[] = ctx.options.tags ?? [];
-    ctx.stdout.write(`port=${port} verbose=${verbose} tags=${tags.length}\n`);
+    ctx.stdout.write(`port=${port} verbose=${verbose} level=${logLevel} tags=${tags.length}\n`);
   });
 ```
 
@@ -329,7 +349,18 @@ cli
 
 flags 文字列が literal のとき、`.option()` は `ctx.options` の型に項目を 1 つ加えます。この型は、同じ連鎖の中でそれより後に設定するハンドラ（`.action()`、`.validate()`、`.onCancel()`）が受け取ります。
 
-**キー**は、[フラグ仕様文字列](#フラグ仕様文字列)の実行時の規則と同じです。最後の `--name` がキーになり、`--` の部分がなければ最初のショートエイリアスがキーになります。`.option("--no-color")` はキー `no-color` を加え、`color` というキーは生まれません。宣言していないキーを読むと型エラーになります。
+**`.option()` は新しい型を持つビルダーを返します。** ビルダーを保持していた変数は以前の型のままなので、呼び出しをチェーンでつなぐか、結果を代入し直してください。
+
+```typescript
+const serve = cli.command("serve");
+const typed = serve.option("--port <n>", { type: "number", default: 3000 });
+typed.action((ctx) => {
+  ctx.options.port; // number
+});
+// serve.action((ctx) => ctx.options.port) is a type error: serve has no options in its type.
+```
+
+**キー**は、[フラグ仕様文字列](#フラグ仕様文字列)の実行時の規則と同じです。最初の `--name` を camelCase にしたものがキーになり、`--` の部分がなければ最初のショートエイリアスがキーになります。`.option("--dry-run")` はキー `dryRun` を、`.option("--no-color")` はキー `noColor` を加えます。宣言していないキーを読むと型エラーになります。同じキーをもう一度宣言すると、実行時にオプションが置き換わるのと同様に、型でも前の項目が置き換わります。
 
 **値の型**は、次の表で最初に当てはまる行で決まります。
 
@@ -353,15 +384,26 @@ cli
     ctx.options.env; //      "dev" | "prod"
     ctx.options.replicas; // number | undefined
     ctx.options.since; //    Date | undefined
-    ctx.options["dry-run"]; // boolean
+    ctx.options.dryRun; //   boolean
   });
 ```
 
-宣言した `choices` に含まれない `default` は型エラーになります。`.option()` が実行時に送出するエラーと対応しています。`ctx.options` と `ctx.args` は readonly で、その中の配列の値も readonly です。
+スキーマのメンバーは、この値の型に対して検査されます。型の違う `default`、宣言した `choices` に含まれない `default`、型の違う・空の・`parse` や boolean と併用した `choices`、`default` を持つ `required` のオプションは型エラーになり、`.option()` が実行時に送出するエラーと対応しています。`parse` の `value` は `string`、`validate` の `value` は値の型で、`ctx` はそれより前に宣言したオプションから型付けされます。`ctx.options` と `ctx.args` は readonly で、その中の配列の値も readonly です。
+
+複数のコマンドで共有するスキーマは、`satisfies OptionSchema` で書いたときだけこの型付けを保ちます。`OptionSchema` と注釈すると、オプションの値は `unknown` に広がります。
+
+```typescript
+import type { OptionSchema } from "@libraz/node-cli";
+
+const port = { type: "number", default: 8080 } satisfies OptionSchema;
+
+cli.command("serve").option("-p, --port <n>", port);
+cli.command("proxy").option("-p, --port <n>", port);
+```
 
 コマンド自身のオプションは、サブコマンドに引き継がれません。`.command()` が返す builder は、実行時と同じく、オプションを持たない状態から始まります。
 
-位置引数も、literal の定義文字列から同じように型が付きます。`<x>` は `string`、`[x]` は `string | undefined`、`<...x>` と `[...x]` は `readonly string[]` です。
+位置引数も、literal の定義文字列から同じように型が付きます。`<x>` は `string`、`[x]` は `string | undefined`、`<...x>` と `[...x]` は `readonly string[]` で、キーは camelCase の名前です。
 
 literal でない定義文字列や flags 文字列は、型検査器には読めません。定義文字列が literal でなければ、`ctx.args` と `ctx.options` は `Record<string, unknown>` のままです。flags 文字列が literal でなければ、`ctx.options` は任意のキーを `unknown` 型の値として受け付けるように広がります。名前付きのハンドラ型も同じ 2 つの型パラメータを取るので、コマンドと別に書いたハンドラでは `Action<{ env: string }, { force: boolean }>` のように型を明示できます。
 
@@ -373,13 +415,13 @@ literal でない定義文字列や flags 文字列は、型検査器には読�
 
 **`required` と `default` は併用できません。** 両方を宣言すると `.option()` の実行時に例外が送出されます。
 
-**独自の `parse` は `default` には走りません。** 既定値は組み込みの型変換だけを通るので、`Date` を返す `parse` と文字列で書いた既定値を組み合わせると、型の異なる 2 つの値が生まれます。既定値を最終的な形で与えるか、既定値を省いてアクションの中でフォールバックを当ててください。
+**独自の `parse` は `default` には走りません。** 既定値は解決済みの値なので、オプションの値の型の最終的な形で書いてください。`Date` を返す `parse` なら、文字列ではなく `default: new Date(0)` と書きます。
 
 **プレースホルダは型を気付かれずに変えます。** `.option("-v, --verbose")` は boolean ですが、`.option("-v, --verbose <level>")` は string です。プレースホルダが推論される型を変えるからです。意図が重要な場合は `type` を明示してください。
 
 **ショートフラグのまとめ書きは全文字が boolean でなければなりません。** `p` が値を取るため `-vp 8080` は失敗します。`-v -p 8080` と書いてください。
 
-**仕様の最後の `--` の部分が優先されます。** `.option("--colour, --color <name>")` はオプションを `color` と名付け、`colour` をエイリアスにします。その逆ではありません。
+**仕様の最初の `--` の部分が優先されます。** `.option("--colour, --color <name>")` はオプションを `colour` と名付け、`color` をエイリアスにします。その逆ではありません。
 
 ## 関連ページ
 

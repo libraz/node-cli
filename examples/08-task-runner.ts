@@ -70,14 +70,14 @@ cli
   .description("Run a task by name")
   .option("-v, --verbose", { type: "boolean", description: "Show detailed output" })
   .validate((ctx) => {
-    const name = ctx.args.task as string;
+    const name = ctx.args.task;
     if (name !== "all" && !tasks.find((t) => t.name === name)) {
       const names = tasks.map((t) => t.name).join(", ");
       throw new Error(`Unknown task "${name}". Available: ${names}, all`);
     }
   })
   .action(async (ctx) => {
-    const taskName = ctx.args.task as string;
+    const taskName = ctx.args.task;
     const verbose = ctx.options.verbose as boolean;
 
     if (taskName === "all") {
@@ -91,11 +91,11 @@ cli
 
 async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
   const col = createColorizer(ctx.stdout);
-  const log = createLogger({ prefix: "runner", timestamp: true, stream: ctx.stderr });
+  const log = createLogger({ prefix: "runner", timestamp: true, stderr: ctx.stderr });
   const spinner = progress.spinner({
     label: `Running ${col.bold(task.name)}...`,
-    color: "cyan",
-    stream: ctx.stderr,
+    style: "cyan",
+    stderr: ctx.stderr,
   });
 
   task.status = "running";
@@ -123,14 +123,14 @@ async function runSingle(task: Task, ctx: TaskContext, verbose: boolean) {
 
 async function runAll(ctx: TaskContext, verbose: boolean) {
   const col = createColorizer(ctx.stdout);
-  const log = createLogger({ prefix: "runner", timestamp: true, stream: ctx.stderr });
+  const log = createLogger({ prefix: "runner", timestamp: true, stderr: ctx.stderr });
   ctx.stdout.write(`${col.bold("Running all tasks...")}\n\n`);
 
   const bar = progress.bar({
     total: tasks.length,
     label: "Overall",
-    color: "green",
-    stream: ctx.stderr,
+    style: "green",
+    stderr: ctx.stderr,
   });
 
   for (let i = 0; i < tasks.length; i++) {

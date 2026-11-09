@@ -32,7 +32,7 @@ cli.command("users").action((ctx) => {
 
 ## Input shapes
 
-`table` accepts two shapes.
+`table` accepts two shapes. The row type is inferred from `data`, and `columns` is typed from it: for object rows a column names a key of the row type, and for array rows a column has no `key`. Interfaces and class instances are accepted as object rows, not only plain object literals.
 
 **An array of objects.** Each object is a row and each property is a column.
 
@@ -69,7 +69,7 @@ The column count is the longest row; shorter rows are padded with empty cells. `
 
 ### Describing columns
 
-`columns` takes a readonly array whose entries are either a plain string or a `ColumnSpec`. A string is shorthand for `{ key: string }`.
+`columns` takes a readonly array whose entries are either a plain string or a `ColumnSpec`. For object rows, a string is shorthand for `{ key: string }` and must be a key of the row type.
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -92,7 +92,7 @@ console.log(
 
 For object data, `key` names the property to read, `label` replaces the header text (it defaults to `key`), and `columns` also selects and orders the columns.
 
-For array data, columns are matched **by position** and `key` is not used to look anything up. An entry that is a string is the header text; a `ColumnSpec` contributes `label ?? key`. The per-column settings follow the same position.
+For array data, columns are matched **by position** and a `ColumnSpec` has no `key`. An entry that is a string is the header text; a `ColumnSpec` contributes its `label`, or an empty header when it has none. The per-column settings follow the same position.
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -103,7 +103,7 @@ console.log(
       ["Alice", 42],
       ["Bob", 7],
     ],
-    { columns: ["Name", { key: "score", label: "Score", align: "right" }] },
+    { columns: ["Name", { label: "Score", align: "right" }] },
   ),
 );
 ```
@@ -114,16 +114,16 @@ console.log(
 | --- | --- | --- | --- |
 | `columns` | `readonly (string \| ColumnSpec)[]` | derived from the data | The columns to render, in order. For array data, supplying it means row 0 is **not** consumed as a header. |
 | `header` | `boolean` | `true` | `false` suppresses the header row. |
-| `border` | `"none" \| "simple" \| "rounded" \| "single" \| "double" \| "custom"` | `"none"`, or `"custom"` when `chars` is supplied | Border preset. |
-| `chars` | `TableChars` | — | Custom border glyphs, merged over the preset that `border` selects (`single` when `border` is omitted or `"custom"`). |
-| `borderColor` | `StyleSpec` | — | A style name or dot-chained styles, such as `"dim"` or `"cyan.bold"`, applied to the border glyphs. |
+| `border` | `"none" \| "simple" \| "rounded" \| "single" \| "double" \| "custom"` | `"none"`, or `"custom"` when `chars` is supplied | Border preset. `chars` and `rowSeparators` are ignored with `"none"`. |
+| `chars` | `TableChars` | — | Custom border glyphs, merged over the preset that `border` selects (`single` when `border` is omitted or `"custom"`). Every glyph has a display width of 1, otherwise `RangeError`; the edge fills `top`, `bottom` and `horizontal` may also be `""` to omit that line. With `border: "simple"`, `vertical` and `cross` may be any string. |
+| `borderStyle` | `StyleSpec` | — | Color and modifiers of the border glyphs: a style name or dot-chained styles, such as `"dim"` or `"cyan.bold"`. `border` selects the shape of the frame; `borderStyle` styles it. |
 | `headerStyle` | `StyleSpec \| "none"` | `"bold"` | Style applied to the header text. `"none"` leaves it plain. |
 | `paddingLeft` | `number` | `1` with a frame, `0` for `none` / `simple` | Spaces inside each cell, on the left. |
 | `paddingRight` | `number` | same as above | Spaces inside each cell, on the right. |
 | `gap` | `number` | `2` | Spaces between columns. Applies to `border: "none"` only. |
 | `rowSeparators` | `boolean` | `false` | `true` inserts a separator line between every pair of data rows in the `"simple"` and framed borders. It has no effect with `border: "none"`, which has no separator glyph. |
 | `ellipsis` | `string` | `"…"` | Marker appended to a cell that had to be cut. |
-| `stream` | `Writable` | `process.stdout` | Decides whether color is emitted: a TTY gets color. `table` never writes to it. |
+| `stream` | `Writable` | `process.stdout` | Used only to decide whether color is emitted: a TTY gets color. It is not a write target, and `table` never writes to it. Pass the stream the result will be printed to. |
 
 `gap`, `paddingLeft` and `paddingRight` are integers of 0 or more.
 
@@ -131,19 +131,19 @@ console.log(
 
 | Field | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `key` | `string` | required | The object property to read. Array data ignores it. |
-| `label` | `string` | `key` | Header text for the column. |
+| `key` | `keyof T & string` | required for object rows | The object property to read. Array rows have no `key`. |
+| `label` | `string` | `key`, or `""` for array rows | Header text for the column. |
 | `align` | `"left" \| "right" \| "center"` | `"left"` | Alignment of the header and the cells. |
-| `width` | `number` | automatic | Fixed **total** width of the column, **padding included**. A positive integer. |
+| `width` | `number` | automatic | Fixed width of the column **content**, **padding excluded**. A positive integer. |
 | `maxWidth` | `number` | no limit | Upper bound on the **content** width, padding excluded. A positive integer, or `Infinity` for no limit. |
 
-`width` and `maxWidth` measure different things. `width` is the whole column including `paddingLeft` and `paddingRight`; the content gets what is left, with a floor of 1, so a `width` below `paddingLeft + paddingRight + 1` renders at that minimum. `maxWidth` caps the content only. When both are set, `width` wins.
+`width` and `maxWidth` both measure the content, without `paddingLeft` and `paddingRight`, which are added around it. `width` fixes the content width; `maxWidth` caps it. When both are set, `width` wins.
 
 ## Styles
 
-`headerStyle` and `borderColor` take a style name or a dot-chained list such as `"cyan.bold"`. Every segment is checked when `table()` is called, and an unknown name throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. The available style names are listed in [Color](color.md).
+`headerStyle` and `borderStyle` take a style name or a dot-chained list such as `"cyan.bold"`. Every segment is checked when `table()` is called, and an unknown name throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. The available style names are listed in [Color](color.md).
 
-Color is decided by `stream`. The default is `process.stdout`; pass the stream you will write to so a redirected or non-TTY target receives plain text. `NO_COLOR`, `FORCE_COLOR` and `setColorEnabled` apply as they do everywhere else in the library.
+`stream` decides color and nothing else. The default is `process.stdout`; pass the stream you will write to so a redirected or non-TTY target receives plain text. `NO_COLOR`, `FORCE_COLOR` and `setColorEnabled` apply as they do everywhere else in the library.
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -154,7 +154,7 @@ process.stderr.write(
   `${table(rows, {
     border: "rounded",
     headerStyle: "cyan.bold",
-    borderColor: "dim",
+    borderStyle: "dim",
     paddingLeft: 2,
     paddingRight: 2,
     stream: process.stderr,
@@ -170,7 +170,7 @@ Invalid options throw before anything is rendered, always with a `code`:
 | --- | --- |
 | A `width`, `maxWidth`, `gap`, `paddingLeft` or `paddingRight` that is not a number, or a `columns` entry that is not a string or a `ColumnSpec` with a string `key` (including `undefined`) | `TypeError` `ERR_INVALID_ARG_TYPE` |
 | `width` or `maxWidth` of 0 or less, `NaN` or fractional; `width` of `Infinity`; a negative, `NaN`, infinite, fractional or unsafe `gap` or padding | `RangeError` `ERR_INVALID_ARG_VALUE` |
-| An unknown `border`, or an unknown name in `headerStyle` or `borderColor` | `RangeError` `ERR_INVALID_ARG_VALUE` |
+| An unknown `border` or `align`, a `chars` glyph whose display width is not 1, or an unknown name in `headerStyle` or `borderStyle` | `RangeError` `ERR_INVALID_ARG_VALUE` |
 
 Values up to 2^32 are accepted for widths and padding; a span larger than 4096 cells is capped when rendering.
 
@@ -185,7 +185,7 @@ Values up to 2^32 are accepted for widths and padding; a span larger than 4096 c
 | `"double"` | `╔ ╗ ╚ ╝` | Full frame drawn with double lines. |
 | `"custom"` | from `chars` | Starts from the `single` preset and applies `chars` over it. |
 
-`chars` accepts these keys, each a string: `top`, `topMid`, `topLeft`, `topRight`, `bottom`, `bottomMid`, `bottomLeft`, `bottomRight`, `left`, `leftMid`, `right`, `rightMid`, `horizontal` (the line between rows), `cross` (where that line meets a column divider) and `vertical` (the divider between columns). Supplying `chars` without `border` implies `border: "custom"`.
+`chars` accepts these keys, each a string: `top`, `topMid`, `topLeft`, `topRight`, `bottom`, `bottomMid`, `bottomLeft`, `bottomRight`, `left`, `leftMid`, `right`, `rightMid`, `horizontal` (the line between rows), `cross` (where that line meets a column divider) and `vertical` (the divider between columns). Supplying `chars` without `border` implies `border: "custom"`. With `border: "none"`, `chars` and `rowSeparators` are ignored, and `gap` is the only column separator; with any other preset, `gap` does not apply.
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -206,7 +206,7 @@ Column width is derived from the widest cell, measured in **display columns** ra
 Two `ColumnSpec` fields constrain the result, and they mean different things:
 
 - `maxWidth` caps the **content** width of one column. A cell wider than the cap is truncated with the `ellipsis` marker.
-- `width` fixes the **total** width of one column, **padding included**. The content width becomes `width - paddingLeft - paddingRight`, with a floor of 1.
+- `width` fixes the **content** width of one column, **padding excluded**. Padding is added around it.
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -228,9 +228,9 @@ Header labels are truncated to the same width as the data cells, so a narrow col
 - **`border` defaults to `"none"`, not to a boxed style.** A table with no `border` option is a plain aligned block. Pass `border: "rounded"` (or another preset) to get a frame.
 - **The table never wraps.** A cell too wide for its column is truncated with the marker, never folded onto a second line. Embedded newlines were already collapsed to spaces during sanitizing, so a multi-line cell is not possible.
 - **The total width is never clamped to the terminal width.** A wide table will wrap in the terminal itself unless `maxWidth` or `width` keeps it narrow.
-- **`width` includes the padding, `maxWidth` does not.** With the default frame padding of 1 on each side, `width: 20` leaves 18 cells of content.
+- **`width` and `maxWidth` both exclude the padding.** With the default frame padding of 1 on each side, `width: 20` makes a column 22 cells wide.
 - **A zero width is an error, not "automatic".** Omit `width` and `maxWidth` to size a column from its content; use `maxWidth: Infinity` to say "no limit" explicitly.
-- **Per-column settings follow the entry, not a separate map.** For array data they follow the position in `columns`, since `key` is not looked up.
+- **Per-column settings follow the entry, not a separate map.** For array data they follow the position in `columns`, since array rows have no `key`.
 - **`stream` only decides color.** `table` returns a string with no trailing newline and writes nothing.
 
 ## Related pages

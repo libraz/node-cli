@@ -32,7 +32,7 @@ cli.command("users").action((ctx) => {
 
 ## 入力の形
 
-`table` は2つの形を受け付けます。
+`table` は2つの形を受け付けます。行の型は `data` から推論され、`columns` の型もそこから決まります。オブジェクトの行では列が行の型のキーを指し、配列の行では列に `key` がありません。オブジェクトの行には、素のオブジェクトリテラルだけでなく、interface やクラスのインスタンスも使えます。
 
 **オブジェクトの配列。** 各オブジェクトが1行、各プロパティが1列になります。
 
@@ -69,7 +69,7 @@ console.log(
 
 ### 列の指定
 
-`columns` は readonly の配列で、要素は文字列か `ColumnSpec` です。文字列は `{ key: 文字列 }` の省略形です。
+`columns` は readonly の配列で、要素は文字列か `ColumnSpec` です。オブジェクトの行では、文字列は `{ key: 文字列 }` の省略形で、行の型のキーである必要があります。
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -92,7 +92,7 @@ console.log(
 
 オブジェクトデータでは、`key` が読み取るプロパティ名、`label` がヘッダーの文字列（既定は `key`）で、`columns` は描画する列とその順序も決めます。
 
-配列データでは、列は **位置** で対応させ、`key` で何かを探すことはしません。文字列の要素はそのままヘッダーになり、`ColumnSpec` は `label ?? key` がヘッダーになります。列ごとの設定も同じ位置に従います。
+配列データでは、列は **位置** で対応させ、`ColumnSpec` に `key` はありません。文字列の要素はそのままヘッダーになり、`ColumnSpec` は `label` がヘッダーになります（`label` がなければ空のヘッダーです）。列ごとの設定も同じ位置に従います。
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -103,7 +103,7 @@ console.log(
       ["Alice", 42],
       ["Bob", 7],
     ],
-    { columns: ["Name", { key: "score", label: "Score", align: "right" }] },
+    { columns: ["Name", { label: "Score", align: "right" }] },
   ),
 );
 ```
@@ -114,16 +114,16 @@ console.log(
 | --- | --- | --- | --- |
 | `columns` | `readonly (string \| ColumnSpec)[]` | データから導出 | 描画する列を順に指定します。配列データでは、渡した時点で行 0 は **ヘッダーとして消費されなくなります。** |
 | `header` | `boolean` | `true` | `false` にするとヘッダー行を出しません。 |
-| `border` | `"none" \| "simple" \| "rounded" \| "single" \| "double" \| "custom"` | `"none"`。`chars` を渡した場合は `"custom"` | 罫線のプリセット。 |
-| `chars` | `TableChars` | — | 独自の罫線文字。`border` が選んだプリセット(`border` を省略した場合や `"custom"` の場合は `single`)の上に重ねて統合します。 |
-| `borderColor` | `StyleSpec` | — | 罫線の文字に適用するスタイル名、またはドットで連結したスタイル。例えば `"dim"` や `"cyan.bold"`。 |
+| `border` | `"none" \| "simple" \| "rounded" \| "single" \| "double" \| "custom"` | `"none"`。`chars` を渡した場合は `"custom"` | 罫線のプリセット。`"none"` では `chars` と `rowSeparators` は無視されます。 |
+| `chars` | `TableChars` | — | 独自の罫線文字。`border` が選んだプリセット(`border` を省略した場合や `"custom"` の場合は `single`)の上に重ねて統合します。どの文字も表示幅は 1 である必要があり、満たさないと `RangeError` を投げます。上下の辺と行間の線の埋め文字 `top`、`bottom`、`horizontal` は、その線を省くために `""` にもできます。`border: "simple"` では `vertical` と `cross` に任意の文字列を使えます。 |
+| `borderStyle` | `StyleSpec` | — | 罫線の文字の色と修飾。スタイル名、またはドットで連結したスタイルで、例えば `"dim"` や `"cyan.bold"`。`border` が枠の形を選び、`borderStyle` がその見た目を決めます。 |
 | `headerStyle` | `StyleSpec \| "none"` | `"bold"` | ヘッダーのテキストに適用するスタイル。`"none"` なら素のテキストのままです。 |
 | `paddingLeft` | `number` | 枠ありでは `1`、`none` / `simple` では `0` | 各セルの内側、左に入れる空白。 |
 | `paddingRight` | `number` | 上と同じ | 各セルの内側、右に入れる空白。 |
 | `gap` | `number` | `2` | 列と列の間の空白。`border: "none"` のときだけ効きます。 |
 | `rowSeparators` | `boolean` | `false` | `true` にすると、`"simple"` と罫線付きの枠では、データ行と行の間すべてに区切り線を入れます。`border: "none"` には区切り用の文字がないため、効果はありません。 |
 | `ellipsis` | `string` | `"…"` | 切り詰めが起きたセルの末尾に付ける記号。 |
-| `stream` | `Writable` | `process.stdout` | 色を出すかどうかの判定に使います。TTY なら色が付きます。`table` がこのストリームへ書き込むことはありません。 |
+| `stream` | `Writable` | `process.stdout` | 色を出すかどうかの判定にだけ使います。TTY なら色が付きます。書き込み先ではなく、`table` がこのストリームへ書き込むことはありません。結果を出力するストリームを渡してください。 |
 
 `gap`、`paddingLeft`、`paddingRight` は 0 以上の整数です。
 
@@ -131,19 +131,19 @@ console.log(
 
 | フィールド | 型 | 既定値 | 挙動 |
 | --- | --- | --- | --- |
-| `key` | `string` | 必須 | 読み取るオブジェクトのプロパティ名。配列データでは使いません。 |
-| `label` | `string` | `key` | 列のヘッダーの文字列。 |
+| `key` | `keyof T & string` | オブジェクトの行では必須 | 読み取るオブジェクトのプロパティ名。配列の行に `key` はありません。 |
+| `label` | `string` | `key`。配列の行では `""` | 列のヘッダーの文字列。 |
 | `align` | `"left" \| "right" \| "center"` | `"left"` | ヘッダーとセルの揃え。 |
-| `width` | `number` | 自動 | 列の **合計** 幅を、**余白を含めて** 固定します。正の整数です。 |
+| `width` | `number` | 自動 | 列の **内容** 幅を、**余白を含めずに** 固定します。正の整数です。 |
 | `maxWidth` | `number` | 上限なし | **内容** 幅の上限で、余白は含みません。正の整数、または上限なしを表す `Infinity`。 |
 
-`width` と `maxWidth` は測るものが違います。`width` は `paddingLeft` と `paddingRight` を含む列全体の幅で、内容にはその残りが割り当てられ、下限は 1 です。そのため `paddingLeft + paddingRight + 1` より小さい `width` は、その最小値で描画されます。`maxWidth` は内容だけに上限を掛けます。両方を指定した場合は `width` が優先します。
+`width` と `maxWidth` はどちらも、`paddingLeft` と `paddingRight` を含まない内容の幅を測ります。余白はその外側に加わります。`width` は内容の幅を固定し、`maxWidth` は上限を掛けます。両方を指定した場合は `width` が優先します。
 
 ## スタイル
 
-`headerStyle` と `borderColor` には、スタイル名か、`"cyan.bold"` のようにドットで連結した指定を渡します。各要素は `table()` を呼んだ時点で検査され、未知の名前は `ERR_INVALID_ARG_VALUE` の `RangeError` になります。使えるスタイル名は[カラー](color.md)に一覧があります。
+`headerStyle` と `borderStyle` には、スタイル名か、`"cyan.bold"` のようにドットで連結した指定を渡します。各要素は `table()` を呼んだ時点で検査され、未知の名前は `ERR_INVALID_ARG_VALUE` の `RangeError` になります。使えるスタイル名は[カラー](color.md)に一覧があります。
 
-色を付けるかどうかは `stream` で決まります。既定値は `process.stdout` です。リダイレクトされた出力先や TTY でない出力先に素のテキストを渡したいときは、書き込み先のストリームを渡してください。`NO_COLOR`、`FORCE_COLOR`、`setColorEnabled` は、ライブラリのほかの箇所と同じように効きます。
+色を付けるかどうかを決めるのは `stream` だけです。既定値は `process.stdout` です。リダイレクトされた出力先や TTY でない出力先に素のテキストを渡したいときは、書き込み先のストリームを渡してください。`NO_COLOR`、`FORCE_COLOR`、`setColorEnabled` は、ライブラリのほかの箇所と同じように効きます。
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -154,7 +154,7 @@ process.stderr.write(
   `${table(rows, {
     border: "rounded",
     headerStyle: "cyan.bold",
-    borderColor: "dim",
+    borderStyle: "dim",
     paddingLeft: 2,
     paddingRight: 2,
     stream: process.stderr,
@@ -170,7 +170,7 @@ process.stderr.write(
 | --- | --- |
 | 数値でない `width`、`maxWidth`、`gap`、`paddingLeft`、`paddingRight`。または、文字列でも、文字列の `key` を持つ `ColumnSpec` でもない `columns` の要素（`undefined` を含む） | `TypeError` `ERR_INVALID_ARG_TYPE` |
 | 0 以下・`NaN`・小数の `width` と `maxWidth`。`Infinity` の `width`。負数・`NaN`・無限大・小数・安全でない整数の `gap` と余白 | `RangeError` `ERR_INVALID_ARG_VALUE` |
-| 未知の `border`、または `headerStyle` や `borderColor` の未知の名前 | `RangeError` `ERR_INVALID_ARG_VALUE` |
+| 未知の `border` や `align`、表示幅が 1 でない `chars` の文字、または `headerStyle` や `borderStyle` の未知の名前 | `RangeError` `ERR_INVALID_ARG_VALUE` |
 
 幅と余白は 2^32 まで受け付けます。描画時には 4096 セルを上限に丸められます。
 
@@ -185,7 +185,7 @@ process.stderr.write(
 | `"double"` | `╔ ╗ ╚ ╝` | 二重線で描いた全周の枠。 |
 | `"custom"` | `chars` から | `single` プリセットを土台に `chars` を重ねます。 |
 
-`chars` は次のキーを受け付け、値はいずれも文字列です: `top`, `topMid`, `topLeft`, `topRight`, `bottom`, `bottomMid`, `bottomLeft`, `bottomRight`, `left`, `leftMid`, `right`, `rightMid`, `horizontal`（行と行の間の線）, `cross`（その線が列の区切りと交わる位置）, `vertical`（列と列の区切り）。`border` を指定せずに `chars` を渡すと `border: "custom"` とみなされます。
+`chars` は次のキーを受け付け、値はいずれも文字列です: `top`, `topMid`, `topLeft`, `topRight`, `bottom`, `bottomMid`, `bottomLeft`, `bottomRight`, `left`, `leftMid`, `right`, `rightMid`, `horizontal`（行と行の間の線）, `cross`（その線が列の区切りと交わる位置）, `vertical`（列と列の区切り）。`border` を指定せずに `chars` を渡すと `border: "custom"` とみなされます。`border: "none"` では `chars` と `rowSeparators` が無視され、列の区切りは `gap` だけです。ほかのプリセットでは `gap` は効きません。
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -206,7 +206,7 @@ console.log(
 結果を制約する `ColumnSpec` のフィールドは2つあり、それぞれ意味が違います。
 
 - `maxWidth` は1つの列の **内容** 幅に上限を掛けます。上限より広いセルは `ellipsis` の記号を付けて切り詰めます。
-- `width` は1つの列の **合計** 幅を、**余白込みで** 固定します。内容幅は `width - paddingLeft - paddingRight` となり、下限は 1 です。
+- `width` は1つの列の **内容** 幅を、**余白を含めずに** 固定します。余白はその外側に加わります。
 
 ```ts
 import { table } from "@libraz/node-cli";
@@ -228,9 +228,9 @@ console.log(
 - **`border` の既定値は `"none"` で、枠付きのスタイルではありません。** `border` を指定しないテーブルは、桁を揃えただけの素のブロックです。枠が欲しいときは `border: "rounded"` などのプリセットを渡してください。
 - **テーブルは折り返しません。** 列に収まらないセルは記号を付けて切り詰められ、2行目に折り返されることはありません。埋め込まれた改行は無害化の段階で空白へ潰れているため、複数行のセルは作れません。
 - **合計幅が端末の幅に丸められることはありません。** 幅の広いテーブルは、`maxWidth` や `width` で狭めない限り端末側で折り返されます。
-- **`width` は余白を含み、`maxWidth` は含みません。** 枠付きの既定の余白（左右に 1 ずつ）では、`width: 20` の内容は 18 セルです。
+- **`width` も `maxWidth` も余白を含みません。** 枠付きの既定の余白（左右に 1 ずつ）では、`width: 20` の列は 22 セルの幅になります。
 - **幅の 0 は「自動」ではなくエラーです。** 内容から幅を決めたいときは `width` と `maxWidth` を省略し、上限なしを明示したいときは `maxWidth: Infinity` を使ってください。
-- **列ごとの設定は、別のマップではなく要素に付けます。** 配列データでは `key` を探さないため、`columns` の位置に従います。
+- **列ごとの設定は、別のマップではなく要素に付けます。** 配列の行には `key` がないため、配列データでは `columns` の位置に従います。
 - **`stream` は色の判定にしか使いません。** `table` は末尾に改行を含まない文字列を返すだけで、何も書き込みません。
 
 ## 関連ページ

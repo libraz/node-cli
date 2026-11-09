@@ -21,7 +21,7 @@ Define a command once and it works two ways: as `myapp deploy prod` typed at a s
 
 ## Install
 
-Node.js 22 or later. The package is ESM only, with no separate CommonJS build; Node.js 22.12 and later can `require()` it, and earlier 22.x releases need `await import()`.
+Node.js 22 or later. The package is ESM only, with no separate CommonJS build; Node.js 22.12 and later can `require()` it, and earlier 22.x releases need `await import()`. The type definitions need TypeScript 5.4 or later.
 
 ```bash
 npm install @libraz/node-cli
@@ -63,10 +63,10 @@ Hello, World!
 Each of these is a plain function and works in any Node script, with or without a `CLI` instance.
 
 ```typescript
-import { color, c, table, progress, prompt, createLogger } from "@libraz/node-cli";
+import { color, colorTag, table, progress, prompt, createLogger } from "@libraz/node-cli";
 
 console.log(color.bold.green("Success!"));
-console.log(c`{red Error}: failed`);
+console.log(colorTag`{red Error}: failed`);
 console.log(table([{ name: "Alice", role: "Admin" }], { border: "rounded" }));
 
 const bar = progress.bar({ total: 100, label: "Download" });

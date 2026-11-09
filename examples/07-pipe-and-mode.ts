@@ -11,7 +11,7 @@
  *   calc> 2 + 3
  *   calc> exit
  */
-import { c, createCLI, createColorizer } from "../src/index.js";
+import { colorTag, createCLI, createColorizer } from "../src/index.js";
 
 const cli = createCLI({ name: "pipes", prompt: "pipes> " });
 
@@ -40,7 +40,7 @@ cli
   .command("filter <pattern>")
   .description("Filter stdin lines by pattern")
   .action(async (ctx) => {
-    const pattern = ctx.args.pattern as string;
+    const pattern = ctx.args.pattern;
 
     if (ctx.stdin) {
       const chunks: Buffer[] = [];
@@ -99,8 +99,8 @@ cli
     }
 
     ctx.shell.enterMode({
-      prompt: c`{cyan calc}> `,
-      banner: c`{bold Calculator Mode} — Type math expressions. 'exit' to return.`,
+      prompt: colorTag`{cyan calc}> `,
+      banner: colorTag`{bold Calculator Mode} — Type math expressions. 'exit' to return.`,
       action: (input, { stdout, stderr }) => {
         const out = createColorizer(stdout);
         const err = createColorizer(stderr);
@@ -133,8 +133,8 @@ cli
     const entries: string[] = [];
 
     ctx.shell.enterMode({
-      prompt: c`{yellow note}> `,
-      banner: c`{bold Notes Mode} — Type notes to save. 'list' to view. 'exit' to return.`,
+      prompt: colorTag`{yellow note}> `,
+      banner: colorTag`{bold Notes Mode} — Type notes to save. 'list' to view. 'exit' to return.`,
       action: (input, { stdout }) => {
         const col = createColorizer(stdout);
         if (input === "list") {

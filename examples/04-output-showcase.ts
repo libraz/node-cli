@@ -93,8 +93,8 @@ cli
     const bar = progress.bar({
       total: 50,
       label: "Processing",
-      color: "green",
-      stream: ctx.stderr,
+      style: "green",
+      stderr: ctx.stderr,
     });
 
     for (let i = 0; i <= 50; i++) {
@@ -104,11 +104,11 @@ cli
     bar.succeed("Processed 50 items");
 
     ctx.stdout.write("\n=== Multi Bar ===\n");
-    const multi = progress.multi({ stream: ctx.stderr });
+    const multi = progress.multi({ stderr: ctx.stderr });
     const bars = [
-      multi.add({ total: 40, label: "File 1", color: "cyan" }),
-      multi.add({ total: 60, label: "File 2", color: "yellow" }),
-      multi.add({ total: 30, label: "File 3", color: "magenta" }),
+      multi.add({ total: 40, label: "File 1", style: "cyan" }),
+      multi.add({ total: 60, label: "File 2", style: "yellow" }),
+      multi.add({ total: 30, label: "File 3", style: "magenta" }),
     ];
 
     for (let i = 0; i <= 60; i++) {
@@ -128,8 +128,8 @@ cli
   .action(async (ctx) => {
     const spinner = progress.spinner({
       label: "Installing dependencies...",
-      color: "cyan",
-      stream: ctx.stderr,
+      style: "cyan",
+      stderr: ctx.stderr,
     });
 
     await sleep(1500);
@@ -141,15 +141,15 @@ cli
 
     const spinner2 = progress.spinner({
       label: "Deploying to production...",
-      color: "yellow",
-      stream: ctx.stderr,
+      style: "yellow",
+      stderr: ctx.stderr,
     });
     await sleep(1500);
     spinner2.fail("Deployment failed: timeout");
 
     const spinner3 = progress.spinner({
       label: "Checking disk space...",
-      stream: ctx.stderr,
+      stderr: ctx.stderr,
     });
     await sleep(1000);
     spinner3.warn("Disk usage above 80%");
@@ -167,10 +167,10 @@ cli
   })
   .action((ctx) => {
     const log = createLogger({
-      level: ctx.options.level as "debug" | "info" | "warn" | "error",
+      level: ctx.options.level,
       prefix: "app",
       timestamp: true,
-      stream: ctx.stdout,
+      stderr: ctx.stderr,
     });
 
     log.debug("Initializing application with config: %j", { port: 3000, env: "dev" });

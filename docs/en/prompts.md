@@ -31,7 +31,7 @@ cli.command("init").action(async (ctx) => {
 });
 ```
 
-In tests, `exec()` runs with no stdin unless one is supplied, so give it one when the command prompts: `exec(input, { stdin })`.
+In tests, `exec()` runs with no stdin (`null`) unless one is supplied, and a prompt without input rejects with `InputEndedError`. Give it a stream when the command prompts: `exec(argv, { stdin })`.
 
 ### Finish indicators before prompting
 
@@ -50,14 +50,16 @@ Every method accepts these, through `PromptOptions<T>`:
 | `validate` | `(value: T) => void \| Promise<void>` | — | Throw or reject inside it to refuse the value. |
 | `marker` | `string` | `"?"` | Symbol before the question. |
 | `stderr` | `Writable` | `process.stderr` | Where the question is written. |
-| `stdin` | `Readable \| null` | `process.stdin` | Where the answer is read from; `null` or omitted means `process.stdin`. |
+| `stdin` | `Readable \| null` | `process.stdin` | Where the answer is read from. Omitted means `process.stdin`; `null` means there is no input and the prompt rejects with `InputEndedError` before writing the question. |
 | `signal` | `AbortSignal` | — | Cancels a pending prompt when aborted. |
 
 `required` is not shared: it exists only on `text` and `password`.
 
+`message` and `marker` are rendered on one line: a newline becomes a space and cursor-control sequences are removed. To print a blank line before the question, write it to the stderr stream first.
+
 ### `validate` does not reject the promise
 
-Throwing inside `validate` — or returning a promise that rejects — prints the error message below the question and asks again. An async validator is awaited. The returned promise stays pending until an accepted value arrives. Only cancellation escapes the loop.
+Throwing inside `validate` — or returning a promise that rejects — prints the error message below the question and asks again. An async validator is awaited. The returned promise stays pending until an accepted value arrives. Only cancellation and the end of input escape the loop.
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -109,7 +111,9 @@ if (await prompt.confirm("Delete all local branches?", { default: false })) {
 
 ## `prompt.select(message, choices, options?)`
 
-Returns `Promise<T>`. An empty `choices` array throws `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+Returns `Promise<T>`. An empty `choices` array throws `RangeError` with code `ERR_INVALID_ARG_VALUE`. The same applies when `default` matches none of the choices; the check runs before the question is written.
+
+`select` and `multiselect` declare `T` as a `const` type parameter, so a literal array infers the union of its values without `as const`, and `default` is checked against that union.
 
 The choices are printed as a numbered list. Input is either a **1-based number** or a case-insensitive match on a choice label; pressing Enter with no input picks the default, when one is configured. Duplicate labels print a warning and resolve to the first occurrence, so number entry is the way to reach a later one.
 
@@ -123,15 +127,15 @@ const env = await prompt.select("Environment:", ["dev", "staging", "prod"], {
 
 ## `prompt.multiselect(message, choices, options?)`
 
-Returns `Promise<T[]>`.
+Returns `Promise<readonly T[]>`. The result is read-only.
 
 | Field | Behavior |
 | --- | --- |
-| `default` | `T[]` of pre-selected values. |
+| `default` | `readonly T[]` of pre-selected values. Every element must match a choice, otherwise `RangeError` (code `ERR_INVALID_ARG_VALUE`) is thrown before the question is asked. |
 | `min` | Minimum number of items. |
 | `max` | Maximum number of items. |
 
-`min` and `max` must be non-negative safe integers, `min` must not exceed `max`, and `min` must not exceed the number of choices; any violation throws `RangeError` (code `ERR_INVALID_ARG_VALUE`) before the question is asked.
+An empty `choices` array, a `min` or `max` that is not a non-negative safe integer, a `min` above `max`, and a `min` above the number of choices all throw `RangeError` (code `ERR_INVALID_ARG_VALUE`) before the question is asked.
 
 Input is comma-separated 1-based numbers. Repeated numbers are **deduplicated before** `min` and `max` are counted, so `1,1,2` counts as two selections. An empty submission uses the defaults.
 
@@ -167,10 +171,10 @@ const token = await prompt.password("API token:");
 
 ```ts
 type SelectChoice<T> = { label: string; value: T; hint?: string };
-type Choice<T> = T | SelectChoice<T>;
+type Choice<T> = SelectChoice<T> | Exclude<T, { label: unknown }>;
 ```
 
-A choice is either a bare value — whose string form becomes the label — or a descriptor object.
+A choice is either a bare value, whose string form becomes the label, or a descriptor object. A value object that has a `label` member is not accepted bare and must be wrapped as `{ label, value }`; the type enforces this.
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -189,15 +193,21 @@ An object that has a `label` but no `value` throws `TypeError` (code `ERR_INVALI
 
 Default matching uses `Object.is` against either the choice's `value` or the choice object itself. It is **not** structural equality: a default written as a fresh object literal will not match an equal-looking choice. Match on a primitive value, or pass the same object reference.
 
-## Cancellation
+## Cancellation and ended input
 
-Prompts throw `PromptCancelError` — code `PROMPT_CANCELLED`, exit code `130` — rather than resolving, in every one of these situations:
+A prompt rejects instead of resolving in each of these situations.
+
+`CancelledError` (code `CANCELLED`, exit code `130`):
 
 - Ctrl+C is pressed;
-- Ctrl+D is pressed, or input otherwise reaches its end;
-- the input stream had already ended before the prompt started;
-- the input stream is destroyed or fails with an error, before or during the prompt;
 - a supplied `signal` aborts, including a signal that was already aborted. The error's `cause` is the signal's `reason`.
+
+`InputEndedError` (code `INPUT_ENDED`, exit code `66`, `promptMessage` holds the question):
+
+- `stdin` is `null`, so there is no input to read;
+- Ctrl+D is pressed, or the input reaches its end or is closed before an answer arrives, including while the prompt re-asks after a refused value.
+
+An I/O error on the input stream rejects with the stream's own error, unwrapped.
 
 Detect it with `isCancellationError`:
 
@@ -236,10 +246,10 @@ Terminal mode is decided from **stdin alone**. A real terminal keeps line editin
 
 With piped input the situation changes:
 
-- there is no SIGINT event, so Ctrl+C terminates the process the usual way rather than raising `PromptCancelError`;
+- there is no SIGINT event, so Ctrl+C terminates the process the usual way rather than raising `CancelledError`;
 - there is no character echo, so nothing visible is masked;
 - lines are read from the pipe as answers, one per question in order; lines a question did not use stay with the stream for the next prompt, so a whole script of answers can arrive at once;
-- reaching the end of the input becomes a `PromptCancelError`.
+- reaching the end of the input becomes an `InputEndedError`.
 
 Color is decided per stream, so a redirected stderr receives no color codes. It still receives the questions, and when stdin is a terminal it also receives what readline echoes: the typed answer and the cursor sequences of line editing. `password` masks that echo; the other prompts do not.
 
@@ -249,7 +259,7 @@ Two prompts reading the same input stream at once throw an `Error` with code `ER
 
 ## Inside the interactive shell
 
-In the [interactive shell](interactive-shell.md), `ctx.stdin` is `null` for a command that was not given piped input. Ask for input through these functions rather than reading `ctx.stdin`; they attach to the real terminal correctly in both the shell and a one-shot invocation.
+In the [interactive shell](interactive-shell.md), `ctx.stdin` of a command and of a mode action is the terminal, shared with the line editor. Read it only through these functions, and never read it to the end. `prompt.text("Name?", ctx)` works the same in the shell and in a one-shot invocation.
 
 ## Common surprises
 
@@ -261,11 +271,11 @@ In the [interactive shell](interactive-shell.md), `ctx.stdin` is `null` for a co
 - **Questions go to stderr.** Pass `{ stderr: process.stdout }` to write them to stdout.
 - **`required` exists on `text` and `password` only.**
 - **Selection numbers are 1-based**, and duplicates in a `multiselect` answer are collapsed before `min` and `max` are checked.
-- **Cancellation is an exception, not a `null` result.** Every prompt path that cannot produce an answer throws `PromptCancelError`.
+- **Cancellation is an exception, not a `null` result.** A prompt that cannot produce an answer throws `CancelledError` or `InputEndedError`.
 
 ## Related pages
 
-- [Errors](errors.md) — `PromptCancelError`, `isCancellationError`, exit codes.
+- [Errors](errors.md) — `CancelledError`, `InputEndedError`, `isCancellationError`, exit codes.
 - [Interactive shell](interactive-shell.md) — running prompts inside a session.
 - [Color](color.md) — grapheme splitting and text sanitizing.
 - [Examples](examples.md) — complete interactive programs.

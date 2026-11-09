@@ -13,14 +13,21 @@
  *   npx tsx examples/10-advanced-api.ts logs
  *   npx tsx examples/10-advanced-api.ts completion-info
  */
-import { c, createCLI, createColorizer, createLogger, progress, table } from "../src/index.js";
+import {
+  colorTag,
+  createCLI,
+  createColorizer,
+  createLogger,
+  progress,
+  table,
+} from "../src/index.js";
 
 const cli = createCLI({
   name: "advanced",
   version: "1.0.0",
   prompt: "advanced> ",
   description: "Advanced API catalog",
-  banner: c`{bold.cyan Advanced API Demo} {dim v1.0.0}`,
+  banner: colorTag`{bold.cyan Advanced API Demo} {dim v1.0.0}`,
   historyFile: `/tmp/node-cli-advanced-${process.pid}.history`,
 });
 
@@ -49,7 +56,7 @@ cli
   })
   .action((ctx) => {
     const col = createColorizer(ctx.stdout);
-    const date = ctx.options.date as Date | undefined;
+    const date = ctx.options.date;
     ctx.stdout.write(`${col.bold("Config")}\n`);
     ctx.stdout.write(`  date:  ${date ? date.toISOString().slice(0, 10) : "(none)"}\n`);
     ctx.stdout.write(`  cache: ${ctx.options.cache ? "enabled" : "disabled"}\n`);
@@ -86,7 +93,7 @@ cli
         ],
         ellipsis: "..",
         headerStyle: "cyan.bold",
-        borderColor: "dim",
+        borderStyle: "dim",
         rowSeparators: true,
       }),
     );
@@ -99,7 +106,7 @@ cli
   .action((ctx) => {
     const custom = progress.bar({
       total: 3,
-      stream: ctx.stderr,
+      stderr: ctx.stderr,
       format(state) {
         return `custom ${state.current}/${state.total} (${state.percent}%)`;
       },
@@ -107,16 +114,15 @@ cli
     custom.update(1);
     custom.stop();
 
-    const multi = progress.multi({ stream: ctx.stderr });
+    const multi = progress.multi({ stderr: ctx.stderr });
     const first = multi.add({
       total: 2,
       label: "first",
-      color: "green",
       format(state) {
         return `first ${state.current}/${state.total}`;
       },
     });
-    const second = multi.add({ total: 2, label: "second", color: "yellow" });
+    const second = multi.add({ total: 2, label: "second", style: "yellow" });
     first.tick();
     second.update(2);
     multi.stop();
@@ -126,7 +132,7 @@ cli
   .command("logs")
   .description("Show runtime logger level changes")
   .action((ctx) => {
-    const log = createLogger({ level: "info", prefix: "advanced", stream: ctx.stdout });
+    const log = createLogger({ level: "info", prefix: "advanced", stderr: ctx.stderr });
     log.debug("hidden debug");
     log.info("visible info");
     log.setLevel("debug");

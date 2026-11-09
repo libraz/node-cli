@@ -1,16 +1,16 @@
 # カラー
 
-`color` は文字列に端末のカラーとテキストスタイルを適用し、`c` はテンプレートリテラルの中で同じことを行います（`createTemplateTag` はそのタグを別のストリームに結び付けます）。加えて、エスケープシーケンスを含むテキストを測定・切り詰め・無害化する文字列ユーティリティ群があります。いずれもパッケージが公開する素の関数で、`CLI` インスタンスは要りません。どの Node スクリプトからでも import できます。
+`color` は文字列に端末のカラーとテキストスタイルを適用し、`colorTag` はテンプレートリテラルの中で同じことを行います（`createColorTag` はそのタグを別のストリームに結び付けます）。加えて、エスケープシーケンスを含むテキストを測定・切り詰め・無害化する文字列ユーティリティ群があります。いずれもパッケージが公開する素の関数で、`CLI` インスタンスは要りません。どの Node スクリプトからでも import できます。
 
 ![太字の緑の成功行、太字の赤のエラー表示、各前景色の名前をその色自身で描画した行、bold・dim・underline の修飾を並べた端末](../assets/color.svg)
 
 ## 最初の例
 
 ```ts
-import { c, color } from "@libraz/node-cli";
+import { color, colorTag } from "@libraz/node-cli";
 
 console.log(color.bold.green("Success!"));
-console.log(c`{bold.red Error}: Something went wrong`);
+console.log(colorTag`{bold.red Error}: Something went wrong`);
 
 console.log(
   [
@@ -44,7 +44,7 @@ console.log(color.bold.underline("Title"));
 console.log(color.bgYellow.black("  WARNING  "));
 ```
 
-スタイルではない名前にアクセスすると、TypeScript では型エラーになり、実行時には `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` を投げます。メッセージには有効な名前の一覧が入るため、打ち間違いは黙って素のテキストを返すのではなく、その場で失敗します。名前が実行時にしか分からない場合は、先に `isStyleName(name)` で確かめてください。文字列が `StyleName` に絞り込まれます。`then`、`toString`、`valueOf`、`toJSON`、`constructor`、およびあらゆるシンボルはそのまま素通りするので、カラライザを await したり、文字列化やシリアライズをしたりしても例外にはなりません。
+スタイルではない名前にアクセスすると、TypeScript では型エラーになり、実行時には `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` を投げます。メッセージには有効な名前の一覧が入るため、打ち間違いは黙って素のテキストを返すのではなく、その場で失敗します。名前が実行時にしか分からない場合は、先に `isStyleName(value)` で確かめてください。任意の `unknown` の値を受け取り、`StyleName` に絞り込みます。`then`、`toString`、`valueOf`、`toJSON`、`constructor`、およびあらゆるシンボルはそのまま素通りするので、カラライザを await したり、文字列化やシリアライズをしたりしても例外にはなりません。
 
 ## スタイルの一覧
 
@@ -61,7 +61,8 @@ console.log(color.bgYellow.black("  WARNING  "));
 ### スタイルの型
 
 - `StyleName` は上の23個の名前の union です。
-- `ColorProxy` は `color` と `createColorizer` が返すオブジェクトの型で、`StyleName` ごとに連結可能な `ColorFn` を1つ持ちます。連結のキーは `StyleName` に限られるため、`color.red.bol` はコンパイルできません。
+- `Colorizer` は `color` と `createColorizer` が返すオブジェクトの型で、`StyleName` ごとに連結可能な `ColorFn` を1つ持ちます。連結のキーは `StyleName` に限られるため、`color.red.bol` はコンパイルできません。
+- `ColorTag` は `colorTag` と `createColorTag` が返すタグの型で、`{style content}` のマークアップを描画するタグ付きテンプレートの関数です。
 - `StyleSpec` はスタイル名、またはドットでつないだスタイル名の連なり（`"cyan"`、`"cyan.bold"`、`"cyan.bold.underline"`）で、スタイルを受け取るオプションが使います。1つ目と2つ目はコンパイラが検査し、3つ目以降は値を使うときに検査されます。
 
 ```ts
@@ -81,23 +82,23 @@ function paint(name: string, text: string): string {
 ```ts
 import { color } from "@libraz/node-cli";
 
-console.log(color.red(`a ${color.green("b")} c`));
-// "a" and "c" stay red; only "b" is green
+console.log(color.red(`x ${color.green("y")} z`));
+// "x" and "z" stay red; only "y" is green
 ```
 
-## `c` タグによるインラインマークアップ
+## `colorTag` タグによるインラインマークアップ
 
-`c` はタグ付きテンプレートです。バッククォート文字列の直前に書き、その文字列を変換します。関数呼び出しを入れ子にする代わりに、`{style content}` というマークアップを描画します。
+`colorTag` はタグ付きテンプレートです。バッククォート文字列の直前に書き、その文字列を変換します。関数呼び出しを入れ子にする代わりに、`{style content}` というマークアップを描画します。
 
 ```ts
-import { c } from "@libraz/node-cli";
+import { colorTag } from "@libraz/node-cli";
 
 const port = 3000;
 
-console.log(c`Status: {green OK}`);
-console.log(c`{bold.red Error}: broken`);
-console.log(c`Listening on {cyan http://localhost:${port}}`);
-console.log(c`{yellow outer {bold inner} outer}`);
+console.log(colorTag`Status: {green OK}`);
+console.log(colorTag`{bold.red Error}: broken`);
+console.log(colorTag`Listening on {cyan http://localhost:${port}}`);
+console.log(colorTag`{yellow outer {bold inner} outer}`);
 ```
 
 構文は厳密です。
@@ -109,21 +110,21 @@ console.log(c`{yellow outer {bold inner} outer}`);
 
 波括弧は数を数えているため、マークアップは入れ子にできます。
 
-スタイル名が未知の場合、空白が欠けている場合、波括弧の対応が取れていない場合は、`{` が **そのまま文字として** 出力され、残りのテキストには手が加わりません。`color.foo` と違って `c` は不正なマークアップで例外を投げません。唯一の例外は深さで、64段を超える入れ子のマークアップは `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` になります。
+スタイル名が未知の場合、空白が欠けている場合、波括弧の対応が取れていない場合は、`{` が **そのまま文字として** 出力され、残りのテキストには手が加わりません。`color.foo` と違って `colorTag` は不正なマークアップで例外を投げません。唯一の例外は深さで、64段を超える入れ子のマークアップは `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` になります。
 
 補間された値は、マークアップの描画が済んだ **後で** 文字列に変換されて差し込まれます。そのため補間値の中の `{` がマークアップとして解釈されることはなく、信頼できないデータからスタイルを注入されることもありません。
 
 ## カラーが有効になる条件
 
-有効かどうかは、モジュールを import した時点ではなく **スタイル関数を呼び出したその瞬間** に判定されます。`color` と `c` は `process.stdout` を基準に判定します。`createColorizer(stream)` は、同じ連結可能なオブジェクトを別のストリームに結び付けて返し、`createTemplateTag(stream)` は `c` タグについて同じことを行います（`c` はそのタグを `process.stdout` に結び付けたものです）。どちらも任意の `Writable` を受け取ります。
+有効かどうかは、モジュールを import した時点ではなく **スタイル関数を呼び出したその瞬間** に判定されます。`color` と `colorTag` は `process.stdout` を基準に判定します。`createColorizer(stream)` は、同じ連結可能なオブジェクトを別のストリームに結び付けて返し、`createColorTag(stream)` はタグについて同じことを行います（`colorTag` はそのタグを `process.stdout` に結び付けたものです）。どちらも任意の `Writable` を受け取ります。
 
 ```ts
-import { createColorizer, createTemplateTag } from "@libraz/node-cli";
+import { createColorizer, createColorTag } from "@libraz/node-cli";
 
 const errColor = createColorizer(process.stderr);
 console.error(errColor.red("failed"));
 
-const e = createTemplateTag(process.stderr);
+const e = createColorTag(process.stderr);
 console.error(e`{bold.red Error}: broken`);
 ```
 
@@ -142,6 +143,8 @@ setColorEnabled(false); // force plain text, e.g. inside a test
 isColorEnabled(); // false
 setColorEnabled("auto"); // drop the override, return to automatic detection
 ```
+
+`NO_COLOR`、`FORCE_COLOR=0`、`setColorEnabled(false)` のいずれかでカラーが無効なときは、`bold` や `underline` などの修飾を含め、すべてのスタイルが取り除かれます。関数は文字列をそのまま返し、インラインマークアップは除去されます。
 
 `setColorEnabled` はモジュール全体で1つのフラグを設定します。ストリームごとの設定ではありません。一度設定すると、`setColorEnabled("auto")` で解除するまですべてのカラライザがそれに従います。
 
@@ -181,13 +184,22 @@ import { truncateAnsi } from "@libraz/node-cli";
 truncateAnsi("a very long line", 8); // "a very …"
 ```
 
-### `splitAnsi(text): AnsiSegment[]`
+### `splitAnsi(text): readonly AnsiSegment[]`
 
 テキストを順序を保った区間へ分割します。各区間は `{ ansi: boolean; text: string }` です。`ansi: true` の区間がエスケープシーケンスで、残りが可視テキストです。すべての `.text` を連結すると入力がそのまま再現されるため、エスケープを壊さずに可視テキストだけを加工する土台になります。
 
-### `splitGraphemes(text): string[]`
+### `splitGraphemes(text): readonly string[]`
 
-テキストを書記素クラスタへ分割します。
+テキストを書記素クラスタへ分割します。入力にエスケープシーケンスを含めてはいけません。エスケープも通常のテキストと同じように分割されるため、その文字が書記素として数えられてしまいます。先に `splitAnsi` で分け、`ansi` が `false` の区間だけを分割してください。
+
+```ts
+import { splitAnsi, splitGraphemes } from "@libraz/node-cli";
+
+const input = "\x1b[31m日本語\x1b[39m";
+const units = splitAnsi(input).flatMap((segment) =>
+  segment.ansi ? [segment.text] : splitGraphemes(segment.text),
+);
+```
 
 ### `sanitizeTerminalText(text, options?): string`
 
@@ -210,16 +222,17 @@ const fromDatabase = "release \x1b[2J\x1b[Hv2";
 console.log(sanitizeTerminalText(fromDatabase)); // "release v2" — the screen is not cleared
 ```
 
-### `streamIsTTY(value: unknown): boolean`
+### `isTTY(value: unknown): boolean`
 
-値がファイルやパイプではなく端末のストリームかどうかを返します。任意の値を受け取り、`isTTY === true` を持つオブジェクト以外は `false` です。
+値がファイルやパイプではなく端末のストリームかどうかを返します。任意の値を受け取り、`isTTY === true` を持つオブジェクト以外は `false` です。`isStyleName(value)` と `isLogLevel(value)`（[ロギング](logging.md)を参照）も同じ形の引数を取ります。任意の値を受け取り、型ガードで答えます。
 
 ## よくある落とし穴
 
 - **有効判定は呼び出しごとに行われます。** モジュールを import した後に `FORCE_COLOR` を設定しても効きますし、`setColorEnabled` は以後の呼び出しに適用されます。
+- **カラーを無効にすると修飾も消えます。** `NO_COLOR` と `setColorEnabled(false)` は、色と一緒に `bold` や `underline` も取り除きます。
 - **`setColorEnabled` はストリーム単位ではなくグローバルです。** `createColorizer` で作ったカラライザもこれに従います。`setColorEnabled("auto")` で自動判定に戻ります。
-- **`color.foo` は例外を投げ、`c` は投げません。** 未知のスタイル名は、プロキシでは `RangeError`（コンパイル時には型エラー）になり、インラインマークアップでは文字どおりの `{` になります。
-- **空白の欠落はインラインマークアップを黙って壊します。** `` c`{green OK}` `` は `OK` を着色しますが、`` c`{greenOK}` `` は `{greenOK}` をそのまま表示します。
+- **`color.foo` は例外を投げ、`colorTag` は投げません。** 未知のスタイル名は、プロキシでは `RangeError`（コンパイル時には型エラー）になり、インラインマークアップでは文字どおりの `{` になります。
+- **空白の欠落はインラインマークアップを黙って壊します。** `` colorTag`{green OK}` `` は `OK` を着色しますが、`` colorTag`{greenOK}` `` は `{greenOK}` をそのまま表示します。
 - **`.length` は幅ではありません。** エスケープシーケンスは長さを増やし、全角文字は幅を増やします。`stringWidth` を使ってください。
 - **`bgBlack` はなく、bright 系も RGB もありません。** 上の一覧がすべてです。
 

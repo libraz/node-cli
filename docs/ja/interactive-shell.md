@@ -113,6 +113,8 @@ const cli = createCLI({
 
 このフィルタを設定すると、`deploy --token abcd1234` と入力しても `deploy --token ***` が保存されます。
 
+フィルタは同期関数です。例外を投げた場合、その行は記録されず、警告が `process.stderr` に書き出されます。シェルに専用の stderr はなく、この警告もシェルの他の診断と同じ出力先に出ます。
+
 ### ファイルの安全性
 
 履歴ファイルには入力された内容がそのまま入るため、非公開のファイルとして扱われます。
@@ -120,6 +122,8 @@ const cli = createCLI({
 - ファイルモードは `0600`（所有者だけが読み書きできる状態）に保たれ、それ以外になっていれば `0600` に戻されます。
 - シンボリックリンクを辿らずに開くため、そのパスに仕込まれたリンクは、書き込まれるのではなく拒否されます。
 - 通常ファイルでない場合、または別のユーザーが所有している場合は拒否されます。
+
+Windows ではファイルモードのビットが適用されず、シンボリックリンクを辿らない open と所有者の検査も行われません。ファイルはディレクトリのアクセス制御リストを継承するので、ユーザーだけがアクセスできるディレクトリに置いてください。
 
 複数のセッションが同時に動いている場合は、履歴ファイルの隣に置かれる `.lock` ファイルで調停します。すでに存在しないプロセスが残したロックは即座に破棄されるため、クラッシュしたセッションが後続のセッションを止めることはありません。
 
@@ -137,10 +141,10 @@ Tab を押すと、カーソル位置の単語に対する補完候補をシェ�
 
 ### 補完コンテキスト
 
-コマンドは `.completer(fn)` で独自の候補を提供します。`fn` は `Completer` 型に一致する関数です。
+コマンドは `.completer(fnOrList)` で独自の候補を提供します。関数は `Completer` 型に一致するもの、リストは文字列の読み取り専用配列です。
 
 ```typescript
-type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
+type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonly string[]>;
 ```
 
 `CompletionContext` が運ぶ情報は次のとおりです。
@@ -151,12 +155,12 @@ type Completer = (ctx: CompletionContext) => string[] | Promise<string[]>;
 | `fullLine` | 入力行の全体。前段のパイプセグメントも含みます |
 | `current` | 補完対象の単語 |
 | `commandPath` | 解決済みのコマンドパス。エイリアスは正規名に置き換え済み |
-| `args` | ここまでに解析した位置引数 |
-| `options` | ここまでに解析したオプション。**未加工で型変換前**の値で、既定値の適用も検証も行われていません |
+| `args` | ここまでに入力された位置引数。camelCase の名前をキーとし、値は生の文字列（可変長引数では生の文字列の配列） |
+| `options` | ここまでに入力されたオプション。`ctx.options` と同じキーで、**未加工で型変換前**の値です。既定値の適用も検証も行われていません。値を取るオプションは文字列、フラグまたはその `--no-` 形は `true` か `false`、配列オプションは文字列の配列です |
 | `iteration` | 行を変更しないまま Tab を連続で押した回数。`1` から始まり、編集するとリセットされます |
 | `signal` | 補完の制限時間を超えたときに中止される `AbortSignal`（[用語集](glossary.md)を参照） |
 
-返された候補は、表示される前に `current` で絞り込まれます。補完関数は、あらかじめ絞り込んだテキストではなく候補の完全な値を返してください。
+候補は、関数から得たものも固定リストのものも、表示される前に `current` に対する前方一致で絞り込まれます。補完関数は、あらかじめ絞り込んだテキストではなく候補の完全な値を返してください。
 
 ### 解決の順序
 
@@ -196,7 +200,7 @@ cli
     },
   })
   .action((ctx) => {
-    ctx.stdout.write(`Deploying to ${String(ctx.args.env)}\n`);
+    ctx.stdout.write(`Deploying to ${ctx.args.env}\n`);
   });
 ```
 
@@ -220,7 +224,7 @@ cli
     return ctx.iteration === 1 ? hosts.slice(0, 2) : hosts;
   })
   .action((ctx) => {
-    ctx.stdout.write(`Connecting to ${String(ctx.args.host)}\n`);
+    ctx.stdout.write(`Connecting to ${ctx.args.host}\n`);
   });
 ```
 
@@ -270,7 +274,7 @@ cli
   });
 ```
 
-シェルのプロンプトでパイプを**使わずに**入力したコマンドでは、`ctx.stdin` は `null` になります。シェルはコマンドを実行する前に端末の入力を手放すため、コマンドが読むものは残っていません。アクションの中で利用者に質問するときは、`ctx.stdin` を読むのではなく[プロンプト](prompts.md)で説明しているプロンプト関数を使ってください。
+シェルのプロンプトでパイプを**使わずに**入力したコマンドでは、`ctx.stdin` は行エディタと共有する端末です。[プロンプト](prompts.md)で説明しているプロンプト関数を通してだけ読み、最後まで読み切らないでください。モードのアクションも同じ端末を受け取ります（[モード内での違い](#モード内での違い)を参照）。
 
 ### 途中での打ち切り
 
@@ -282,9 +286,20 @@ cli
 
 ### パイプは文字列入力にだけ適用されます
 
-パイプの分割はコマンド**文字列**に対して行われます。対象になるのは対話シェルと `cli.exec("a | b")` です（[イベントとプラグイン](events-and-plugins.md)を参照）。
+パイプの分割はコマンド**文字列**に対して行われます。対象になるのは対話シェルと `cli.execLine("a | b")` です（[イベントとプラグイン](events-and-plugins.md)を参照）。
 
-直接実行モードでは、引数はすでに単語へ分割された配列として渡されるため、パイプの分割は一切行いません。そこでの `|` はパイプではなく、ただの引数値です。（実際には、プログラムが目にする前にシステムシェルが `|` を処理します。）
+直接実行モードでは、引数はすでに単語へ分割された配列として渡されるため、パイプの分割は一切行いません。`cli.exec([...])` も配列を受け取ります。そこでの `|` はパイプではなく、ただの引数値です。（実際には、プログラムが目にする前にシステムシェルが `|` を処理します。）
+
+### クォート
+
+プロンプトに入力された行は、POSIX シェルの規則で単語に分割されます。シングルクォートは中身をそのまま保ちます。ダブルクォートは語をまとめ、バックスラッシュのエスケープを許します。クォート外のバックスラッシュは次の 1 文字をエスケープします。クォートの中の `|` は通常の文字です。
+
+```
+mycli> note add "a | b"        # one argument: a | b
+mycli> note add 'C:\Users\me'  # single quotes keep the backslashes
+```
+
+そのため、行の中の Windows のパスにはシングルクォートが必要です。`cli.exec` にパスを渡すプログラムは、配列を使えばこの問題を避けられます。`cli.exec(["note", "add", "C:\\Users\\me"])` は文字列をそのまま運びます。
 
 ### 未対応の構文
 
@@ -324,10 +339,7 @@ cli
       prompt: "sql> ",
       banner: 'Entering SQL mode. Type "exit" to return.',
       history: "session",
-      completer: ({ current }) => {
-        const keywords = ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"];
-        return keywords.filter((k) => k.startsWith(current.toUpperCase()));
-      },
+      completer: ["SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT"],
       action: async (input, { stdout, stderr, signal }) => {
         try {
           const rows = await runQuery(input, { signal });
@@ -340,27 +352,27 @@ cli
   });
 ```
 
-コマンドが対話シェル以外で動いているときは、`cli.exec()` の場合も含めて `ctx.shell` が `null` になります。必ずガードしてください。
+コマンドが対話シェル以外で動いているときは、`cli.exec()` と `cli.execLine()` の場合も含めて `ctx.shell` が `null` になります。必ずガードしてください。
 
-### モードの設定
+### モードのオプション
 
-`ModeConfig` のフィールドは次のとおりです。
+`enterMode()` は、次のフィールドを持つ `ModeOptions` オブジェクトを受け取ります。
 
 | フィールド | 必須 | 意味 |
 |---|---|---|
 | `prompt` | はい | モードが有効な間に表示するプロンプト |
-| `action` | はい | 入力行と小さなコンテキストを受け取って呼ばれます |
+| `action` | はい | `ModeAction`、つまり `(input, ctx) => void \| Promise<void>`。入力行と `ModeContext` を受け取って呼ばれます |
 | `banner` | いいえ | モードに入ったときに一度だけ表示される文字列 |
-| `completer` | いいえ | モード内でのタブ補完。**省略すると、モード内で Tab を押しても何も起きません** |
+| `completer` | いいえ | モード内でのタブ補完。固定のリストか `Completer` を指定します。**省略すると、モード内で Tab を押しても何も起きません** |
 | `history` | いいえ | `"session"`（既定）または `"none"` |
 
-モードの `completer` はコマンドと同じ `Completer` です。`CompletionContext` を受け取り、候補を同期で、またはプロミスで返します。`line` と `fullLine` は入力行、`current` は最後の単語（空白の直後なら `""`）、`commandPath` は `[]`、`args` と `options` は空です。`iteration` と `signal` はコマンドの場合と同じです。候補は `current` では絞り込まれないため、completer が一致するものだけを返してください。ほかのプロバイダと同じ 1000 ms の上限が適用され、例外を投げた場合や、返したプロミスが失敗した場合は候補が返りません。
+モードの `completer` は、文字列の固定リストか、コマンドと同じ `Completer` です。関数は `CompletionContext` を受け取り、候補を同期で、またはプロミスで返します。モードの中では、トップレベルのコマンド名は候補になりません。`line` と `fullLine` は入力行、`current` は最後の単語（空白の直後なら `""`）、`commandPath` は `[]`、`args` と `options` は空です。`iteration` と `signal` はコマンドの場合と同じです。候補は、リストも関数の結果も `ctx.current` に対する前方一致で絞り込まれるため、completer は候補の完全な値を返してください。関数にはほかのプロバイダと同じ 1000 ms の上限が適用され、例外を投げた場合や、返したプロミスが失敗した場合は候補が返りません。
 
 `history: "session"` では呼び出し用の履歴をメモリ上だけに保持し、上限は `historySize`、連続する重複は記録しません。どちらの設定でも、モードでの入力が履歴ファイルに書き込まれることはありません。
 
 ### モード内での違い
 
-- モードのアクションに渡されるコンテキストは `{ stdout, stderr, signal }` だけです。`CommandContext` **ではない**ため、`args` も `options` も `shell` も `stdin` もありません。
+- モードのアクションに渡されるコンテキストは `ModeContext`、つまり `{ stdin, stdout, stderr, signal }` で、コマンドの実行が持つストリームとシグナルと同じです。`CommandContext` **ではない**ため、`args` も `options` も `shell` もありません。`stdin` は行エディタと共有する端末なので、`prompt.*` 関数を通してだけ読み、最後まで読み切らないでください。
 - すべての行がそのままアクションに届きます。解析もルーティングも、登録済みコマンドとの照合も行いません。
 - `exit` と `quit` は常にモードを抜けます。同名の登録コマンドはモード内から到達できないため、そちらを優先すると利用者がモードから出られなくなります。
 - Ctrl+D はモードを抜けてメインのプロンプトに戻ります。入力ストリームがすでに終わっている場合は、代わりにセッションを終了します。
@@ -406,10 +418,12 @@ cli
 
 | メソッド | 効果 |
 |---|---|
-| `stop()` | 現在のコマンドが戻ったあとにセッションを終了します |
+| `stop()` | 現在のコマンドが戻ったあとにセッションを終了します。戻り値はありません |
 | `setPrompt(text)` | プロンプトのテキストを置き換え、シェルを返します |
-| `enterMode(config)` | モードサブ REPL に入ります |
-| `exitMode()` | 現在のモードを抜けます |
+| `enterMode(options)` | モードサブ REPL に入り、シェルを返します |
+| `exitMode()` | 現在のモードを抜け、シェルを返します |
+
+`setPrompt`、`enterMode`、`exitMode` はシェルを返すので、呼び出しをチェーンできます。`ctx.shell?.setPrompt("sql> ").enterMode({ ... })` のように書きます。`stop()` はセッションを終了して `void` を返すので、チェーンの末尾になります。
 
 `setPrompt` は即座に反映されます。モードが有効なときだけは例外で、`exitMode()` のあとに反映されます。
 
@@ -418,7 +432,7 @@ cli
   .command("use <project>")
   .description("Switch the active project")
   .action((ctx) => {
-    const project = String(ctx.args.project);
+    const project = ctx.args.project;
     ctx.shell?.setPrompt(`${project}> `);
     ctx.stdout.write(`Switched to ${project}\n`);
   });
