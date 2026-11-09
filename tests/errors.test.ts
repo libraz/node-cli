@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { usageError } from "../src/errors.js";
+import { quoteValue, usageError } from "../src/errors.js";
 import {
   CancelledError,
   CLIError,
@@ -74,13 +74,11 @@ describe("built-in error classes", () => {
     expect(new ParseError("m", { quote: "single" }).quote).toBe("single");
   });
 
-  it("ExtraArgumentError exposes extras and extra", () => {
+  it("ExtraArgumentError exposes extras", () => {
     const one = new ExtraArgumentError(["a"]);
-    expect(one.extra).toBe("a");
     expect(one.extras).toEqual(["a"]);
     expect(one.message).toBe('Unexpected argument: "a"');
     const two = new ExtraArgumentError(["a", "b"]);
-    expect(two.extra).toBe("a");
     expect(two.extras).toEqual(["a", "b"]);
     expect(two.message).toBe('Unexpected arguments: "a", "b"');
   });
@@ -125,6 +123,32 @@ describe("usageError", () => {
     expect(s).not.toBeInstanceOf(RangeError);
     expect(s.code).toBe("ERR_ALREADY_STARTED");
     expect(s).not.toBeInstanceOf(CLIError);
+  });
+
+  it("forwards an optional cause", () => {
+    const cause = { reason: "plugin threw" };
+    const e = usageError("state", "ERR_PLUGIN_FAILED", "m", { cause });
+    expect(e.code).toBe("ERR_PLUGIN_FAILED");
+    expect(e.cause).toBe(cause);
+    expect("cause" in usageError("state", "ERR_PLUGIN_FAILED", "m")).toBe(false);
+  });
+});
+
+describe("quoteValue", () => {
+  it("renders a string as a JSON string literal", () => {
+    expect(quoteValue("a b")).toBe('"a b"');
+    expect(quoteValue('say "hi"\nnow')).toBe('"say \\"hi\\"\\nnow"');
+  });
+
+  it("renders other values on one line through util.inspect", () => {
+    expect(quoteValue(3)).toBe("3");
+    expect(quoteValue({ a: { b: { c: 1 } } })).toBe("{ a: { b: [Object] } }");
+    expect(quoteValue(Array.from({ length: 30 }, (_, i) => i))).not.toContain("\n");
+  });
+
+  it("strips terminal control sequences", () => {
+    expect(quoteValue({ x: "\x1b]8;;https://example.com\x07y" })).not.toContain("\x1b]8");
+    expect(quoteValue("x\x1b[2J")).not.toContain("\x1b[2J");
   });
 });
 

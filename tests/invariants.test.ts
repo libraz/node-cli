@@ -67,9 +67,9 @@ describe("structured errors", () => {
     expect(new InvalidOptionError("bad", { value: 7 }).value).toBe(7);
   });
 
-  it("default exitCode is 1; subclasses keep instanceof", () => {
+  it("user-input errors exit 64; subclasses keep instanceof", () => {
     const err = new MissingArgumentError("name");
-    expect(err.exitCode).toBe(1);
+    expect(err.exitCode).toBe(64);
     expect(err).toBeInstanceOf(CLIError);
     expect(err).toBeInstanceOf(MissingArgumentError);
     expect(err.code).toBe("MISSING_ARGUMENT");

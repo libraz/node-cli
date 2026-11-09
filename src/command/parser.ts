@@ -481,9 +481,15 @@ export function parseOptionFlags(flags: string): {
  *
  * @param input - The raw input string or pre-tokenized array.
  * @param registry - The command registry used to resolve command paths.
+ * @param options.usage - Usage line of the matched command, carried by every
+ *   option error raised while scanning its tokens.
  * @returns The fully parsed result including command path, arguments, and options.
  */
-export function parse(input: string | readonly string[], registry: CommandRegistry): ParseResult {
+export function parse(
+  input: string | readonly string[],
+  registry: CommandRegistry,
+  options: { usage?: string } = {},
+): ParseResult {
   if (typeof input === "string") assertNoRedirection(input);
   const rawInput = typeof input === "string" ? input : input.join(" ");
   const tokens = typeof input === "string" ? tokenize(input) : [...input];
@@ -516,12 +522,25 @@ export function parse(input: string | readonly string[], registry: CommandRegist
   const remaining = tokens.slice(consumed);
 
   // Separate options and positional args
-  const { positional, options, builtInHelp } = extractOptionsAndArgs(remaining, command);
+  const {
+    positional,
+    options: parsedOptions,
+    builtInHelp,
+  } = extractOptionsAndArgs(remaining, command, options.usage);
 
   // Map positional args
   const { args, extraArgs } = mapPositionalArgs(positional, command.argDefs);
 
-  return { commandPath, args, options, extraArgs, rawInput, rawArgv, command, builtInHelp };
+  return {
+    commandPath,
+    args,
+    options: parsedOptions,
+    extraArgs,
+    rawInput,
+    rawArgv,
+    command,
+    builtInHelp,
+  };
 }
 
 /**
@@ -532,11 +551,13 @@ export function parse(input: string | readonly string[], registry: CommandRegist
  *
  * @param tokens - The remaining tokens after the command path has been consumed.
  * @param command - The matched command definition containing option metadata.
+ * @param usage - Usage line of the command, carried by any option error raised.
  * @returns An object with the positional argument values and a record of parsed options.
  */
 function extractOptionsAndArgs(
   tokens: string[],
   command: CommandDefinition,
+  usage: string | undefined,
 ): { positional: string[]; options: Record<string, unknown>; builtInHelp: boolean } {
   const positional: string[] = [];
   const options: Record<string, unknown> = Object.create(null);
@@ -544,7 +565,7 @@ function extractOptionsAndArgs(
   // whatever was collected before the error is kept.
   const builtInHelp = hasBuiltInHelpToken(tokens, command.options, buildAliasMap(command.options));
   try {
-    scanTokens(tokens, command, positional, options);
+    scanTokens(tokens, command, positional, options, usage);
   } catch (error) {
     if (!builtInHelp) throw error;
   }
@@ -558,6 +579,7 @@ function scanTokens(
   command: CommandDefinition,
   positional: string[],
   options: Record<string, unknown>,
+  usage: string | undefined,
 ): void {
   let pastDoubleDash = false;
   const optionDefs = command.options;
@@ -589,16 +611,18 @@ function scanTokens(
       const spelling = `--${flagName}`;
       const def = negation.def;
       if (!def) {
-        throw new UnknownOptionError(spelling);
+        throw new UnknownOptionError(spelling, { usage });
       }
       if (def.schema.type !== "boolean") {
         throw new InvalidOptionError(`Option ${spelling} can only be used with boolean options`, {
           optionName: def.long,
+          usage,
         });
       }
       if (negatedEqIndex !== -1) {
         throw new InvalidOptionError(`Option ${spelling} does not accept a value`, {
           optionName: def.long,
+          usage,
           value: token.slice(negatedEqIndex + 1),
         });
       }
@@ -613,7 +637,7 @@ function scanTokens(
         const typed = token.slice(2, eqIndex);
         const def = resolveOptionName(typed, optionDefs, aliasMap);
         if (!def) {
-          throw new UnknownOptionError(`--${typed}`);
+          throw new UnknownOptionError(`--${typed}`, { usage });
         }
         appendOption(options, def.long, token.slice(eqIndex + 1), def);
         i++;
@@ -628,7 +652,7 @@ function scanTokens(
           i++;
           continue;
         }
-        throw new UnknownOptionError(`--${typed}`);
+        throw new UnknownOptionError(`--${typed}`, { usage });
       }
       const name = def.long;
       const isBool = def.schema.type === "boolean";
@@ -644,7 +668,7 @@ function scanTokens(
         } else {
           throw new InvalidOptionError(
             `Option --${name} expects a value; use --${name}=<value> for values starting with "-"`,
-            { optionName: name },
+            { optionName: name, usage },
           );
         }
       }
@@ -672,7 +696,7 @@ function scanTokens(
         const alias = token.slice(1, eqIndex);
         const def = resolveOptionName(alias, optionDefs, aliasMap);
         if (!def) {
-          throw new UnknownOptionError(`-${alias}`);
+          throw new UnknownOptionError(`-${alias}`, { usage });
         }
         appendOption(options, def.long, token.slice(eqIndex + 1), def);
         i++;
@@ -689,7 +713,7 @@ function scanTokens(
             i++;
             continue;
           }
-          throw new UnknownOptionError(`-${chars}`);
+          throw new UnknownOptionError(`-${chars}`, { usage });
         }
         const name = def.long;
         const isBool = def.schema.type === "boolean";
@@ -705,7 +729,7 @@ function scanTokens(
           } else {
             throw new InvalidOptionError(
               `Option -${chars} expects a value; use --${name}=<value> for values starting with "-"`,
-              { optionName: name },
+              { optionName: name, usage },
             );
           }
         }
@@ -715,13 +739,13 @@ function scanTokens(
           const def = resolveOptionName(ch, optionDefs, aliasMap);
           if (!def) {
             if (ch === "h") continue;
-            throw new UnknownOptionError(`-${ch}`);
+            throw new UnknownOptionError(`-${ch}`, { usage });
           }
           const name = def.long;
           if (def.schema.type !== "boolean") {
             throw new InvalidOptionError(
               `Option -${ch} expects a value and cannot be combined with other short flags`,
-              { optionName: name },
+              { optionName: name, usage },
             );
           }
           options[name] = true;
@@ -729,6 +753,7 @@ function scanTokens(
         if (eqIndex !== -1) {
           throw new InvalidOptionError(`Option -${chars} does not accept a value`, {
             optionName: resolveOptionName(chars[chars.length - 1], optionDefs, aliasMap)?.long,
+            usage,
             value: token.slice(eqIndex + 1),
           });
         }

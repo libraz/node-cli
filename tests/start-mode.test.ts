@@ -19,7 +19,7 @@
  *   - explicit-dashdash prints the help index and returns 0.
  *   - a command returns 0 when it succeeds, the error's exitCode when it throws a CLIError,
  *     and 130 when SIGINT interrupts it.
- *   - explicit-unknown returns 1.
+ *   - explicit-unknown returns 64.
  *   - the resolved value and process.exitCode agree.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,7 +82,7 @@ function expectedResult(
     case "explicit-dashdash":
       return { code: 0, repl: false, helpIndex: true };
     case "explicit-unknown":
-      return { code: 1, repl: false, helpIndex: false };
+      return { code: 64, repl: false, helpIndex: false };
     case "omitted-command":
     case "explicit-command": {
       const code =

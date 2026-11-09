@@ -14,6 +14,7 @@ import type { MutableCommandContext, OptionDef } from "../types.js";
  * @param raw - The raw key/value pairs obtained from the argument parser.
  * @param defs - A map of canonical option names to their definitions.
  * @param ctx - The current command execution context.
+ * @param options.usage - Usage line of the command, carried by every error raised.
  * @returns The fully resolved option values keyed by their long names, or a
  *   promise of them once a custom callback returned a Promise.
  * @throws {MissingOptionError} If a required option is not provided.
@@ -24,7 +25,9 @@ export function resolveOptions(
   raw: Record<string, unknown>,
   defs: Map<string, OptionDef>,
   ctx: MutableCommandContext,
+  options: { usage?: string } = {},
 ): Record<string, unknown> | Promise<Record<string, unknown>> {
+  const { usage } = options;
   const resolved: Record<string, unknown> = Object.create(null);
 
   // The parser is the sole alias-normalization point. Keeping this function on
@@ -37,8 +40,8 @@ export function resolveOptions(
   // First pass: parse/coerce/default/required for every option. Second pass:
   // every validator sees the complete, canonical option set.
   const steps: (() => void | Promise<void>)[] = [];
-  for (const [, def] of defs) steps.push(() => resolveValue(def, raw, resolved, ctx));
-  for (const [, def] of defs) steps.push(() => checkValue(def, resolved, ctx));
+  for (const [, def] of defs) steps.push(() => resolveValue(def, raw, resolved, ctx, usage));
+  for (const [, def] of defs) steps.push(() => checkValue(def, resolved, ctx, usage));
   return runInOrder(steps, 0, resolved);
 }
 
@@ -59,10 +62,11 @@ function runInOrder<T>(
 }
 
 /** Wraps a custom `parse` or `validate` failure in a {@link ValidationError}. */
-function validationFailure(long: string, err: unknown): ValidationError {
+function validationFailure(long: string, err: unknown, usage: string | undefined): ValidationError {
   const message = err instanceof Error ? err.message : String(err);
   return new ValidationError(`Invalid value for --${long}: ${message}`, {
     optionName: long,
+    usage,
     cause: err,
   });
 }
@@ -73,6 +77,7 @@ function validationFailure(long: string, err: unknown): ValidationError {
  */
 function guardCustom<T>(
   long: string,
+  usage: string | undefined,
   call: () => T | Promise<T>,
   then: (value: T) => void,
 ): void | Promise<void> {
@@ -80,14 +85,14 @@ function guardCustom<T>(
   try {
     result = call();
   } catch (err) {
-    throw validationFailure(long, err);
+    throw validationFailure(long, err, usage);
   }
   if (!(result instanceof Promise)) {
     then(result);
     return;
   }
   return result.then(then, (err: unknown) => {
-    throw validationFailure(long, err);
+    throw validationFailure(long, err, usage);
   });
 }
 
@@ -97,6 +102,7 @@ function resolveValue(
   raw: Record<string, unknown>,
   resolved: Record<string, unknown>,
   ctx: MutableCommandContext,
+  usage: string | undefined,
 ): void | Promise<void> {
   const { long, schema } = def;
   const rawValue = raw[long];
@@ -121,6 +127,7 @@ function resolveValue(
     const parse = schema.parse;
     return guardCustom(
       long,
+      usage,
       () => {
         if (!Array.isArray(rawValue)) return parse(String(rawValue), ctx);
         const parsed = rawValue.map((element) => parse(String(element), ctx));
@@ -131,9 +138,9 @@ function resolveValue(
   }
 
   if (present) {
-    store(coerceOptionValue(rawValue, schema.type, long));
+    store(coerceOptionValue(rawValue, schema.type, long, usage));
   } else if (schema.required) {
-    throw new MissingOptionError(long);
+    throw new MissingOptionError(long, { usage });
   } else if (schema.default !== undefined) {
     // Apply the default only when the flag was absent, and run it through the
     // same built-in coercion an explicit value receives so the runtime type
@@ -142,7 +149,7 @@ function resolveValue(
     // at definition time; this call is what makes resolveOptions correct for a
     // definition it did not build. Custom `parse` is not re-applied: a default
     // is an already-resolved value, not raw input.
-    store(coerceOptionValue(schema.default, schema.type, long));
+    store(coerceOptionValue(schema.default, schema.type, long, usage));
   } else {
     store(undefined);
   }
@@ -153,6 +160,7 @@ function checkValue(
   def: OptionDef,
   resolved: Record<string, unknown>,
   ctx: MutableCommandContext,
+  usage: string | undefined,
 ): void | Promise<void> {
   const { long, schema } = def;
   if (!Object.hasOwn(resolved, long)) return;
@@ -170,7 +178,7 @@ function checkValue(
       if (!isAllowed(candidate)) {
         throw new InvalidOptionError(
           `Invalid value "${candidate}" for --${long}. Allowed: ${allowed.join(", ")}`,
-          { optionName: long, value: candidate },
+          { optionName: long, value: candidate, usage },
         );
       }
     }
@@ -180,6 +188,7 @@ function checkValue(
   if (validate) {
     return guardCustom(
       long,
+      usage,
       () => validate(value, ctx),
       () => {},
     );
@@ -219,9 +228,15 @@ function toNumber(value: unknown): number | null {
  * @param value - The raw value to coerce.
  * @param type - The target type declared in the option schema.
  * @param name - The long option name, used in error messages.
+ * @param usage - Usage line of the command, carried by the error when coercion fails.
  * @returns The coerced value.
  */
-export function coerceOptionValue(value: unknown, type: string | undefined, name: string): unknown {
+export function coerceOptionValue(
+  value: unknown,
+  type: string | undefined,
+  name: string,
+  usage?: string,
+): unknown {
   if (type === undefined) return value;
   if (type === "string") return String(value);
 
@@ -236,6 +251,7 @@ export function coerceOptionValue(value: unknown, type: string | undefined, name
     throw new InvalidOptionError(`Option --${name} expects a boolean, got "${value}"`, {
       optionName: name,
       value,
+      usage,
     });
   }
 
@@ -253,6 +269,7 @@ export function coerceOptionValue(value: unknown, type: string | undefined, name
       throw new InvalidOptionError(`Option --${name} ${reason}`, {
         optionName: name,
         value,
+        usage,
       });
     }
     return num;
@@ -271,6 +288,7 @@ export function coerceOptionValue(value: unknown, type: string | undefined, name
         throw new InvalidOptionError(`Option --${name} expects numbers, got "${v}"`, {
           optionName: name,
           value: v,
+          usage,
         });
       }
       return num;

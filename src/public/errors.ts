@@ -1,10 +1,16 @@
-export type { BuiltinCLIError, CLIErrorCode, UsageErrorCode } from "../errors.js";
+export type {
+  BuiltinCLIError,
+  CLIErrorCode,
+  CLIErrorOptions,
+  UsageErrorCode,
+} from "../errors.js";
 export {
   CancelledError,
   CLIError,
   CommandNotFoundError,
   ExtraArgumentError,
   formatErrorMessage,
+  InputEndedError,
   InvalidOptionError,
   isBuiltinCLIError,
   isCancellationError,

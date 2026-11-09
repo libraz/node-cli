@@ -533,9 +533,17 @@ export class CommandRouter {
     // option-syntax failures on a known command honor the documented
     // commandError contract even though parse() cannot return a partial result.
     const preliminaryMatch = this.registry.matchCommandPath(tokens);
+    // Every resolution error carries the usage line of the matched command; the
+    // canonical path keeps it identical to the help output.
+    const usage = preliminaryMatch
+      ? formatUsage(
+          this.registry.getCommandPath(preliminaryMatch.command),
+          preliminaryMatch.command,
+        )
+      : undefined;
     let result: ReturnType<typeof parse>;
     try {
-      result = parse(input, this.registry);
+      result = parse(input, this.registry, { usage });
     } catch (err) {
       const error = toError(err);
       if (preliminaryMatch) {
@@ -647,15 +655,13 @@ export class CommandRouter {
           ? !Array.isArray(provided) || provided.length === 0
           : provided === undefined;
         if (argDef.required && missing) {
-          // Use the canonical command path so the usage matches the help output.
-          const usage = formatUsage(this.registry.getCommandPath(command), command);
           const displayName = argDef.variadic ? `...${argDef.name}` : argDef.name;
           throw new MissingArgumentError(displayName, { usage });
         }
       }
 
       if (result.extraArgs && result.extraArgs.length > 0) {
-        throw new ExtraArgumentError(result.extraArgs);
+        throw new ExtraArgumentError(result.extraArgs, { usage });
       }
 
       // An actionless group with extra input reaches this point only to report
@@ -665,7 +671,7 @@ export class CommandRouter {
       // Resolve options
       // Awaited only when a custom callback went async, so a fully synchronous
       // resolution starts the action in the same tick.
-      const options = resolveOptions(result.options, command.options, ctx);
+      const options = resolveOptions(result.options, command.options, ctx, { usage });
       ctx.options = options instanceof Promise ? await options : options;
 
       // Run command-level validation

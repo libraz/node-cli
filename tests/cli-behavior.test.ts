@@ -716,7 +716,7 @@ describe("help completion through a shadowed parent", () => {
 });
 
 describe("direct mode error presentation", () => {
-  it("strips control sequences from argv-derived messages and closes styling", async () => {
+  it("strips control sequences from argv-derived messages and shows quoted escapes inertly", async () => {
     const cli = createCLI({ name: "test" });
     cli.command("deploy").action(() => {});
     const stderr = createMockStdout();
@@ -729,8 +729,8 @@ describe("direct mode error presentation", () => {
 
     expect(stderr.getOutput()).toContain("bogus");
     expect(stderr.getOutput()).not.toContain("\x1b[2J");
-    expect(notFound.getOutput()).toContain("red");
-    // A colour the message opened is closed before the line ends.
-    expect(notFound.getOutput().endsWith('"\x1b[39m\n')).toBe(true);
+    // Quoted user input shows an escape as inert text rather than opening a colour.
+    expect(notFound.getOutput()).toContain('"\\u001b[31mred"');
+    expect(notFound.getOutput()).not.toContain("\x1b");
   });
 });

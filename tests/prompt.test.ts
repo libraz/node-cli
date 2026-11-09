@@ -37,7 +37,7 @@ describe("prompt", () => {
     const err = new CancelledError();
     expect(err.code).toBe("CANCELLED");
     expect(err.name).toBe("CancelledError");
-    expect(err.message).toBe("Prompt cancelled");
+    expect(err.message).toBe("Cancelled");
   });
 
   it("exports prompt option and choice types", () => {

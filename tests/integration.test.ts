@@ -106,7 +106,7 @@ describe("CLI (integration)", () => {
     process.stderr.write = stderr.write.bind(stderr) as typeof process.stderr.write;
 
     await cli.start(["nonexistent"]);
-    expect(process.exitCode).toBe(1);
+    expect(process.exitCode).toBe(64);
     expect(stderr.getOutput()).toContain("Command not found");
   });
 
