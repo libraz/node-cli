@@ -23,16 +23,17 @@ const fixture = await mkdtemp(resolve(tmpdir(), "node-cli-pack-"));
 let tarball;
 
 try {
-  const packed = JSON.parse(run(npm, ["pack", "--json"], { cwd: root }));
-  if (!Array.isArray(packed) || !packed[0]?.filename)
-    throw new Error("npm pack returned no artifact");
-  tarball = resolve(root, packed[0].filename);
+  // npm 11 prints an array of artifacts; npm 12 an object keyed by package name.
+  const output = JSON.parse(run(npm, ["pack", "--json"], { cwd: root }));
+  const artifact = Array.isArray(output) ? output[0] : Object.values(output ?? {})[0];
+  if (!artifact?.filename) throw new Error("npm pack returned no artifact");
+  tarball = resolve(root, artifact.filename);
   const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
-  if (packed[0].name !== packageJson.name || packed[0].version !== packageJson.version) {
+  if (artifact.name !== packageJson.name || artifact.version !== packageJson.version) {
     throw new Error("Packed artifact metadata does not match package.json");
   }
   // npm force-includes every root file matching `readme.*`; only one may survive.
-  const readmeEntries = (packed[0].files ?? [])
+  const readmeEntries = (artifact.files ?? [])
     .map((entry) => entry.path)
     .filter((path) => /^readme(\..*)?$/i.test(path));
   if (readmeEntries.length !== 1 || readmeEntries[0] !== "README.md") {
@@ -142,7 +143,7 @@ await cli.start();
       : run(executable, ["greet", "World", "--uppercase"], { cwd: fixture });
   if (docsOutput !== "Hello, WORLD!\n") throw new Error("README quick start output mismatch");
 
-  const manifest = { ...packed[0], filename: basename(tarball) };
+  const manifest = { ...artifact, filename: basename(tarball) };
   if (manifestPath) await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   process.stdout.write(`${JSON.stringify(manifest)}\n`);
 } finally {
