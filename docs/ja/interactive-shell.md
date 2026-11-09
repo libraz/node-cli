@@ -170,7 +170,7 @@ type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonl
 2. **サブコマンド名** — ここまでに一致したコマンドのもの。
 3. **インラインのオプション値** — `--opt=value` や `-o=value` の `=` より後ろの部分。
 4. **直前のオプションの値** — `--region <Tab>` のように、値を取るフラグの次に来る単語。
-5. **オプションフラグ** — 一致したコマンドのもの。ブールオプションの `--no-` 形式も含みます。
+5. **オプションフラグ** — 一致したコマンドのもの。ブールオプションの `--no-` 形式も含みます。入力中の単語が `-` で始まるとき、または単語の先頭位置にいて、そのコマンドに独自の補完関数がないときに候補になります。
 6. **コマンド自身の補完関数** — `.completer()` で登録したもの。
 
 隠しオプションが候補になることはありません。隠しサブコマンドも同じで、親コマンドの位置引数が先に消費してしまうために到達できないサブコマンドも候補になりません。
@@ -217,7 +217,7 @@ cli
   .command("connect <host>")
   .option("--port <port>", { type: "number" })
   .completer(async (ctx) => {
-    // The framework already offers flags; only host names are left to add.
+    // Flags are offered by the framework once the word starts with `-`; this completer supplies the host names.
     if (ctx.current.startsWith("-")) return [];
     const hosts = await loadKnownHosts();
     // First Tab: the two most common hosts. Second Tab and beyond: all of them.

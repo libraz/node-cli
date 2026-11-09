@@ -1000,17 +1000,17 @@ console.log(JSON.stringify(out.text())); // "42\n"
 console.log(JSON.stringify(err.text())); // ""
 ```
 
-失敗した場合は、`commandError` と `error` の各イベントが発火した後で、返された Promise が reject されます。投げられた値は機械可読なコードと終了コードを持ちます。
+失敗した場合は、`commandError` と `error` の各イベントが発火した後で、返された Promise が reject されます。投げられた値は機械可読なコードと終了コードを持ちます。上のプログラムの続きです。
 
 ```typescript
 import { CLIError } from "@libraz/node-cli";
 
 try {
   await buildCli().exec(["add", "1"], { stdout: out.stream, stderr: err.stream });
-} catch (err) {
-  if (err instanceof CLIError) {
-    console.log(err.code); // "MISSING_ARGUMENT"
-    console.log(err.exitCode); // 64
+} catch (error) {
+  if (error instanceof CLIError) {
+    console.log(error.code); // "MISSING_ARGUMENT"
+    console.log(error.exitCode); // 64
   }
 }
 ```

@@ -1000,17 +1000,17 @@ console.log(JSON.stringify(out.text())); // "42\n"
 console.log(JSON.stringify(err.text())); // ""
 ```
 
-A failure rejects the returned promise after the `commandError` and `error` events have fired, and the thrown value carries the machine-readable code and exit code:
+A failure rejects the returned promise after the `commandError` and `error` events have fired, and the thrown value carries the machine-readable code and exit code. Continuing the program above:
 
 ```typescript
 import { CLIError } from "@libraz/node-cli";
 
 try {
   await buildCli().exec(["add", "1"], { stdout: out.stream, stderr: err.stream });
-} catch (err) {
-  if (err instanceof CLIError) {
-    console.log(err.code); // "MISSING_ARGUMENT"
-    console.log(err.exitCode); // 64
+} catch (error) {
+  if (error instanceof CLIError) {
+    console.log(error.code); // "MISSING_ARGUMENT"
+    console.log(error.exitCode); // 64
   }
 }
 ```

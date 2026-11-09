@@ -72,7 +72,7 @@ The `Extra fields` column holds what each class adds. The fields have these mean
 Two families of messages follow different quoting rules.
 
 - A message about user input puts the user's text in double quotes and leaves names the author defined unquoted: `Unknown option: "--x"`, `Missing required option: --x`, `Command not found: "depoly"`. A quoted string is escaped and made safe for a terminal.
-- A message about programmer misuse follows the form of Node's own argument errors and quotes the author's names too: `The "total" option of progress.bar() must be a finite number. Received -1`.
+- A message about programmer misuse follows the form of Node's own argument errors and quotes the author's names too: `The "total" option of progress.bar() must be a finite number of at least 0. Received -1`.
 
 `CLIErrorCode` is the union of the ten built-in code strings. A bare `CLIError` defaults to `FAILED`, which is not part of the union:
 
@@ -309,7 +309,7 @@ These are bugs to fix in the calling code, not conditions to handle at run time,
 
 An empty `choices` array has a different error depending on where it appears. An option declared with an empty `choices` array fails when the option is defined, with `Error` code `ERR_INVALID_DEFINITION`. `prompt.select` and `prompt.multiselect` called with an empty `choices` array throw `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
-A failure of an asynchronous plugin is wrapped once in an `Error` with code `ERR_PLUGIN_FAILED`, the message `Plugin initialization failed: <message>` and the original value as `cause`. `error` fires once with it, and every later `use()`, `exec()`, `execLine()` and `cli.start()` rejects with the same error. A plugin that throws synchronously inside `use()` throws its own value to the caller instead, and the CLI stays usable.
+A failure of an asynchronous plugin is wrapped once in an `Error` with code `ERR_PLUGIN_FAILED`, the message `Plugin initialization failed: <message>` and the original value as `cause`. `error` fires once with it, and every later `use()` throws the same error, `exec()` and `execLine()` reject with it, and `cli.start()` reports it and exits. A plugin that throws synchronously inside `use()` throws its own value to the caller instead, and the CLI stays usable.
 
 ## Exit codes
 
@@ -346,7 +346,7 @@ Two limits apply:
 
 ## Related pages
 
-- [Commands](commands.md) — `validate`, `cancel`, and the command context
+- [Commands](commands.md) — `validate`, `onCancel`, and the command context
 - [Options](options.md) — where `InvalidOptionError` and `ValidationError` come from
 - [Events and plugins](events-and-plugins.md) — observing failures with `commandError` and `error`
 - [Interactive shell](interactive-shell.md) — Ctrl+C, force-quit, and SIGTERM

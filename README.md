@@ -4,16 +4,18 @@
 [![npm](https://img.shields.io/npm/v/@libraz/node-cli)](https://www.npmjs.com/package/@libraz/node-cli)
 [![codecov](https://codecov.io/gh/libraz/node-cli/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/node-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/libraz/node-cli/blob/main/LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-7-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-%E2%89%A55.4-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=node.js)](https://nodejs.org/)
 
 Zero-dependency, batteries-included CLI framework for Node.js / TypeScript.
+
+📖 **[Documentation](docs/en/introduction.md)** &nbsp;·&nbsp; **[Getting started](docs/en/getting-started.md)**
 
 ![Interactive shell session: launching the CLI, running a deploy command, a progress bar filling, and a spinner resolving to a success line](docs/assets/demo.svg)
 
 Define a command once and it works two ways: as `myapp deploy prod` typed at a shell, and as `deploy prod` typed at your tool's own interactive prompt. Around that sit the parts a command-line tool usually needs — options, subcommands, tab completion, colour, tables, progress bars, prompts and a logger — with no runtime dependencies to install.
 
-## What you get
+## What's inside
 
 - Commands, subcommands, aliases, and typed options with defaults, choices and validation
 - An interactive shell with persistent history, tab completion, pipes, and mode sub-REPLs
@@ -21,7 +23,7 @@ Define a command once and it works two ways: as `myapp deploy prod` typed at a s
 - Lifecycle events and plugins for cross-cutting behaviour
 - TypeScript and ESM first, no production dependencies
 
-## Install
+## Installation
 
 Node.js 22 or later, ESM only. The type definitions need TypeScript 5.4 or later.
 
@@ -78,11 +80,11 @@ Start with [Introduction](docs/en/introduction.md) for the mental model, or [Get
 | The interactive shell | [Interactive shell](docs/en/interactive-shell.md) |
 | Output | [Colour](docs/en/color.md) · [Tables](docs/en/table.md) · [Progress](docs/en/progress.md) · [Prompts](docs/en/prompts.md) · [Logging](docs/en/logging.md) |
 | Extending | [Events and plugins](docs/en/events-and-plugins.md) |
-| Reference | [API reference](docs/en/api-reference.md) · [Examples](docs/en/examples.md) · [Glossary](docs/en/glossary.md) |
+| Reference | [API reference](docs/en/api-reference.md) · [Examples](docs/en/examples.md) · [Glossary](docs/en/glossary.md) · [Migrating from 1.x](docs/en/migration-v2.md) |
 
 Ten runnable examples live in [`examples/`](examples/).
 
-## What it does not do
+## Non-goals
 
 - **ESM only.** There is no separate CommonJS build. Node.js 22.12 and later can `require()` the ES module; earlier 22.x releases need `await import("@libraz/node-cli")`.
 - **No shell completion scripts.** Tab completion works inside the tool's own interactive shell. Completion for bash, zsh or fish is not generated.

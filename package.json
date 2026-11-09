@@ -2,6 +2,7 @@
   "name": "@libraz/node-cli",
   "version": "1.4.2",
   "description": "Zero-dependency, batteries-included CLI framework for Node.js / TypeScript.",
+  "keywords": ["cli", "command-line", "repl", "interactive-shell", "prompts", "progress", "typescript"],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

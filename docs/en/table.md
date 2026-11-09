@@ -171,8 +171,9 @@ Invalid options throw before anything is rendered, always with a `code`:
 | A `width`, `maxWidth`, `gap`, `paddingLeft` or `paddingRight` that is not a number, or a `columns` entry that is not a string or a `ColumnSpec` with a string `key` (including `undefined`) | `TypeError` `ERR_INVALID_ARG_TYPE` |
 | `width` or `maxWidth` of 0 or less, `NaN` or fractional; `width` of `Infinity`; a negative, `NaN`, infinite, fractional or unsafe `gap` or padding | `RangeError` `ERR_INVALID_ARG_VALUE` |
 | An unknown `border` or `align`, a `chars` glyph whose display width is not 1, or an unknown name in `headerStyle` or `borderStyle` | `RangeError` `ERR_INVALID_ARG_VALUE` |
+| A `data` that is not an array, or `options` that is not an object | `TypeError` `ERR_INVALID_ARG_TYPE` |
 
-Values up to 2^32 are accepted for widths and padding; a span larger than 4096 cells is capped when rendering.
+`width` and `maxWidth` accept any integer of 1 or more, and `gap` and the paddings any safe integer of 0 or more; at render time each is capped at 4096 cells.
 
 ## Borders
 

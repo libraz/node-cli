@@ -72,7 +72,7 @@ mycli>
 メッセージの族によって、引用符の規則が異なります。
 
 - 利用者の入力についてのメッセージは、利用者のテキストを二重引用符で囲み、作者が定義した名前は囲みません。`Unknown option: "--x"`、`Missing required option: --x`、`Command not found: "depoly"` のとおりです。引用した文字列はエスケープされ、端末に出力しても安全な形になります。
-- プログラマの誤用についてのメッセージは、Node 自身の引数エラーの形に従い、作者の名前も引用します。`The "total" option of progress.bar() must be a finite number. Received -1` のとおりです。
+- プログラマの誤用についてのメッセージは、Node 自身の引数エラーの形に従い、作者の名前も引用します。`The "total" option of progress.bar() must be a finite number of at least 0. Received -1` のとおりです。
 
 `CLIErrorCode` は組み込みの 10 個のコード文字列のユニオンです。素の `CLIError` の既定値 `FAILED` は、このユニオンに含まれません。
 
@@ -309,7 +309,7 @@ type UsageErrorCode =
 
 空の `choices` 配列は、現れる場所によってエラーが異なります。空の `choices` 配列を宣言したオプションは、オプションを定義した時点で `Error`（code `ERR_INVALID_DEFINITION`）になります。空の `choices` 配列で呼んだ `prompt.select` と `prompt.multiselect` は、code `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
 
-非同期のプラグインの失敗は、code `ERR_PLUGIN_FAILED`、メッセージ `Plugin initialization failed: <メッセージ>`、元の値を `cause` とする `Error` に一度だけ包まれます。`error` はそれで一度だけ発火し、以後の `cli.use()`、`cli.exec()`、`cli.execLine()`、`cli.start()` は同じエラーで reject されます。`use()` の中で同期的に例外を投げたプラグインは、代わりにその値を呼び出し元へ投げ、CLI は使える状態のままです。
+非同期のプラグインの失敗は、code `ERR_PLUGIN_FAILED`、メッセージ `Plugin initialization failed: <メッセージ>`、元の値を `cause` とする `Error` に一度だけ包まれます。`error` はそれで一度だけ発火し、以後の `cli.use()` は同じエラーを投げ、`cli.exec()` と `cli.execLine()` は同じエラーで reject され、`cli.start()` はそれを報告して終了します。`use()` の中で同期的に例外を投げたプラグインは、代わりにその値を呼び出し元へ投げ、CLI は使える状態のままです。
 
 ## 終了コード
 

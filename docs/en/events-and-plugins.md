@@ -29,7 +29,7 @@ On a successful run of a resolved command:
 5. the action runs,
 6. `afterExecute` fires.
 
-A failure anywhere from step 1 to step 5 skips `afterExecute`.
+A failure in step 1, 2, 3 or 5 skips `afterExecute`. A `beforeExecute` listener that throws is reported through `error`; the action and `afterExecute` still run.
 
 ### Registering and removing handlers
 
@@ -90,7 +90,7 @@ Error in error handler: <message>
 - unbalanced quoting or another parse failure,
 - an unrecognized command,
 - a `fallback` handler throwing,
-- a `cancel` handler rejecting,
+- an `onCancel` handler rejecting,
 - another event handler throwing,
 - an asynchronous plugin failing to initialize (once, with the `ERR_PLUGIN_FAILED` error; see [When a plugin fails](#when-a-plugin-fails)).
 
@@ -167,7 +167,7 @@ type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
 ```typescript
 interface PluginContext {
-  command<D extends string>(definition: D): CommandBuilderFor<D>;
+  command(definition: string): CommandBuilder; // typed like cli.command
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   fallback(handler: FallbackHandler): this;

@@ -4,10 +4,12 @@
 [![npm](https://img.shields.io/npm/v/@libraz/node-cli)](https://www.npmjs.com/package/@libraz/node-cli)
 [![codecov](https://codecov.io/gh/libraz/node-cli/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/node-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/libraz/node-cli/blob/main/LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-7-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-%E2%89%A55.4-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=node.js)](https://nodejs.org/)
 
 Node.js / TypeScript 向けの、依存パッケージゼロで一通り揃った CLI フレームワークです。
+
+📖 **[ドキュメント](docs/ja/introduction.md)** &nbsp;·&nbsp; **[入門](docs/ja/getting-started.md)**
 
 ![インタラクティブシェルのセッション。CLI の起動、deploy コマンドの実行、プログレスバーの進行、スピナーが成功行に変わるまで](docs/assets/demo.svg)
 
@@ -78,11 +80,11 @@ Hello, World!
 | 対話シェル | [対話シェル](docs/ja/interactive-shell.md) |
 | 出力 | [カラー](docs/ja/color.md) · [テーブル](docs/ja/table.md) · [プログレス](docs/ja/progress.md) · [プロンプト](docs/ja/prompts.md) · [ロギング](docs/ja/logging.md) |
 | 拡張する | [イベントとプラグイン](docs/ja/events-and-plugins.md) |
-| リファレンス | [API リファレンス](docs/ja/api-reference.md) · [実例](docs/ja/examples.md) · [用語集](docs/ja/glossary.md) |
+| リファレンス | [API リファレンス](docs/ja/api-reference.md) · [実例](docs/ja/examples.md) · [用語集](docs/ja/glossary.md) · [1.x からの移行](docs/ja/migration-v2.md) |
 
 実行可能なサンプルが [`examples/`](examples/) に 10 本あります。
 
-## 対象外のこと
+## 含まないもの（Non-goals）
 
 - **ESM 専用。** CommonJS 用の別ビルドはありません。Node.js 22.12 以降なら ES モジュールを `require()` で読み込めます。それ以前の 22.x では `await import("@libraz/node-cli")` を使ってください。
 - **シェル補完スクリプトの生成なし。** タブ補完はツール自身の対話シェル内で動作します。bash・zsh・fish 向けの補完スクリプトは生成しません。

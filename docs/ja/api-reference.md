@@ -59,6 +59,8 @@ function createCLI(options: CLIOptions): CLI
 
 ### `CLI`
 
+このページのリストでは、`command()` と `option()` のシグネチャを簡略化しています。リテラル文字列から `ctx.args` と `ctx.options` を推論するジェネリクスのパラメーターは省いてあります（[引数とオプションの型付け](#引数とオプションの型付け)を参照してください）。
+
 ```typescript
 interface CLI {
   command(definition: string): CommandBuilder; // A and O are inferred from a literal definition
@@ -351,7 +353,8 @@ type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonl
 | `Logger.setLevel()` | ロガー自身。呼び出しを連鎖できます。 |
 | `Logger.child()` | 新しい `Logger`。 |
 | `Logger.flush()` | Promise。 |
-| `Bar`、`Spinner`、`MultiBar` のメソッド | `void`。 |
+| `MultiBar.add()` | `Bar`。 |
+| `Bar`、`Spinner`、`MultiBar` のそれ以外のメソッド | `void`。 |
 
 同じ対象への 2 回目の呼び出しがどうなるかは、メソッドによって異なります。
 
@@ -861,7 +864,7 @@ interface SanitizeTerminalTextOptions {
 function isTTY(value: unknown): boolean
 ```
 
-値が、`isTTY` が `true` のオブジェクトかどうかを判定します。オブジェクトでない値を含め、それ以外の値は `false` になります。[TTY](glossary.md#tty) を参照してください。
+値が、`isTTY` が `true` のオブジェクトかどうかを判定します。オブジェクトでない値を含め、それ以外の値は `false` になります。[TTY](glossary.md#tty端末) を参照してください。
 
 解説は[色](color.md)にあります。
 
@@ -1007,7 +1010,7 @@ progress.bar(options: BarOptions): Bar
 | `empty` | `string` | `"░"` | 空の部分の文字。表示幅は `1` でなければなりません。 |
 | `format` | `(state: BarState) => string` | — | 描画される行全体を置き換えます。そのため `width`、`filled`、`empty`、`style` は使われず、`label` は既定の結果メッセージにだけ使われます。結果は端末で安全な 1 行にまとめられます。例外を投げると、バー（またはそのグループ）は端末を解放して何もしなくなり、エラーは再描画を引き起こした呼び出しから伝わります。 |
 | `stderr` | `Writable` | `process.stderr` | 出力先のストリーム。 |
-| `style` | [`StyleSpec`](#style-types) | — | バーに適用するスタイル。`"green"` や `"bold.cyan"` など。未知の名前は作成時に投げます。 |
+| `style` | [`StyleSpec`](#スタイルの型) | — | バーに適用するスタイル。`"green"` や `"bold.cyan"` など。未知の名前は作成時に投げます。 |
 
 不正なオプションは、コード `ERR_INVALID_ARG_TYPE` の `TypeError` か、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
 
@@ -1062,7 +1065,7 @@ progress.spinner(options?: SpinnerOptions): Spinner
 | `frames` | `readonly string[]` | 点字のドット | アニメーションのフレーム。配列でない値や文字列でない要素は `TypeError`、空の配列は `RangeError` を投げます。 |
 | `intervalMs` | `number` | `80` | フレーム間のミリ秒数。正の有限な数でなければなりません。 |
 | `stderr` | `Writable` | `process.stderr` | 出力先のストリーム。 |
-| `style` | [`StyleSpec`](#style-types) | — | フレームに適用するスタイル。未知の名前は作成時に投げます。 |
+| `style` | [`StyleSpec`](#スタイルの型) | — | フレームに適用するスタイル。未知の名前は作成時に投げます。 |
 
 #### `Spinner`
 
@@ -1374,7 +1377,7 @@ type CLIErrorCode =
 
 `ParseError` が扱うのは、閉じていない引用符（`quote` が `"single"` か `"double"` で、どちらかを示します）、空のパイプまたは末尾のパイプ、サポートされないリダイレクト演算子です。コマンドが解決される前に投げられるため、登録済みの `fallback` ハンドラには、エラーが投げられる代わりに入力が渡されます。
 
-ユーザー入力に関するクラスの終了コードは、コマンドラインの使い方の誤りに対する慣例のステータスである `64` です。`InputEndedError` は `66`（入力なし）、`CancelledError` は、中断されたプログラムに対する慣例のステータスである `130` です。素の `CLIError` の既定値は `1` で、アクションが投げたそれ以外の値も `1` です。対話シェルの SIGTERM の経路は `143` で終了します。[終了コード](glossary.md#exit-code)を参照してください。
+ユーザー入力に関するクラスの終了コードは、コマンドラインの使い方の誤りに対する慣例のステータスである `64` です。`InputEndedError` は `66`（入力なし）、`CancelledError` は、中断されたプログラムに対する慣例のステータスである `130` です。素の `CLIError` の既定値は `1` で、アクションが投げたそれ以外の値も `1` です。対話シェルの SIGTERM の経路は `143` で終了します。[終了コード](glossary.md#終了コードexit-code)を参照してください。
 
 クラス名 `ValidationError` と `ParseError` は、コード `VALIDATION_FAILED` と `PARSE_FAILED` に対応します。ほかのコードはすべて、クラス名を大文字のスネークケースにしたものです。
 

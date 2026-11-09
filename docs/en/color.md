@@ -150,7 +150,7 @@ When color is disabled, by `NO_COLOR`, `FORCE_COLOR=0` or `setColorEnabled(false
 
 ## String utilities
 
-These functions exist because a string that contains escape sequences cannot be measured or cut with the ordinary string methods. `"\x1b[31mred\x1b[39m".length` is 14, `"日本".length` is 2 but occupies four terminal columns, and slicing either one can cut an escape sequence or a character in half.
+These functions exist because a string that contains escape sequences cannot be measured or cut with the ordinary string methods. `"\x1b[31mred\x1b[39m".length` is 13, `"日本".length` is 2 but occupies four terminal columns, and slicing either one can cut an escape sequence or a character in half.
 
 ### `stringWidth(text): number`
 

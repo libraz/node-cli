@@ -170,7 +170,7 @@ The shell tries these in order and uses the first that produces candidates:
 2. **Subcommand names** of the command matched so far.
 3. **An inline option value** — the part after `=` in `--opt=value` or `-o=value`.
 4. **The value of a preceding option** — the word after a value-taking flag, as in `--region <Tab>`.
-5. **Option flags** of the matched command, including `--no-` forms for boolean options.
+5. **Option flags** of the matched command, including `--no-` forms for boolean options. They are offered when the word starts with `-` or, for a command without its own completer, at a fresh word position.
 6. **The command's own completer**, registered with `.completer()`.
 
 Hidden options are never offered. Neither are hidden subcommands, nor subcommands that could never be reached because the parent command's own positional arguments would consume them first.
@@ -217,7 +217,7 @@ cli
   .command("connect <host>")
   .option("--port <port>", { type: "number" })
   .completer(async (ctx) => {
-    // The framework already offers flags; only host names are left to add.
+    // Flags are offered by the framework once the word starts with `-`; this completer supplies the host names.
     if (ctx.current.startsWith("-")) return [];
     const hosts = await loadKnownHosts();
     // First Tab: the two most common hosts. Second Tab and beyond: all of them.

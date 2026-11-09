@@ -161,7 +161,7 @@ process.exitCode = code;
 
 ### 8. `use()` は同期 plugin のエラーをその場で投げる
 
-同期のプラグインは `use()` の中で実行され、送出されたエラーは `use()` の呼び出し元に届きます。送出より前に行った登録は残ります。非同期のプラグイン、および保留中の非同期プラグインの後ろに登録したプラグインは、従来どおりキューに積まれ、その失敗は `start()`、`exec()`、`execLine()` から報告されます。報告されるのは、`code: "ERR_PLUGIN_FAILED"` を持ち、元の値を `cause` に入れた `Error` に一度だけ包んだものです。
+同期のプラグインは `use()` の中で実行され、送出されたエラーは `use()` の呼び出し元に届きます。送出より前に行った登録は残ります。非同期のプラグイン、および保留中の非同期プラグインの後ろに登録したプラグインは、従来どおりキューに積まれ、その失敗は後から報告されます。報告されるのは、`code: "ERR_PLUGIN_FAILED"` を持ち、元の値を `cause` に入れた `Error` に一度だけ包んだものです。以後の `use()` はそれを投げ、`exec()` と `execLine()` はそれで reject され、`start()` はそれを報告して 1 を返します。
 
 ```typescript
 // before
@@ -515,7 +515,7 @@ cli.command("check").validate(() => {
 
 ### 22. キャンセルは `CancelledError` で reject される
 
-`exec()`、`execLine()`、`start()` は、abort 済みの `signal` やプロンプトでコマンドがキャンセルされたとき、`CancelledError` で reject されます。`cause` は signal の reason です。キャンセルでは `commandError` も `error` も発火しません。すでに abort 済みの signal を渡すと、プラグインの初期化やコマンドのフックが走る前に reject されます。`exec()` と `execLine()` は `SIGINT` を購読しなくなったので、キャンセルは `options.signal` で行います。`SIGINT` の処理（1 回目でキャンセル、2 回目で強制終了）は `start()` と対話シェルが持ちます。
+`exec()` と `execLine()` は、abort 済みの `signal` やプロンプトでコマンドがキャンセルされたとき、`CancelledError` で reject されます。`cause` は signal の reason です。`start()` は reject されず、終了コード 130 を返します。キャンセルでは `commandError` も `error` も発火しません。すでに abort 済みの signal を渡すと、プラグインの初期化やコマンドのフックが走る前に reject されます。`exec()` と `execLine()` は `SIGINT` を購読しなくなったので、キャンセルは `options.signal` で行います。`SIGINT` の処理（1 回目でキャンセル、2 回目で強制終了）は `start()` と対話シェルが持ちます。
 
 ```typescript
 // before

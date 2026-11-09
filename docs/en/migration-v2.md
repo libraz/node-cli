@@ -161,7 +161,7 @@ process.exitCode = code;
 
 ### 8. `use()` throws synchronous plugin errors in place
 
-A synchronous plugin runs inside `use()`, and an error it throws reaches the caller of `use()`. Registrations made before the throw stay. An asynchronous plugin, or one registered behind a pending asynchronous plugin, is still queued, and its failure still surfaces from `start()`, `exec()` or `execLine()`, wrapped once in an `Error` with `code: "ERR_PLUGIN_FAILED"` and the original value as `cause`.
+A synchronous plugin runs inside `use()`, and an error it throws reaches the caller of `use()`. Registrations made before the throw stay. An asynchronous plugin, or one registered behind a pending asynchronous plugin, is still queued, and its failure still surfaces later, wrapped once in an `Error` with `code: "ERR_PLUGIN_FAILED"` and the original value as `cause`: a later `use()` throws it, `exec()` and `execLine()` reject with it, and `start()` reports it and resolves to 1.
 
 ```typescript
 // before
@@ -515,7 +515,7 @@ cli.command("check").validate(() => {
 
 ### 22. Cancellation rejects with `CancelledError`
 
-`exec()`, `execLine()` and `start()` reject with `CancelledError` when the command was cancelled, from an aborted `signal` or from a prompt. The `cause` is the signal's reason. A cancellation does not fire `commandError` or `error`. A signal that is already aborted rejects before any plugin initialization or command hook runs. `exec()` and `execLine()` no longer listen for `SIGINT`; cancel with `options.signal`. `start()` and the interactive shell keep the `SIGINT` handling: the first press cancels, the second forces exit.
+`exec()` and `execLine()` reject with `CancelledError` when the command was cancelled, from an aborted `signal` or from a prompt. The `cause` is the signal's reason. `start()` does not reject: it resolves to exit code 130. A cancellation does not fire `commandError` or `error`. A signal that is already aborted rejects before any plugin initialization or command hook runs. `exec()` and `execLine()` no longer listen for `SIGINT`; cancel with `options.signal`. `start()` and the interactive shell keep the `SIGINT` handling: the first press cancels, the second forces exit.
 
 ```typescript
 // before

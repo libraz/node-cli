@@ -40,11 +40,13 @@ const log = createLogger({ stderr: process.stdout });
 
 | フィールド | 型 | 既定値 | 挙動 |
 | --- | --- | --- | --- |
-| `level` | `LogLevel` | `"info"` | 出力する最小のレベル。これ以外の値は `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` になり、`setLevel` に渡した場合も同じです。 |
+| `level` | `LogLevel` | `"info"` | 出力する最小のレベル。`LogLevel` でない文字列は `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError`、文字列でない値は `code: "ERR_INVALID_ARG_TYPE"` を持つ `TypeError` になります。`setLevel` も同じ検証をします。 |
 | `prefix` | `string` | — | メッセージの前に `[prefix]` の形で描画されます。 |
 | `timestamp` | `boolean` | `false` | ローカル時刻を `HH:MM:SS` で付けます。 |
 | `stderr` | `Writable` | `process.stderr` | すべてのレベルの出力先。 |
-| `bufferLimit` | `number` | `1000` | ストリームが詰まっている間に待機させる行数。待ち行列がいっぱいになると最も古い行を捨て、`0` ではストリームが詰まっている間に書かれた行を、解消するまですべて捨てます。非負の安全な整数である必要があり、そうでなければ `code: "ERR_INVALID_ARG_VALUE"` を持つ `RangeError` を投げます。 |
+| `bufferLimit` | `number` | `1000` | ストリームが詰まっている間に待機させる行数。待ち行列がいっぱいになると最も古い行を捨て、`0` ではストリームが詰まっている間に書かれた行を、解消するまですべて捨てます。非負の安全な整数である必要があります。数値でなければ `TypeError`（`ERR_INVALID_ARG_TYPE`）、数値でも不正なら `RangeError`（`ERR_INVALID_ARG_VALUE`）を投げます。 |
+
+型が正しくない `prefix`、`timestamp`、`stderr` を渡すと、`code: "ERR_INVALID_ARG_TYPE"` を持つ `TypeError` を投げます。
 
 ## レベル
 

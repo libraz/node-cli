@@ -59,6 +59,8 @@ Constructs a `CLI`. It is the only entry point; the class itself is not exported
 
 ### `CLI`
 
+The `command()` and `option()` signatures in the listings of this page are simplified: the generic parameters that infer `ctx.args` and `ctx.options` from literal strings are omitted (see [Typed arguments and options](#typed-arguments-and-options)).
+
 ```typescript
 interface CLI {
   command(definition: string): CommandBuilder; // A and O are inferred from a literal definition
@@ -351,7 +353,8 @@ Configuration methods return `this`, so calls chain: `CLI.on`, `off`, `fallback`
 | `Logger.setLevel()` | The logger, so calls chain. |
 | `Logger.child()` | A new `Logger`. |
 | `Logger.flush()` | A promise. |
-| Methods of `Bar`, `Spinner` and `MultiBar` | `void`. |
+| `MultiBar.add()` | A `Bar`. |
+| Other methods of `Bar`, `Spinner` and `MultiBar` | `void`. |
 
 What a second call does with the same target depends on the method.
 

@@ -16,7 +16,7 @@ Major release. The public interface is renamed and reshaped so that one concept 
 - `new CLI()` is `createCLI()`, and `name` is required: letters, digits, `.`, `_` and `-`, starting with a letter or digit. `CLI` and `CommandBuilder` are exported as types only; `logger()` is `createLogger()`.
 - `cli.exec()` takes an argument array only. A command line string goes to the new `cli.execLine()`: `cli.exec("a b | c")` → `cli.execLine("a b | c")`. `exec("x")` and `execLine(["x"])` throw `TypeError`.
 - The `CLI` setters `prompt`, `description`, `banner`, `history`, `historySize` and `historyFilter` are removed. Pass the values in `createCLI({ ... })`, where `historySize`, `historyFilter` and `historyFile` are validated immediately and `~` / `~/` in `historyFile` expands to the home directory.
-- `start()` resolves to the exit code (`Promise<number>`). `use()` throws a synchronous plugin's error in place; a plugin whose asynchronous initialization fails rejects `use()`, `exec()`, `execLine()` and `start()` with one `Error` (`code: "ERR_PLUGIN_FAILED"`, the original value as `cause`).
+- `start()` resolves to the exit code (`Promise<number>`). `use()` throws a synchronous plugin's error in place; a plugin whose asynchronous initialization fails produces one `Error` (`code: "ERR_PLUGIN_FAILED"`, the original value as `cause`): a later `use()` throws it, `exec()` and `execLine()` reject with it, and `start()` reports it on stderr and resolves to 1.
 - `cli.catch()` is `cli.fallback()`, `PluginContext.catch` is `fallback`, and `CatchContext` is `FallbackContext` (now with `stdin`, `signal` and `rawArgv`).
 - Top level: `--help <cmd>` and `-h <cmd>` print that command's help. An unknown top-level flag, and `--version` without a configured version, is `UnknownOptionError` (was `Command not found`). The command list always shows `-h, --help`, and `Shell commands` appears only in the interactive shell.
 - Commands and aliases are limited to letters and digits joined by single dashes; others throw `ERR_INVALID_DEFINITION`.
@@ -35,7 +35,7 @@ Major release. The public interface is renamed and reshaped so that one concept 
 - Error constructors take an options object: `new CLIError(message, { code?, exitCode?, cause? })` (`code` defaults to `"FAILED"`, `exitCode` is an integer from 1 to 255). `code` and `exitCode` are `readonly`; `isCancellationError` requires the signal; `formatErrorMessage` takes no signal and returns terminal-safe, possibly multi-line text.
 - `PromptCancelError` is `CancelledError`. Codes are named by state: `PROMPT_CANCELLED` → `CANCELLED`, `VALIDATION_ERROR` → `VALIDATION_FAILED`, `PARSE_ERROR` → `PARSE_FAILED`. `ExtraArgumentError.extra` is removed; `extras` lists every surplus argument.
 - Errors caused by user input exit with 64 (was 1); `InputEndedError` exits with 66 and `CancelledError` with 130.
-- Cancellation rejects `exec()`, `execLine()` and `start()` with `CancelledError` (`cause` is the signal's reason) and fires no `commandError` or `error` event; a signal that is already aborted rejects before dispatch. `exec()` and `execLine()` no longer listen for `SIGINT`: cancel with `options.signal`.
+- Cancellation rejects `exec()` and `execLine()` with `CancelledError` (`cause` is the signal's reason; `start()` resolves to 130) and fires no `commandError` or `error` event; a signal that is already aborted rejects before dispatch. `exec()` and `execLine()` no longer listen for `SIGINT`: cancel with `options.signal`.
 - Programmer mistakes throw `TypeError`, `RangeError` or `Error` with a `UsageErrorCode` `code`.
 
 #### Prompts
@@ -47,9 +47,9 @@ Major release. The public interface is renamed and reshaped so that one concept 
 #### Progress and logger
 
 - The output option of `bar`, `spinner`, `multi` and `createLogger` is `stderr` (was `stream`), so a context can be passed directly: `{ stream: ctx.stderr }` → `{ ...ctx }`. `color` is `style`. `MultiBar.add()` takes no output option.
-- `finish()` is `succeed()`; `stop()` keeps the last frame; `Spinner.start()` is removed and drawing starts at creation; `update()` is `setLabel()`; `interval` is `intervalMs`; `BarState` fields are renamed and `readonly`.
+- `finish()` is `succeed()`; `stop()` keeps the last frame; `Spinner.start()` is removed and drawing starts at creation; `Spinner.update()` is `setLabel()`; `interval` is `intervalMs`; `BarState` fields are renamed and `readonly`.
 - Invalid `total`, unknown `style`, a `filled` or `empty` wider than one column and a busy output throw at creation. Non-TTY bars and multi-bars write one result line, and `TERM=dumb` counts as non-TTY.
-- Indicators created while a command runs are released when that command ends; other commands' indicators stay. `progress.releaseAll()` releases every indicator.
+- Indicators created while a command or mode action runs are released when it ends; other commands' indicators stay. `progress.releaseAll()` releases every indicator.
 - Status-line symbols follow the terminal and colours follow the colour policy: a TTY with `NO_COLOR` shows `✔`/`✖`/`⚠` (was `[OK]`/`[ERROR]`/`[WARN]`), and a non-TTY with `FORCE_COLOR` shows coloured `[OK]`/`[ERROR]`/`[WARN]` (was symbols).
 
 #### Tables and colour
@@ -65,8 +65,8 @@ Major release. The public interface is renamed and reshaped so that one concept 
 
 #### Package root
 
-- Renamed: `streamIsTTY` → `isTTY`, `ModeConfig` → `ModeOptions`, `PromptCancelError` → `CancelledError`.
-- Removed: `stripOptionPrefix`, `splitPipes`, `activePipeSegment`, `maskInput`, `restoreCursor`, top-level `releaseAll`, `resetColorEnabled`, `CompletionResult`, `TableStyle`, `CatchContext`, `PromptBaseOptions`, `ExecOptions`.
+- Renamed: `streamIsTTY` → `isTTY`, `ModeConfig` → `ModeOptions`, `PromptCancelError` → `CancelledError`, `PromptBaseOptions` → `PromptOptions`.
+- Removed: `stripOptionPrefix`, `splitPipes`, `activePipeSegment`, `maskInput`, `restoreCursor`, top-level `releaseAll`, `resetColorEnabled`, `CompletionResult`, `TableStyle`, `CatchContext`, `ExecOptions`.
 - The type definitions need TypeScript 5.4 or later.
 
 ### Added
@@ -77,7 +77,7 @@ Major release. The public interface is renamed and reshaped so that one concept 
 - `exec()` accepts an array of arguments and a `StdioOptions` object; `CommandStreams`, `StdioOptions`, `ModeContext` and named handler types (`Plugin`, `FallbackHandler`, `HistoryFilter`, `CommandValidator`, `CancelHandler`) are exported.
 - Option `parse` and `validate`, command `validate`, prompt `validate`, `fallback` and completers may be asynchronous; option callbacks receive typed values.
 - `isBuiltinCLIError`, `BuiltinCLIError`, `UsageErrorCode`, `ValidationError.value`, `UnknownOptionError.optionName` and `flag`, and a `usage` hint on every error raised while resolving a command.
-- `Bar.setLabel()`, `TableOptions.stream` (colour detection only), `ColumnSpec`.
+- `Bar.setLabel()`, `TableOptions.stream` (colour detection only), `ColumnSpec`, `MultiBarOptions`, `SanitizeTerminalTextOptions`.
 - Mode `completer` and `CommandBuilder.completer()` accept a static `readonly string[]`.
 - Configuring methods (`PluginContext.on` / `off` / `fallback`, `Logger.setLevel`, `Shell.setPrompt`, `enterMode`, `exitMode`) return `this`.
 

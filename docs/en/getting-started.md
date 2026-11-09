@@ -172,7 +172,7 @@ The name passed to `npm unlink -g` is the **package** name from `package.json`, 
 
 In order:
 
-1. Any registered plugins are awaited. A plugin that throws is fatal: the error is reported, the `exit` event fires, and no command runs.
+1. Any registered plugins are awaited. An asynchronous plugin that rejects is fatal: `cli.start()` reports the error (exit code 1), the `exit` event fires, and no command runs. A plugin that throws synchronously throws from `cli.use()` instead.
 2. The argument list is `process.argv.slice(2)` — everything typed after the command name — unless an array was passed to `cli.start()` explicitly.
 3. If arguments were supplied but none of them carries content (all empty strings, or exactly the end-of-options marker `--`), the help index is printed and `cli.start()` resolves to 0.
 4. If there is at least one argument, that one command runs. This is **direct mode**.

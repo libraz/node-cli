@@ -345,7 +345,7 @@ Removal takes the command's whole subtree with it, including the aliases registe
 
 ## The command lifecycle
 
-Each stage below runs only if the previous one succeeded. A failure at any stage skips the action and reports the error.
+Stages 1 to 6 run only if the previous one succeeded; a failure in any of them skips the action and reports the error. A listener that throws in stage 7 or 9 is reported through `error` and does not stop the run.
 
 ![Command lifecycle as a left-to-right flow: raw input is tokenized, the command path is matched against the registry, positional arguments are bound, options are parsed, options are resolved, the command validator runs, the beforeExecute event is emitted, the action runs, and the afterExecute event is emitted. A failure branch leaves any stage from argument binding onwards and joins a shared path that emits commandError and then error before the error is rethrown.](../assets/command-lifecycle.svg)
 
@@ -359,7 +359,7 @@ Each stage below runs only if the previous one succeeded. A failure at any stage
 8. **action** — the command's action runs.
 9. **afterExecute** — the event is emitted once the action resolves.
 
-When any stage from step 3 onwards throws, the `commandError` event fires with the error and the context, then the `error` event fires, and the error is rethrown. A cancellation is the exception: it fires neither event. Events are described in [Events and plugins](events-and-plugins.md).
+When step 3, 4, 5, 6 or 8 throws, the `commandError` event fires with the error and the context, then the `error` event fires, and the error is rethrown. A cancellation is the exception: it fires neither event. A listener that throws in step 7 or 9 fires only `error`, and the command still completes. Events are described in [Events and plugins](events-and-plugins.md).
 
 ### Running a command from code
 

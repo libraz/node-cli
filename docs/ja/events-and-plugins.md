@@ -29,7 +29,7 @@
 5. アクションが実行されます
 6. `afterExecute` が発生します
 
-手順 1 から手順 5 のどこかで失敗すると、`afterExecute` は飛ばされます。
+手順 1、2、3、5 のいずれかで失敗すると、`afterExecute` は飛ばされます。`beforeExecute` のリスナーが例外を投げた場合は `error` で報告され、アクションと `afterExecute` は実行されます。
 
 ### ハンドラの登録と解除
 
@@ -90,7 +90,7 @@ Error in error handler: <message>
 - 引用符の対応が取れていないなど、解析の失敗
 - 認識できないコマンド
 - `fallback` ハンドラが投げた例外
-- `cancel` ハンドラのPromiseの失敗
+- `onCancel` ハンドラのPromiseの失敗
 - 別のイベントハンドラが投げた例外
 - 非同期プラグインの初期化の失敗（`ERR_PLUGIN_FAILED` のエラーで一度だけ。[プラグインが失敗した場合](#プラグインが失敗した場合)を参照）
 
@@ -167,7 +167,7 @@ type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
 ```typescript
 interface PluginContext {
-  command<D extends string>(definition: D): CommandBuilderFor<D>;
+  command(definition: string): CommandBuilder; // typed like cli.command
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   fallback(handler: FallbackHandler): this;

@@ -171,8 +171,9 @@ process.stderr.write(
 | 数値でない `width`、`maxWidth`、`gap`、`paddingLeft`、`paddingRight`。または、文字列でも、文字列の `key` を持つ `ColumnSpec` でもない `columns` の要素（`undefined` を含む） | `TypeError` `ERR_INVALID_ARG_TYPE` |
 | 0 以下・`NaN`・小数の `width` と `maxWidth`。`Infinity` の `width`。負数・`NaN`・無限大・小数・安全でない整数の `gap` と余白 | `RangeError` `ERR_INVALID_ARG_VALUE` |
 | 未知の `border` や `align`、表示幅が 1 でない `chars` の文字、または `headerStyle` や `borderStyle` の未知の名前 | `RangeError` `ERR_INVALID_ARG_VALUE` |
+| 配列でない `data`、またはオブジェクトでない `options` | `TypeError` `ERR_INVALID_ARG_TYPE` |
 
-幅と余白は 2^32 まで受け付けます。描画時には 4096 セルを上限に丸められます。
+`width` と `maxWidth` は 1 以上の任意の整数、`gap` と余白は 0 以上の任意の安全な整数を受け付けます。描画時には、どれも 4096 セルを上限に丸められます。
 
 ## 罫線
 

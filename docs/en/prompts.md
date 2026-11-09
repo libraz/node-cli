@@ -55,6 +55,8 @@ Every method accepts these, through `PromptOptions<T>`:
 
 `required` is not shared: it exists only on `text` and `password`.
 
+A `message` that is not a string, a `validate` that is not a function, `choices` that is not an array, or a `confirm` `default` that is not a boolean throws `TypeError` with code `ERR_INVALID_ARG_TYPE` before anything is written.
+
 `message` and `marker` are rendered on one line: a newline becomes a space and cursor-control sequences are removed. To print a blank line before the question, write it to the stderr stream first.
 
 ### `validate` does not reject the promise
@@ -80,7 +82,7 @@ Returns `Promise<string>`.
 
 | Field | Default | Behavior |
 | --- | --- | --- |
-| `default` | — | Value used when the submission is empty. |
+| `default` | — | Value used when the submission is empty. Shown after the question as ` (value)`. |
 | `placeholder` | — | Example text shown as ` (e.g. …)` after the question, only when there is no `default`. |
 | `trim` | `true` | Strips leading and trailing whitespace from the answer. |
 | `required` | `true` | An empty submission is rejected and the question repeats. |
@@ -137,7 +139,7 @@ Returns `Promise<readonly T[]>`. The result is read-only.
 
 An empty `choices` array, a `min` or `max` that is not a non-negative safe integer, a `min` above `max`, and a `min` above the number of choices all throw `RangeError` (code `ERR_INVALID_ARG_VALUE`) before the question is asked.
 
-Input is comma-separated 1-based numbers. Repeated numbers are **deduplicated before** `min` and `max` are counted, so `1,1,2` counts as two selections. An empty submission uses the defaults.
+Input is comma-separated 1-based numbers. Repeated numbers are **deduplicated before** `min` and `max` are counted, so `1,1,2` counts as two selections. The values come back in the order the numbers were entered (`3,1` returns the third choice first), and an empty submission returns the defaults in choice order.
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -191,7 +193,7 @@ An object that has a `label` but no `value` throws `TypeError` (code `ERR_INVALI
 
 `choices` may be a `readonly` array, so an `as const` list is accepted.
 
-Default matching uses `Object.is` against either the choice's `value` or the choice object itself. It is **not** structural equality: a default written as a fresh object literal will not match an equal-looking choice. Match on a primitive value, or pass the same object reference.
+Default matching uses `Object.is` against the choice's `value`. It is **not** structural equality: a default written as a fresh object literal will not match an equal-looking value. Match on a primitive value, or pass the same object reference that is used as the choice's `value`. A choice descriptor object is not a valid default.
 
 ## Cancellation and ended input
 
@@ -209,7 +211,7 @@ A prompt rejects instead of resolving in each of these situations.
 
 An I/O error on the input stream rejects with the stream's own error, unwrapped.
 
-Detect it with `isCancellationError`:
+Detect a cancellation with `isCancellationError`. It does not match `InputEndedError`; test that with `err instanceof InputEndedError`:
 
 ```ts
 import { isCancellationError, prompt } from "@libraz/node-cli";
@@ -267,7 +269,7 @@ In the [interactive shell](interactive-shell.md), `ctx.stdin` of a command and o
 - **`text` trims by default; `password` does not.**
 - **`text` is required by default.** Pass `default: ""` to accept an empty answer.
 - **`password` has no `default`.**
-- **Default matching is reference-based.** `Object.is`, not deep equality.
+- **Default matching is reference-based on the value.** `Object.is`, not deep equality.
 - **Questions go to stderr.** Pass `{ stderr: process.stdout }` to write them to stdout.
 - **`required` exists on `text` and `password` only.**
 - **Selection numbers are 1-based**, and duplicates in a `multiselect` answer are collapsed before `min` and `max` are checked.

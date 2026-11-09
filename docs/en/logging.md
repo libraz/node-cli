@@ -40,11 +40,13 @@ const log = createLogger({ stderr: process.stdout });
 
 | Field | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `level` | `LogLevel` | `"info"` | Minimum level that is emitted. Any other value throws a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"`, as does the same value passed to `setLevel`. |
+| `level` | `LogLevel` | `"info"` | Minimum level that is emitted. A string that is not a `LogLevel` throws a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"`; a non-string throws a `TypeError` with `code: "ERR_INVALID_ARG_TYPE"`. `setLevel` validates the same way. |
 | `prefix` | `string` | — | Rendered as `[prefix]` before the message. |
 | `timestamp` | `boolean` | `false` | Adds the local time as `HH:MM:SS`. |
 | `stderr` | `Writable` | `process.stderr` | Destination for every level. |
-| `bufferLimit` | `number` | `1000` | Lines queued while the stream is busy. When the queue is full the oldest line is dropped; `0` drops every line written while the stream is busy, until it drains. Must be a non-negative safe integer, or a `RangeError` with `code: "ERR_INVALID_ARG_VALUE"` is thrown. |
+| `bufferLimit` | `number` | `1000` | Lines queued while the stream is busy. When the queue is full the oldest line is dropped; `0` drops every line written while the stream is busy, until it drains. Must be a non-negative safe integer: a non-number throws a `TypeError` (`ERR_INVALID_ARG_TYPE`), any other invalid number a `RangeError` (`ERR_INVALID_ARG_VALUE`). |
+
+A `prefix`, `timestamp` or `stderr` of the wrong type throws a `TypeError` with `code: "ERR_INVALID_ARG_TYPE"`.
 
 ## Levels
 

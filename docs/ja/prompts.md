@@ -55,6 +55,8 @@ cli.command("init").action(async (ctx) => {
 
 `required` は共通ではありません。`text` と `password` にだけあります。
 
+文字列でない `message`、関数でない `validate`、配列でない `choices`、真偽値でない `confirm` の `default` を渡すと、何かを書き出す前にコード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
+
 `message` と `marker` は1行で描画します。改行は空白に置き換わり、カーソル制御シーケンスは取り除かれます。質問の前に空行を出したいときは、先に stderr のストリームへ書いてください。
 
 ### `validate` は Promise を拒否しません
@@ -80,7 +82,7 @@ const port = await prompt.text("Port:", {
 
 | フィールド | 既定値 | 挙動 |
 | --- | --- | --- |
-| `default` | — | 入力が空だったときに使う値。 |
+| `default` | — | 入力が空だったときに使う値。質問の後ろに ` (値)` の形で表示されます。 |
 | `placeholder` | — | 質問の後ろに ` (e.g. …)` の形で表示する例。`default` がないときだけ表示されます。 |
 | `trim` | `true` | 答えの前後の空白を取り除きます。 |
 | `required` | `true` | 空の入力は拒否され、質問を繰り返します。 |
@@ -137,7 +139,7 @@ const env = await prompt.select("Environment:", ["dev", "staging", "prod"], {
 
 `choices` が空の配列のとき、`min` または `max` が非負の安全な整数でないとき、`min` が `max` を超えるとき、`min` が選択肢の数を超えるときは、質問を出す前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
 
-入力はカンマ区切りの 1 始まりの番号です。同じ番号の重複は `min` と `max` を数える **前に** 取り除かれるため、`1,1,2` は2件の選択として数えられます。空の入力は既定値を使います。
+入力はカンマ区切りの 1 始まりの番号です。同じ番号の重複は `min` と `max` を数える **前に** 取り除かれるため、`1,1,2` は2件の選択として数えられます。値は番号を入力した順に返されます（`3,1` なら3番目の選択肢が先頭）。空の入力は、既定値を選択肢の順に返します。
 
 ```ts
 import { prompt } from "@libraz/node-cli";
@@ -191,7 +193,7 @@ const region = await prompt.select("Region:", [
 
 `choices` には `readonly` の配列を渡せるので、`as const` のリストも使えます。
 
-既定値の照合には、選択肢の `value` または選択肢オブジェクト自身に対する `Object.is` を使います。**構造的な等価ではありません。** その場で書いたオブジェクトリテラルを既定値にしても、見た目が同じ選択肢とは一致しません。プリミティブな値で照合するか、同じオブジェクト参照を渡してください。
+既定値の照合には、選択肢の `value` に対する `Object.is` を使います。**構造的な等価ではありません。** その場で書いたオブジェクトリテラルを既定値にしても、見た目が同じ値とは一致しません。プリミティブな値で照合するか、選択肢の `value` に使っているものと同じオブジェクト参照を渡してください。選択肢を記述するオブジェクト自体は既定値として使えません。
 
 ## キャンセルと入力の終了
 
@@ -209,7 +211,7 @@ const region = await prompt.select("Region:", [
 
 入力ストリームの I/O エラーは、包まずにそのストリームのエラーで reject されます。
 
-検出には `isCancellationError` を使います。
+キャンセルの検出には `isCancellationError` を使います。`InputEndedError` には一致しないので、そちらは `err instanceof InputEndedError` で判定します。
 
 ```ts
 import { isCancellationError, prompt } from "@libraz/node-cli";
@@ -267,7 +269,7 @@ const answer = await prompt.text("Quick — a word:", {
 - **`text` は既定で切り詰めますが、`password` は切り詰めません。**
 - **`text` は既定で必須です。** 空の答えを受け入れるには `default: ""` を渡します。
 - **`password` に `default` はありません。**
-- **既定値の照合は参照ベースです。** 深い等価ではなく `Object.is` を使います。
+- **既定値の照合は値に対する参照ベースです。** 深い等価ではなく `Object.is` を使います。
 - **質問は stderr に出ます。** stdout に出したいときは `{ stderr: process.stdout }` を渡します。
 - **`required` があるのは `text` と `password` だけです。**
 - **選択の番号は 1 始まりです。** `multiselect` の答えに含まれる重複は、`min` と `max` の判定前にまとめられます。

@@ -92,7 +92,7 @@ Connecting one command's output to another command's input, written with the `|`
 
 ### Plugin
 
-A function that receives a context object and uses it to register commands, event listeners, or a fallback handler on an existing application. Plugins are attached with `cli.use()` and are awaited before any command runs, so a plugin may load configuration or query a service before deciding what to register. A plugin that throws is fatal: the failure is reported and no command runs. See [Events and plugins](events-and-plugins.md).
+A function that receives a context object and uses it to register commands, event listeners, or a fallback handler on an existing application. Plugins are attached with `cli.use()` and are awaited before any command runs, so a plugin may load configuration or query a service before deciding what to register. An asynchronous plugin that rejects is fatal: `cli.start()` reports the failure and no command runs. A plugin that throws synchronously throws from `cli.use()` instead. See [Events and plugins](events-and-plugins.md).
 
 ### Prompt (input function)
 
