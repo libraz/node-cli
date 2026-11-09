@@ -573,3 +573,138 @@ describe("default output stream", () => {
     expect(stdoutWrites).toEqual([]);
   });
 });
+
+function catchError(fn: () => unknown): Error & { code?: string } {
+  try {
+    fn();
+  } catch (error) {
+    return error as Error & { code?: string };
+  }
+  throw new Error("expected the call to throw");
+}
+
+describe("logger option validation", () => {
+  const typeCases: [string, () => unknown][] = [
+    ["options", () => createLogger(null as never)],
+    ["level", () => createLogger({ level: 1 as never })],
+    ["prefix", () => createLogger({ prefix: 1 as never })],
+    ["timestamp", () => createLogger({ timestamp: "yes" as never })],
+    ["stderr", () => createLogger({ stderr: "x" as never })],
+    ["bufferLimit", () => createLogger({ bufferLimit: "9" as never })],
+  ];
+  it.each(typeCases)("rejects a wrongly typed %s with ERR_INVALID_ARG_TYPE", (_name, fn) => {
+    const error = catchError(fn);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(error.message).toMatch(/^The "\w+" (option|argument) of createLogger\(\)/);
+  });
+
+  it("rejects a bad value with ERR_INVALID_ARG_VALUE and echoes it", () => {
+    const level = catchError(() => createLogger({ level: "verbose" as never }));
+    expect(level).toBeInstanceOf(RangeError);
+    expect(level.code).toBe("ERR_INVALID_ARG_VALUE");
+    expect(level.message).toContain('The "level" option of createLogger() must be one of');
+    expect(level.message).toContain("verbose");
+    const limit = catchError(() => createLogger({ bufferLimit: -1 }));
+    expect(limit.message).toContain('The "bufferLimit" option of createLogger()');
+    expect(limit.message).toContain("Received -1");
+  });
+
+  it("treats undefined option values as omitted", () => {
+    expect(() =>
+      createLogger({
+        level: undefined,
+        prefix: undefined,
+        timestamp: undefined,
+        stderr: createMockStdout(),
+        bufferLimit: undefined,
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a non-string setLevel argument with a TypeError", () => {
+    const log = createLogger({ stderr: createMockStdout() });
+    expect(catchError(() => log.setLevel(1 as never)).code).toBe("ERR_INVALID_ARG_TYPE");
+  });
+});
+
+describe("isLogLevel", () => {
+  it("is exported from the root and narrows only the five levels", async () => {
+    const { isLogLevel } = await import("../src/index.js");
+    for (const level of ["debug", "info", "warn", "error", "silent"]) {
+      expect(isLogLevel(level)).toBe(true);
+    }
+    for (const value of ["INFO", "success", "toString", "", 1, null, undefined, {}]) {
+      expect(isLogLevel(value)).toBe(false);
+    }
+  });
+});
+
+describe("logger status marks", () => {
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const key of ["NO_COLOR", "FORCE_COLOR", "TERM"]) saved[key] = process.env[key];
+    setColorEnabled("auto");
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+    process.env.TERM = "xterm-256color";
+  });
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("uses symbols on a TTY even when colour is off", () => {
+    process.env.NO_COLOR = "1";
+    const stream = createMockTTY();
+    const log = createLogger({ stderr: stream, level: "debug" });
+    log.success("s");
+    log.error("e");
+    log.warn("w");
+    expect(stream.getOutput()).toBe("✔ s\n✖ e\n⚠ w\n");
+  });
+
+  it("uses coloured symbols on a coloured TTY", () => {
+    const stream = createMockTTY();
+    createLogger({ stderr: stream }).success("s");
+    expect(stream.getOutput()).toContain("\x1b[32m✔");
+  });
+
+  it("uses coloured ASCII marks on a non-TTY under FORCE_COLOR", () => {
+    process.env.FORCE_COLOR = "1";
+    const stream = createMockStdout();
+    createLogger({ stderr: stream }).error("e");
+    expect(stream.getOutput()).toContain("\x1b[");
+    expect(stream.getOutput()).toContain("[ERROR]");
+    expect(stream.getOutput()).not.toContain("✖");
+  });
+
+  it("uses plain ASCII marks on a non-TTY", () => {
+    const stream = createMockStdout();
+    createLogger({ stderr: stream }).success("s");
+    expect(stream.getOutput()).toBe("[OK] s\n");
+  });
+
+  it("uses ASCII marks and no cursor control when TERM=dumb", () => {
+    process.env.TERM = "dumb";
+    const stream = createMockTTY();
+    createLogger({ stderr: stream }).warn("w");
+    expect(stream.getOutput()).toBe("[WARN] w\n");
+  });
+});
+
+describe("logger stream listeners", () => {
+  it("attaches exactly one error and close listener per stream however many loggers share it", () => {
+    const stream = createMockStdout();
+    const before = [stream.listenerCount("error"), stream.listenerCount("close")];
+    const root = createLogger({ stderr: stream });
+    root.child("a").child("b");
+    createLogger({ stderr: stream, prefix: "other" });
+    expect([stream.listenerCount("error"), stream.listenerCount("close")]).toEqual([
+      before[0] + 1,
+      before[1] + 1,
+    ]);
+  });
+});

@@ -1,5 +1,15 @@
 import type { Writable } from "node:stream";
 import { guardCall } from "../guard.js";
+import { isTTY } from "./color.js";
+
+/**
+ * Whether `stream` can draw cursor-addressed frames and status symbols: a TTY
+ * whose `TERM` is not `dumb`. Colour is a separate question answered by
+ * `isColorEnabled`, which honours `FORCE_COLOR` and `NO_COLOR`.
+ */
+export function canAnimate(stream: unknown): boolean {
+  return isTTY(stream) && process.env.TERM !== "dumb";
+}
 
 /**
  * How the renderer that owns a stream's drawn region cooperates with other

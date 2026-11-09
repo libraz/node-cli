@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Writable } from "node:stream";
-import { usageError } from "../errors.js";
+import { describeReceived, usageError } from "../errors.js";
 import { finiteInteger, guardCall, MAX_RENDER_WIDTH } from "../guard.js";
 import {
   type Colorizer,
@@ -10,7 +11,7 @@ import {
   type StyleSpec,
   stringWidth,
 } from "./color.js";
-import { type RegionOwner, setRegionOwner } from "./region.js";
+import { canAnimate, type RegionOwner, setRegionOwner } from "./region.js";
 
 // ── Progress Bar ──
 
@@ -20,38 +21,48 @@ import { type RegionOwner, setRegionOwner } from "./region.js";
 export interface BarOptions {
   /** Total number of units to track. A finite number of at least 0. */
   total: number;
-  /** Optional label displayed before the bar. */
-  label?: string;
+  /** Text displayed before the bar and used as the default result message. Defaults to `""`. */
+  label?: string | undefined;
   /** Width of the bar in characters, from 1 to 4096. Defaults to 30. */
-  width?: number;
-  /** Character used for the filled portion of the bar. Defaults to "█". */
-  filled?: string;
-  /** Character used for the empty portion of the bar. Defaults to "░". */
-  empty?: string;
-  /** Custom format function that receives bar state and returns a display string. */
-  format?: (state: BarState) => string;
-  /** Output stream for rendering. Defaults to process.stderr. */
-  stderr?: Writable;
-  /** Style applied to the bar, such as `"green"` or `"bold.cyan"`. An unknown name throws at creation. */
-  style?: StyleSpec;
+  width?: number | undefined;
+  /** Character for the filled portion of the bar; its display width must be 1. Defaults to `"█"`. */
+  filled?: string | undefined;
+  /** Character for the empty portion of the bar; its display width must be 1. Defaults to `"░"`. */
+  empty?: string | undefined;
+  /**
+   * Custom renderer that receives the bar state and returns the whole line. It
+   * replaces the default line, so `width`, `filled`, `empty` and `style` are not
+   * used; `label` still supplies the default result message. The returned text
+   * is reduced to one terminal-safe line. If it throws, the bar (or the group
+   * that holds it) releases the terminal, becomes inert, and the error
+   * propagates from the call that triggered the redraw. Defaults to the built-in line.
+   */
+  format?: ((state: BarState) => string) | undefined;
+  /** Output stream for rendering. Defaults to `process.stderr`. */
+  stderr?: Writable | undefined;
+  /** Style applied to the bar, such as `"green"` or `"bold.cyan"`. An unknown name throws at creation. Defaults to unstyled. */
+  style?: StyleSpec | undefined;
 }
 
 /**
- * Represents the current state of a progress bar.
+ * A read-only snapshot of a progress bar, passed to {@link BarOptions.format}.
  */
 export interface BarState {
-  /** Current progress value. */
-  current: number;
+  /** Current progress value, from 0 to `total`. */
+  readonly current: number;
   /** Total target value. */
-  total: number;
-  /** Completion percentage (0-100). */
-  percent: number;
+  readonly total: number;
+  /** Completion percentage as an integer from 0 to 100; 100 when `total` is 0. */
+  readonly percent: number;
   /** Elapsed time in milliseconds since the bar was created. */
-  elapsedMs: number;
-  /** Estimated time remaining in milliseconds. */
-  etaMs: number;
+  readonly elapsedMs: number;
+  /**
+   * Estimated time remaining in milliseconds: `Infinity` until some progress has
+   * been made, and 0 once complete. Guard it with `Number.isFinite` before formatting.
+   */
+  readonly etaMs: number;
   /** Current rate of progress (units per second). */
-  ratePerSecond: number;
+  readonly ratePerSecond: number;
 }
 
 /**
@@ -61,17 +72,38 @@ export interface BarState {
  * calling any method afterwards does nothing.
  */
 export interface Bar {
-  /** Sets the progress to the specified absolute value. */
+  /**
+   * Sets the progress to the specified absolute value, clamped to 0..`total`.
+   * A `NaN` or infinite value is ignored and leaves the progress unchanged.
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `current` is not a number.
+   */
   update(current: number): void;
-  /** Increments the progress by the given delta (defaults to 1). */
+  /**
+   * Increments the progress by `delta` (defaults to 1), clamped to 0..`total`.
+   * A `NaN` or infinite result is ignored and leaves the progress unchanged.
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `delta` is not a number.
+   */
   tick(delta?: number): void;
-  /** Completes the bar, replacing it with a `✔` result line of `message ?? label`. */
+  /**
+   * Replaces the label drawn before the bar and used as the default result message.
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `label` is not a string.
+   */
+  setLabel(label: string): void;
+  /** Completes the bar, replacing it with a success line of `message ?? label` (`✔`, or `[OK]` where symbols cannot be drawn). */
   succeed(message?: string): void;
-  /** Stops the bar at its current position and replaces it with a `✖` result line of `message ?? label`. */
+  /** Stops the bar at its current position and replaces it with a failure line of `message ?? label` (`✖`, or `[ERROR]`). */
   fail(message?: string): void;
-  /** Stops the bar at its current position and replaces it with a `⚠` result line of `message ?? label`. */
+  /** Stops the bar at its current position and replaces it with a warning line of `message ?? label` (`⚠`, or `[WARN]`). */
   warn(message?: string): void;
-  /** Leaves the last frame in place and ends the line. Writes nothing on a non-TTY stream. */
+  /**
+   * Leaves the last frame in place and ends the line. Writes nothing on a stream
+   * that cannot animate (non-TTY or `TERM=dumb`). For a bar in a {@link MultiBar},
+   * it freezes that bar's row at its current position; the group's own verbs then
+   * skip the row, and the group keeps drawing the others.
+   */
   stop(): void;
   /** Releases the bar when leaving a `using` scope. */
   [Symbol.dispose](): void;
@@ -83,16 +115,16 @@ export interface Bar {
  * Configuration options for creating a spinner.
  */
 export interface SpinnerOptions {
-  /** Text label displayed next to the spinner. */
-  label?: string;
-  /** Animation frame characters. Defaults to a dots pattern. Must not be empty. */
-  frames?: readonly string[];
+  /** Text label displayed next to the spinner. Defaults to `""`. */
+  label?: string | undefined;
+  /** Animation frames, each drawn whole (any width). Defaults to a dots pattern. Must not be empty. */
+  frames?: readonly string[] | undefined;
   /** Animation interval in milliseconds. A finite number above 0. Defaults to 80. */
-  intervalMs?: number;
-  /** Output stream for rendering. Defaults to process.stderr. */
-  stderr?: Writable;
-  /** Style applied to the spinner frame, such as `"cyan"`. An unknown name throws at creation. */
-  style?: StyleSpec;
+  intervalMs?: number | undefined;
+  /** Output stream for rendering. Defaults to `process.stderr`. */
+  stderr?: Writable | undefined;
+  /** Style applied to the spinner frame, such as `"cyan"`. An unknown name throws at creation. Defaults to unstyled. */
+  style?: StyleSpec | undefined;
 }
 
 /**
@@ -102,15 +134,19 @@ export interface SpinnerOptions {
  * and calling any method afterwards does nothing.
  */
 export interface Spinner {
-  /** Replaces the label text shown next to the spinner. */
+  /**
+   * Replaces the label text shown next to the spinner.
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `label` is not a string.
+   */
   setLabel(label: string): void;
-  /** Replaces the spinner with a `✔` result line of `message ?? label`. */
+  /** Replaces the spinner with a success line of `message ?? label` (`✔`, or `[OK]` where symbols cannot be drawn). */
   succeed(message?: string): void;
-  /** Replaces the spinner with a `✖` result line of `message ?? label`. */
+  /** Replaces the spinner with a failure line of `message ?? label` (`✖`, or `[ERROR]`). */
   fail(message?: string): void;
-  /** Replaces the spinner with a `⚠` result line of `message ?? label`. */
+  /** Replaces the spinner with a warning line of `message ?? label` (`⚠`, or `[WARN]`). */
   warn(message?: string): void;
-  /** Leaves the last frame in place and ends the line. Writes nothing on a non-TTY stream. */
+  /** Leaves the last frame in place and ends the line. Writes nothing on a stream that cannot animate. */
   stop(): void;
   /** Releases the spinner when leaving a `using` scope. */
   [Symbol.dispose](): void;
@@ -122,8 +158,8 @@ export interface Spinner {
  * Configuration options for a multi-bar group.
  */
 export interface MultiBarOptions {
-  /** Output stream shared by every bar in the group. Defaults to process.stderr. */
-  stderr?: Writable;
+  /** Output stream shared by every bar in the group. Defaults to `process.stderr`. */
+  stderr?: Writable | undefined;
 }
 
 /**
@@ -133,15 +169,21 @@ export interface MultiBarOptions {
  * closes the group; an optional `message` is written as one unmarked final line.
  */
 export interface MultiBar {
-  /** Adds a new progress bar drawn in the group's stream and returns its handle. */
+  /**
+   * Adds a new progress bar drawn in the group's stream and returns its handle.
+   * Returns an inert handle once the group is closed.
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a wrongly typed option.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an out-of-range option.
+   */
   add(options: Omit<BarOptions, "stderr">): Bar;
-  /** Completes every unfinished bar with `✔` and closes the group. */
+  /** Completes every unfinished bar with a success mark and closes the group. */
   succeed(message?: string): void;
-  /** Ends every unfinished bar with `✖` and closes the group. */
+  /** Ends every unfinished bar with a failure mark and closes the group. */
   fail(message?: string): void;
-  /** Ends every unfinished bar with `⚠` and closes the group. */
+  /** Ends every unfinished bar with a warning mark and closes the group. */
   warn(message?: string): void;
-  /** Leaves the last frame in place and ends the line. Writes nothing on a non-TTY stream. */
+  /** Leaves the last frame in place and ends the line. Writes nothing on a stream that cannot animate. */
   stop(): void;
   /** Releases the multi-bar when leaving a `using` scope. */
   [Symbol.dispose](): void;
@@ -155,11 +197,6 @@ const patterns = {
   arrow: ["←", "↖", "↑", "↗", "→", "↘", "↓", "↙"],
 };
 
-// ── isTTY check ──
-
-/**
- * Checks whether the given stream is a TTY (terminal).
- */
 /**
  * Prepares caller-supplied text for a single rendered row: no control bytes, no
  * line breaks, and no styling left open to bleed into the rest of the frame.
@@ -225,12 +262,58 @@ function createFrameWriter(stream: Writable): {
 type TerminalSession = { users: number };
 
 const terminalSessions = new WeakMap<Writable, TerminalSession>();
-const visualOwners = new WeakMap<Writable, symbol>();
+type IndicatorKind = "spinner" | "bar" | "multi-bar";
+
+const visualOwners = new WeakMap<Writable, { owner: symbol; kind: IndicatorKind }>();
 const activeIndicators = new Set<() => void>();
+const progressScope = new AsyncLocalStorage<Set<() => void>>();
 
 /**
- * Stops every active progress indicator. Command execution calls this from its
- * finalizer so a thrown action cannot strand a terminal session or cursor.
+ * Records a live indicator's release function, in the process-wide registry and
+ * in the progress scope of the current async context, if there is one.
+ *
+ * @returns A function that forgets the indicator again.
+ */
+function registerIndicator(release: () => void): () => void {
+  activeIndicators.add(release);
+  const scope = progressScope.getStore();
+  scope?.add(release);
+  return () => {
+    activeIndicators.delete(release);
+    scope?.delete(release);
+  };
+}
+
+/**
+ * Runs `fn` and, once it settles (resolved or rejected), releases only the bars,
+ * spinners and multi-bars created inside its async context. Indicators created
+ * elsewhere, including by a concurrent call, keep running. A nested call has its
+ * own scope. Not exported from the package root: the router and the shell wrap
+ * command execution in it, and {@link releaseAll} stays the explicit
+ * process-wide reset.
+ *
+ * @param fn - The work whose indicators should not outlive it.
+ * @returns What `fn` resolves to.
+ */
+export async function runWithProgressScope<T>(fn: () => Promise<T>): Promise<T> {
+  const owned = new Set<() => void>();
+  try {
+    return await progressScope.run(owned, fn);
+  } finally {
+    for (const release of [...owned]) {
+      try {
+        release();
+      } catch {
+        // Keep releasing the rest even if one stream has failed.
+      }
+    }
+  }
+}
+
+/**
+ * Stops every active progress indicator in the process, whatever created it, and
+ * shows the cursor again. Prefer letting command execution release only its own
+ * indicators; call this for an explicit process-wide reset.
  */
 export function releaseAll(): void {
   for (const release of [...activeIndicators]) {
@@ -367,17 +450,26 @@ function acquireTerminal(stream: Writable): () => void {
  * region. Multiple standalone renderers cannot infer one another's row layout;
  * callers that need concurrent bars should use progress.multi().
  */
-function acquireVisualTerminal(stream: Writable, owner: symbol, region: RegionOwner): () => void {
-  if (!isTTY(stream)) return () => {};
-  const currentOwner = visualOwners.get(stream);
-  if (currentOwner && currentOwner !== owner) {
+function acquireVisualTerminal(
+  stream: Writable,
+  owner: symbol,
+  kind: IndicatorKind,
+  region: RegionOwner,
+): () => void {
+  if (!canAnimate(stream)) return () => {};
+  const current = visualOwners.get(stream);
+  if (current && current.owner !== owner) {
+    const hint =
+      current.kind === "bar" && kind === "bar"
+        ? ", or draw concurrent bars with progress.multi()"
+        : "";
     throw usageError(
       "state",
       "ERR_OUTPUT_BUSY",
-      "Another progress indicator is already rendering to this stream; use progress.multi() for concurrent bars",
+      `A ${current.kind} is already rendering to this stream; finish it with succeed(), fail(), warn() or stop() before starting a ${kind}${hint}`,
     );
   }
-  visualOwners.set(stream, owner);
+  visualOwners.set(stream, { owner, kind });
   // Publish how this renderer steps aside, so a logger or diagnostic writing to
   // the same stream cannot splice its output into a half-drawn frame.
   setRegionOwner(stream, region);
@@ -386,7 +478,7 @@ function acquireVisualTerminal(stream: Writable, owner: symbol, region: RegionOw
   return () => {
     if (released) return;
     released = true;
-    if (visualOwners.get(stream) === owner) {
+    if (visualOwners.get(stream)?.owner === owner) {
       visualOwners.delete(stream);
       setRegionOwner(stream, null);
     }
@@ -423,102 +515,149 @@ function clampProgressValue(value: number, total: number, fallback: number): num
 
 // ── Validation ──
 
-/** Checks a style name or dot-separated chain; every segment must be a built-in style. */
-function checkStyle(value: unknown): void {
-  if (value === undefined) return;
-  if (typeof value !== "string") {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", "style must be a string");
+/** Throws the usage error for one rejected option or argument, in Node's message form. */
+function reject(
+  kind: "type" | "range",
+  subject: string,
+  name: string,
+  noun: "option" | "argument",
+  expectation: string,
+  value: unknown,
+): never {
+  throw usageError(
+    kind,
+    kind === "type" ? "ERR_INVALID_ARG_TYPE" : "ERR_INVALID_ARG_VALUE",
+    `The "${name}" ${noun} of ${subject} must be ${expectation}. Received ${describeReceived(value, kind)}`,
+  );
+}
+
+/** Checks that the options bag itself is an object. */
+function checkBag(options: unknown, subject: string): void {
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    reject("type", subject, "options", "argument", "an object", options);
   }
+}
+
+/** Checks an optional string option and returns it. */
+function checkString(value: unknown, name: string, subject: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") reject("type", subject, name, "option", "a string", value);
+  return value;
+}
+
+/** Checks a style name or dot-separated chain; every segment must be a built-in style. */
+function checkStyle(value: unknown, subject: string): void {
+  if (value === undefined) return;
+  if (typeof value !== "string") reject("type", subject, "style", "option", "a string", value);
   for (const segment of value.split(".")) {
     if (!isStyleName(segment)) {
-      throw usageError(
-        "range",
-        "ERR_INVALID_ARG_VALUE",
-        `style contains the unknown style "${segment}" in "${value}"`,
-      );
+      reject("range", subject, "style", "option", "a chain of built-in style names", value);
     }
   }
 }
 
-function checkTotal(value: unknown): number {
-  if (typeof value !== "number") {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", "total must be a number");
+/** Resolves the output stream, defaulting to stderr. */
+function checkStream(value: unknown, subject: string): Writable {
+  if (value === undefined) return process.stderr;
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as Writable).write !== "function"
+  ) {
+    reject("type", subject, "stderr", "option", "a writable stream", value);
   }
+  return value as Writable;
+}
+
+function checkTotal(value: unknown, subject: string): number {
+  if (typeof value !== "number") reject("type", subject, "total", "option", "a number", value);
   if (!Number.isFinite(value) || value < 0) {
-    throw usageError(
-      "range",
-      "ERR_INVALID_ARG_VALUE",
-      `total must be a finite number of at least 0, received ${value}`,
-    );
+    reject("range", subject, "total", "option", "a finite number of at least 0", value);
   }
   return value;
 }
 
-function checkWidth(value: unknown): number {
+function checkWidth(value: unknown, subject: string): number {
   if (value === undefined) return 30;
-  if (typeof value !== "number") {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", "width must be a number");
-  }
+  if (typeof value !== "number") reject("type", subject, "width", "option", "a number", value);
   const whole = value > 0 ? finiteInteger(value, 0) : undefined;
   if (whole === undefined) {
-    throw usageError(
-      "range",
-      "ERR_INVALID_ARG_VALUE",
-      `width must be a positive finite number, received ${value}`,
-    );
+    reject("range", subject, "width", "option", "a positive finite number", value);
   }
   if (whole > MAX_RENDER_WIDTH) {
-    throw usageError(
-      "range",
-      "ERR_INVALID_ARG_VALUE",
-      `width must not exceed ${MAX_RENDER_WIDTH}, received ${value}`,
-    );
+    reject("range", subject, "width", "option", `at most ${MAX_RENDER_WIDTH}`, value);
   }
   // A fractional width draws its whole part, and never fewer than one cell.
   return Math.max(1, whole);
 }
 
-function checkFrames(value: unknown): readonly string[] {
+/** Checks a bar glyph: a string that is exactly one cell wide. */
+function checkGlyph(value: unknown, name: string, fallback: string, subject: string): string {
+  const text = checkString(value, name, subject);
+  if (text === undefined) return fallback;
+  if (stringWidth(text) !== 1) {
+    reject("range", subject, name, "option", "a single character of display width 1", value);
+  }
+  return text;
+}
+
+function checkFormat(value: unknown, subject: string): BarOptions["format"] {
+  if (value !== undefined && typeof value !== "function") {
+    reject("type", subject, "format", "option", "a function", value);
+  }
+  return value as BarOptions["format"];
+}
+
+function checkFrames(value: unknown, subject: string): readonly string[] {
   if (value === undefined) return patterns.dots;
   if (!Array.isArray(value) || !value.every((frame) => typeof frame === "string")) {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", "frames must be an array of strings");
+    reject("type", subject, "frames", "option", "an array of strings", value);
   }
-  if (value.length === 0) {
-    throw usageError("range", "ERR_INVALID_ARG_VALUE", "frames must not be empty");
+  if (value.length === 0) reject("range", subject, "frames", "option", "a non-empty array", value);
+  return value;
+}
+
+function checkIntervalMs(value: unknown, subject: string): number {
+  if (value === undefined) return 80;
+  if (typeof value !== "number") reject("type", subject, "intervalMs", "option", "a number", value);
+  if (!Number.isFinite(value) || value <= 0) {
+    reject("range", subject, "intervalMs", "option", "a positive finite number", value);
   }
   return value;
 }
 
-function checkIntervalMs(value: unknown): number {
-  if (value === undefined) return 80;
-  if (typeof value !== "number") {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", "intervalMs must be a number");
-  }
-  if (!Number.isFinite(value) || value <= 0) {
-    throw usageError(
-      "range",
-      "ERR_INVALID_ARG_VALUE",
-      `intervalMs must be a positive finite number, received ${value}`,
-    );
-  }
+/** Checks the label passed to a handle's `setLabel`. */
+function checkLabelArg(value: unknown, subject: string): string {
+  if (typeof value !== "string") reject("type", subject, "label", "argument", "a string", value);
+  return value;
+}
+
+/** Checks a number passed to a handle's `update` or `tick`; `NaN` is accepted and ignored later. */
+function checkNumberArg(value: unknown, name: string, subject: string): number {
+  if (typeof value !== "number") reject("type", subject, name, "argument", "a number", value);
   return value;
 }
 
 // ── Terminal verbs ──
 
 const verbMarks = {
-  succeed: { style: "green", symbol: "✔" },
-  fail: { style: "red", symbol: "✖" },
-  warn: { style: "yellow", symbol: "⚠" },
+  succeed: { style: "green", symbol: "✔", ascii: "[OK]" },
+  fail: { style: "red", symbol: "✖", ascii: "[ERROR]" },
+  warn: { style: "yellow", symbol: "⚠", ascii: "[WARN]" },
 } as const;
 
 type Verb = keyof typeof verbMarks;
 
-/** The row that replaces a finished indicator: a marker, then the one-line message. */
-function resultLine(col: Colorizer, verb: Verb, message: string): string {
+/**
+ * The row that replaces a finished indicator: a marker, then the one-line
+ * message. The marker is a symbol where the stream can animate and an ASCII tag
+ * elsewhere; colour follows the colorizer's own policy, independently.
+ */
+function resultLine(col: Colorizer, stream: Writable, verb: Verb, message: string): string {
   const mark = verbMarks[verb];
+  const glyph = col[mark.style](canAnimate(stream) ? mark.symbol : mark.ascii);
   const text = safeLine(message);
-  return text === "" ? col[mark.style](mark.symbol) : `${col[mark.style](mark.symbol)} ${text}`;
+  return text === "" ? glyph : `${glyph} ${text}`;
 }
 
 // ── Bar Implementation ──
@@ -538,19 +677,19 @@ type ResolvedBarOptions = Required<
  * standalone bar and each bar added to a multi-bar group resolve here, so the
  * two cannot disagree about what a given option means.
  */
-function normalizeBarOptions(options: Omit<BarOptions, "stderr">): ResolvedBarOptions {
-  const total = checkTotal(options.total);
-  const width = checkWidth(options.width);
-  checkStyle(options.style);
-  return {
-    total,
-    label: options.label ?? "",
-    width,
-    filled: options.filled ?? "█",
-    empty: options.empty ?? "░",
-    format: options.format,
-    style: options.style,
-  };
+function normalizeBarOptions(
+  options: Omit<BarOptions, "stderr">,
+  subject: string,
+): ResolvedBarOptions {
+  checkBag(options, subject);
+  const total = checkTotal(options.total, subject);
+  const width = checkWidth(options.width, subject);
+  const label = checkString(options.label, "label", subject) ?? "";
+  const filled = checkGlyph(options.filled, "filled", "█", subject);
+  const empty = checkGlyph(options.empty, "empty", "░", subject);
+  const format = checkFormat(options.format, subject);
+  checkStyle(options.style, subject);
+  return { total, label, width, filled, empty, format, style: options.style };
 }
 
 /** Renders the shared single-line representation used by standalone and multi bars. */
@@ -585,13 +724,12 @@ function barState(current: number, total: number, startTime: number): BarState {
   };
 }
 
-/**
- * Creates a new progress bar with the specified options. On a TTY the bar claims
- * its stream and draws 0% before returning.
- */
+const BAR_SUBJECT = "progress.bar()";
+const MULTI_ADD_SUBJECT = "progress.multi().add()";
+
 function createBar(options: BarOptions): Bar {
-  const resolved = normalizeBarOptions(options);
-  const stream = options.stderr ?? process.stderr;
+  const resolved = normalizeBarOptions(options, BAR_SUBJECT);
+  const stream = checkStream(options.stderr, BAR_SUBJECT);
   const { total } = resolved;
 
   let current = 0;
@@ -601,7 +739,7 @@ function createBar(options: BarOptions): Bar {
   let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-bar");
   const startTime = Date.now();
-  const tty = isTTY(stream);
+  const tty = canAnimate(stream);
   const col = createColorizer(stream);
   const frameWriter = createFrameWriter(stream);
 
@@ -637,13 +775,13 @@ function createBar(options: BarOptions): Bar {
     finished = true;
     if (verb === "succeed") current = total;
     frameWriter.clear();
-    const line = `${resultLine(col, verb, message ?? resolved.label)}\n`;
+    const line = `${resultLine(col, stream, verb, message ?? resolved.label)}\n`;
     stream.write(tty ? `${clearStandaloneFrame(renderedRows)}${line}` : line);
     cleanup();
   }
 
   if (tty) {
-    releaseTerminal = acquireVisualTerminal(stream, visualOwner, {
+    releaseTerminal = acquireVisualTerminal(stream, visualOwner, "bar", {
       clear: () => {
         const frame = clearStandaloneFrame(renderedRows);
         renderedRows = 0;
@@ -651,20 +789,27 @@ function createBar(options: BarOptions): Bar {
       },
       redraw: render,
     });
-    activeIndicators.add(stop);
-    unregister = () => activeIndicators.delete(stop);
+    unregister = registerIndicator(stop);
     render();
   }
 
   return {
     update(value: number) {
+      checkNumberArg(value, "current", "Bar.update()");
       if (finished) return;
       current = clampProgressValue(value, total, current);
       if (tty) render();
     },
     tick(delta = 1) {
+      checkNumberArg(delta, "delta", "Bar.tick()");
       if (finished) return;
       current = clampProgressValue(current + delta, total, current);
+      if (tty) render();
+    },
+    setLabel(newLabel: string) {
+      const next = checkLabelArg(newLabel, "Bar.setLabel()");
+      if (finished) return;
+      resolved.label = next;
       if (tty) render();
     },
     succeed: (message) => end("succeed", message),
@@ -677,19 +822,18 @@ function createBar(options: BarOptions): Bar {
 
 // ── Spinner Implementation ──
 
-/**
- * Creates a new spinner with the specified options. On a TTY the spinner claims
- * its stream and starts animating before returning.
- */
+const SPINNER_SUBJECT = "progress.spinner()";
+
 function createSpinner(options: SpinnerOptions = {}): Spinner {
-  const frames = checkFrames(options.frames);
-  const intervalMs = checkIntervalMs(options.intervalMs);
-  checkStyle(options.style);
-  const stream = options.stderr ?? process.stderr;
+  checkBag(options, SPINNER_SUBJECT);
+  const frames = checkFrames(options.frames, SPINNER_SUBJECT);
+  const intervalMs = checkIntervalMs(options.intervalMs, SPINNER_SUBJECT);
+  checkStyle(options.style, SPINNER_SUBJECT);
+  const stream = checkStream(options.stderr, SPINNER_SUBJECT);
   const spinnerColor = options.style;
 
   const safeFrames = frames.map((frame) => safeLine(frame));
-  let label = options.label ?? "";
+  let label = checkString(options.label, "label", SPINNER_SUBJECT) ?? "";
   let frameIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
   let done = false;
@@ -697,7 +841,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
   let releaseTerminal: (() => void) | null = null;
   let unregister: (() => void) | null = null;
   const visualOwner = Symbol("progress-spinner");
-  const tty = isTTY(stream);
+  const tty = canAnimate(stream);
   const col = createColorizer(stream);
   const frameWriter = createFrameWriter(stream);
 
@@ -732,13 +876,13 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     if (done) return;
     done = true;
     frameWriter.clear();
-    const line = `${resultLine(col, verb, message ?? label)}\n`;
+    const line = `${resultLine(col, stream, verb, message ?? label)}\n`;
     stream.write(tty ? `${clearStandaloneFrame(renderedRows)}${line}` : line);
     cleanup();
   }
 
   if (tty) {
-    releaseTerminal = acquireVisualTerminal(stream, visualOwner, {
+    releaseTerminal = acquireVisualTerminal(stream, visualOwner, "spinner", {
       clear: () => {
         if (renderedRows <= 0) return "";
         const frame = clearStandaloneFrame(renderedRows);
@@ -747,8 +891,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
       },
       redraw: render,
     });
-    activeIndicators.add(stop);
-    unregister = () => activeIndicators.delete(stop);
+    unregister = registerIndicator(stop);
     render();
     // Keep the interval from holding the event loop open on its own.
     timer = setInterval(render, intervalMs);
@@ -757,7 +900,7 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
 
   return {
     setLabel(newLabel: string) {
-      label = newLabel;
+      label = checkLabelArg(newLabel, "Spinner.setLabel()");
     },
     succeed: (message) => end("succeed", message),
     fail: (message) => end("fail", message),
@@ -775,6 +918,7 @@ function inertBar(): Bar {
   return {
     update: noop,
     tick: noop,
+    setLabel: noop,
     succeed: noop,
     fail: noop,
     warn: noop,
@@ -792,13 +936,12 @@ type MultiEntry = {
   result: string | null;
 };
 
-/**
- * Creates a multi-bar manager that renders multiple progress bars simultaneously.
- * On a TTY the group claims its stream when it is created.
- */
+const MULTI_SUBJECT = "progress.multi()";
+
 function createMultiBar(options: MultiBarOptions = {}): MultiBar {
-  const stream = options.stderr ?? process.stderr;
-  const tty = isTTY(stream);
+  checkBag(options, MULTI_SUBJECT);
+  const stream = checkStream(options.stderr, MULTI_SUBJECT);
+  const tty = canAnimate(stream);
   const col = createColorizer(stream);
   const bars: MultiEntry[] = [];
   // Number of physical rows written by the previous renderAll, used to move the
@@ -812,7 +955,7 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
 
   function startTerminalSession(): void {
     if (releaseTerminal || !tty) return;
-    releaseTerminal = acquireVisualTerminal(stream, visualOwner, {
+    releaseTerminal = acquireVisualTerminal(stream, visualOwner, "multi-bar", {
       clear: () => {
         if (renderedRows <= 0) return "";
         let frame = `\x1b[${renderedRows}A`;
@@ -823,8 +966,7 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
       },
       redraw: () => renderAll(),
     });
-    activeIndicators.add(stop);
-    unregister = () => activeIndicators.delete(stop);
+    unregister = registerIndicator(stop);
   }
 
   function cleanup(): void {
@@ -847,7 +989,7 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
   function endEntry(entry: MultiEntry, verb: Verb, message?: string): void {
     entry.finished = true;
     if (verb === "succeed") entry.current = entry.options.total;
-    entry.result = resultLine(col, verb, message ?? entry.options.label);
+    entry.result = resultLine(col, stream, verb, message ?? entry.options.label);
     if (!tty) stream.write(`${entry.result}\n`);
   }
 
@@ -877,9 +1019,10 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
       // Every other operation on a closed group is a silent no-op, so a worker
       // that adds a bar just after `finally { multi.stop() }` gets an inert
       // handle rather than an unhandled rejection that fails the command.
+      const resolved = normalizeBarOptions(barOptions, MULTI_ADD_SUBJECT);
       if (closed) return inertBar();
       const entry: MultiEntry = {
-        options: normalizeBarOptions(barOptions),
+        options: resolved,
         current: 0,
         startTime: Date.now(),
         finished: false,
@@ -889,15 +1032,23 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
       if (tty) renderAll();
       const total = entry.options.total;
 
-      return {
+      const handle: Bar = {
         update(value: number) {
+          checkNumberArg(value, "current", "Bar.update()");
           if (closed || entry.finished) return;
           entry.current = clampProgressValue(value, total, entry.current);
           if (tty) renderAll();
         },
         tick(delta = 1) {
+          checkNumberArg(delta, "delta", "Bar.tick()");
           if (closed || entry.finished) return;
           entry.current = clampProgressValue(entry.current + delta, total, entry.current);
+          if (tty) renderAll();
+        },
+        setLabel(newLabel: string) {
+          const next = checkLabelArg(newLabel, "Bar.setLabel()");
+          if (closed || entry.finished) return;
+          entry.options.label = next;
           if (tty) renderAll();
         },
         succeed(message) {
@@ -920,10 +1071,9 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
           entry.finished = true;
           if (tty) renderAll();
         },
-        [Symbol.dispose]() {
-          this.stop();
-        },
+        [Symbol.dispose]: () => handle.stop(),
       };
+      return handle;
     },
 
     succeed: (message) => endGroup("succeed", message),
@@ -938,7 +1088,9 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
       drawFrame(final);
     } catch (error) {
       // Give the terminal back before the caller's error propagates, so a
-      // throwing formatter cannot strand the cursor or the region claim.
+      // throwing formatter cannot strand the cursor or the region claim; the
+      // closed group must not re-claim the stream on a later call.
+      closed = true;
       cleanup();
       renderedRows = 0;
       throw error;
@@ -985,20 +1137,93 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
 
 // ── Public API ──
 
+/** The members of {@link progress}, declared here so hover shows their full documentation. */
+interface ProgressNamespace {
+  /**
+   * Creates a single progress bar and starts drawing it. On a TTY (and unless
+   * `TERM=dumb`) the bar claims its stream and draws 0% before returning; on any
+   * other stream it writes nothing until a terminal verb. Pass `{ ...ctx, total }`
+   * to draw on a command's `stderr`.
+   *
+   * @param options - Bar configuration; `total` is required.
+   * @returns A handle that updates and ends the bar.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a wrongly typed option.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an out-of-range option, or a
+   * `filled` or `empty` whose display width is not 1.
+   * @throws {Error} `ERR_OUTPUT_BUSY` if another indicator is rendering to the same stream.
+   * @example
+   * ```ts
+   * const bar = progress.bar({ ...ctx, total: files.length, label: "Copying" });
+   * for (const file of files) {
+   *   await copy(file);
+   *   bar.tick();
+   * }
+   * bar.succeed("Copied");
+   * ```
+   */
+  bar(options: BarOptions): Bar;
+  /**
+   * Creates an animated spinner and starts it. On a TTY (and unless `TERM=dumb`)
+   * the spinner claims its stream and starts animating before returning; on any
+   * other stream it writes nothing until a terminal verb. Pass `ctx` to draw on
+   * a command's `stderr`.
+   *
+   * @param options - Spinner configuration. Defaults to `{}`.
+   * @returns A handle that relabels and ends the spinner.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a wrongly typed option.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an out-of-range option.
+   * @throws {Error} `ERR_OUTPUT_BUSY` if another indicator is rendering to the same stream.
+   * @example
+   * ```ts
+   * const spinner = progress.spinner({ ...ctx, label: "Installing" });
+   * try {
+   *   await install();
+   *   spinner.succeed("Installed");
+   * } catch (error) {
+   *   spinner.fail("Install failed");
+   *   throw error;
+   * }
+   * ```
+   */
+  spinner(options?: SpinnerOptions): Spinner;
+  /**
+   * Creates a multi-bar manager for simultaneous progress bars. On a TTY (and
+   * unless `TERM=dumb`) the group claims its stream when it is created.
+   *
+   * @param options - Group configuration. Defaults to `{}`.
+   * @returns A handle whose `add()` creates the bars and whose verbs end the group.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a wrongly typed option.
+   * @throws {Error} `ERR_OUTPUT_BUSY` if another indicator is rendering to the same stream.
+   * @example
+   * ```ts
+   * const multi = progress.multi(ctx);
+   * const a = multi.add({ total: 10, label: "a" });
+   * const b = multi.add({ total: 20, label: "b" });
+   * a.tick();
+   * b.tick(5);
+   * multi.succeed();
+   * ```
+   */
+  multi(options?: MultiBarOptions): MultiBar;
+  /**
+   * Stops every indicator that is still active in the process and shows the
+   * cursor again. Command execution releases only the indicators its own command
+   * created; this is the explicit process-wide reset.
+   */
+  releaseAll(): void;
+}
+
 /**
  * Progress indicators for CLI applications.
  *
  * Provides factory functions for creating progress bars, spinners,
  * and multi-bar displays. Indicators draw to stderr by default and start as
- * soon as they are created.
+ * soon as they are created. On a stream that is not a TTY, or when `TERM=dumb`,
+ * they draw nothing and each terminal verb writes one final line.
  */
-export const progress = {
-  /** Creates a single progress bar and starts drawing it. */
+export const progress: ProgressNamespace = {
   bar: createBar,
-  /** Creates an animated spinner and starts it. */
   spinner: createSpinner,
-  /** Creates a multi-bar manager for simultaneous progress bars. */
   multi: createMultiBar,
-  /** Stops all indicators that are still active and shows the cursor again. */
   releaseAll,
 };

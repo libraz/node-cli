@@ -75,3 +75,46 @@ void oldElapsed;
 import { restoreCursor } from "../../src/index.js";
 
 void restoreCursor;
+
+// ── ctx-shaped arguments ──
+import type { CommandStreams } from "../../src/index.js";
+
+declare const ctx: CommandStreams;
+progress.spinner(ctx);
+progress.spinner({ ...ctx, label: "x" });
+progress.bar({ ...ctx, total: 3 });
+progress.multi(ctx);
+const fromCtx: Bar = progress.bar({ ...ctx, total: 3, label: "x" });
+void fromCtx;
+
+// ── Bar.setLabel ──
+bar.setLabel("next");
+// @ts-expect-error the label is a string
+bar.setLabel(1);
+
+// ── BarState is a read-only snapshot ──
+declare const state: BarState;
+// @ts-expect-error BarState members are readonly
+state.current = 1;
+// @ts-expect-error BarState members are readonly
+state.percent = 1;
+
+// ── The old stream key is gone ──
+// @ts-expect-error the stream key is `stderr`
+progress.bar({ total: 1, stream });
+// @ts-expect-error the stream key is `stderr`
+progress.spinner({ stream });
+// @ts-expect-error the stream key is `stderr`
+progress.multi({ stream });
+// @ts-expect-error `color` was renamed `style`
+progress.bar({ total: 1, color: "green" });
+
+// ── Namespace members keep the signature of their factories ──
+const releaseAll: () => void = progress.releaseAll;
+void releaseAll;
+
+// ── The scope helper is internal ──
+// @ts-expect-error runWithProgressScope is not part of the public entry
+import { runWithProgressScope } from "../../src/index.js";
+
+void runWithProgressScope;

@@ -37,3 +37,24 @@ createLogger({ level: "verbose" });
 createLogger({ colour: true });
 // @ts-expect-error the stream must be a Writable
 createLogger({ stderr: "stderr" });
+
+import type { CommandStreams } from "../../src/index.js";
+// ── ctx-shaped arguments ──
+import { isLogLevel } from "../../src/index.js";
+
+declare const ctx: CommandStreams;
+const fromCtx: Logger = createLogger(ctx);
+const fromCtxWithPrefix: Logger = createLogger({ ...ctx, prefix: "db" });
+void [fromCtx, fromCtxWithPrefix];
+
+// ── isLogLevel narrows an unknown value ──
+declare const unknownValue: unknown;
+if (isLogLevel(unknownValue)) {
+  const narrowed: LogLevel = unknownValue;
+  void narrowed;
+}
+const check: (value: unknown) => value is LogLevel = isLogLevel;
+void check;
+
+// @ts-expect-error the old stream key is gone
+createLogger({ stream });

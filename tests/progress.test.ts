@@ -308,6 +308,7 @@ describe("terminal verbs across handles", () => {
   type Handle = "bar" | "spinner" | "multiBar" | "group";
   type Verb = "succeed" | "fail" | "warn" | "stop";
   const marks = { succeed: "✔", fail: "✖", warn: "⚠" } as const;
+  const asciiMarks = { succeed: "[OK]", fail: "[ERROR]", warn: "[WARN]" } as const;
 
   const cases: [Handle, Verb, boolean, "given" | "omitted"][] = [
     ["spinner", "warn", true, "given"],
@@ -365,7 +366,7 @@ describe("terminal verbs across handles", () => {
         return;
       }
 
-      const mark = marks[verb];
+      const mark = (tty ? marks : asciiMarks)[verb];
       if (handle === "bar" || handle === "spinner") {
         expect(written).toContain(`${mark} ${msg ?? "L"}\n`);
       } else {
@@ -518,7 +519,7 @@ describe("progress.spinner", () => {
     const spinner = progress.spinner({ label: "Loading...", stderr: stream });
     expect(stream.getOutput()).toBe("");
     spinner.succeed("Done");
-    expect(stripAnsi(stream.getOutput())).toBe("✔ Done\n");
+    expect(stripAnsi(stream.getOutput())).toBe("[OK] Done\n");
   });
 
   it("succeed on a TTY replaces the frame row with the result", () => {
@@ -746,7 +747,7 @@ describe("progress.multi", () => {
     expect(stream.getOutput()).toBe("");
     multi.add({ total: 1, label: "b" });
     multi.warn("careful");
-    expect(stripAnsi(stream.getOutput())).toBe("⚠ a\n⚠ b\ncareful\n");
+    expect(stripAnsi(stream.getOutput())).toBe("[WARN] a\n[WARN] b\ncareful\n");
   });
 
   it("moves the cursor up by physical rows for wrapped lines", () => {
@@ -1190,5 +1191,359 @@ describe("default output stream", () => {
     expect(text).toContain("work");
     expect(text).toContain("m");
     expect(stdoutWrites).toEqual([]);
+  });
+});
+
+function catchError(fn: () => unknown): Error & { code?: string } {
+  try {
+    fn();
+  } catch (error) {
+    return error as Error & { code?: string };
+  }
+  throw new Error("expected the call to throw");
+}
+
+describe("Bar.setLabel", () => {
+  beforeEach(() => setColorEnabled(false));
+  afterEach(() => setColorEnabled("auto"));
+
+  it("changes the label drawn on a standalone bar and used by succeed", () => {
+    const stream = createMockTTY();
+    const bar = progress.bar({ total: 4, label: "first", stderr: stream });
+    bar.setLabel("second");
+    bar.update(1);
+    expect(stripAnsi(stream.getOutput())).toContain("second");
+    bar.succeed();
+    expect(stripAnsi(stream.getOutput())).toContain("✔ second");
+  });
+
+  it("changes the row of a bar inside a group", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi({ stderr: stream });
+    const bar = multi.add({ total: 4, label: "one" });
+    bar.setLabel("renamed");
+    expect(stripAnsi(stream.getOutput())).toContain("renamed");
+    multi.stop();
+  });
+
+  it("does nothing after the bar has ended and on an inert group bar", () => {
+    const stream = createMockTTY();
+    const bar = progress.bar({ total: 1, stderr: stream });
+    bar.stop();
+    const after = stream.getOutput();
+    bar.setLabel("late");
+    expect(stream.getOutput()).toBe(after);
+    const multi = progress.multi({ stderr: createMockTTY() });
+    multi.stop();
+    expect(() => multi.add({ total: 1 }).setLabel("x")).not.toThrow();
+  });
+});
+
+describe("progress option validation", () => {
+  const stream = () => createMockStdout();
+
+  it("names the key and the entry point, and echoes the received value", () => {
+    const error = catchError(() => progress.bar({ total: -1, stderr: stream() }));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.code).toBe("ERR_INVALID_ARG_VALUE");
+    expect(error.message).toContain('The "total" option of progress.bar() must be');
+    expect(error.message).toContain("Received -1");
+  });
+
+  const typeCases: [string, () => unknown][] = [
+    ["bar options", () => progress.bar(undefined as never)],
+    ["bar total", () => progress.bar({ total: "3" as never })],
+    ["bar label", () => progress.bar({ total: 1, label: 3 as never })],
+    ["bar width", () => progress.bar({ total: 1, width: "3" as never })],
+    ["bar filled", () => progress.bar({ total: 1, filled: 1 as never })],
+    ["bar empty", () => progress.bar({ total: 1, empty: null as never })],
+    ["bar format", () => progress.bar({ total: 1, format: "x" as never })],
+    ["bar stderr", () => progress.bar({ total: 1, stderr: "x" as never })],
+    ["bar style", () => progress.bar({ total: 1, style: 1 as never })],
+    ["spinner options", () => progress.spinner(null as never)],
+    ["spinner label", () => progress.spinner({ label: 1 as never })],
+    ["spinner frames", () => progress.spinner({ frames: "ab" as never })],
+    ["spinner intervalMs", () => progress.spinner({ intervalMs: "1" as never })],
+    ["spinner stderr", () => progress.spinner({ stderr: {} as never })],
+    ["spinner style", () => progress.spinner({ style: 1 as never })],
+    ["multi options", () => progress.multi(null as never)],
+    ["multi stderr", () => progress.multi({ stderr: 1 as never })],
+    ["multi add options", () => progress.multi({ stderr: stream() }).add(undefined as never)],
+    ["multi add total", () => progress.multi({ stderr: stream() }).add({ total: "1" as never })],
+  ];
+  it.each(typeCases)("rejects a wrongly typed %s with ERR_INVALID_ARG_TYPE", (_name, fn) => {
+    const error = catchError(fn);
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.code).toBe("ERR_INVALID_ARG_TYPE");
+    expect(error.message).toMatch(/^The "\w+" (option|argument) of progress\./);
+  });
+
+  const rangeCases: [string, () => unknown][] = [
+    ["bar total NaN", () => progress.bar({ total: Number.NaN })],
+    ["bar width 0", () => progress.bar({ total: 1, width: 0 })],
+    ["bar width huge", () => progress.bar({ total: 1, width: 1e9 })],
+    ["bar style name", () => progress.bar({ total: 1, style: "nonsense" as never })],
+    ["spinner frames empty", () => progress.spinner({ frames: [] })],
+    ["spinner intervalMs 0", () => progress.spinner({ intervalMs: 0 })],
+    ["spinner style name", () => progress.spinner({ style: "nonsense" as never })],
+    ["multi add width", () => progress.multi({ stderr: stream() }).add({ total: 1, width: -1 })],
+  ];
+  it.each(rangeCases)("rejects a bad %s with ERR_INVALID_ARG_VALUE", (_name, fn) => {
+    const error = catchError(fn);
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.code).toBe("ERR_INVALID_ARG_VALUE");
+    expect(error.message).toMatch(/Received /);
+  });
+
+  it("treats undefined option values as omitted", () => {
+    const s = stream();
+    expect(() =>
+      progress
+        .bar({
+          total: 1,
+          label: undefined,
+          width: undefined,
+          filled: undefined,
+          empty: undefined,
+          format: undefined,
+          style: undefined,
+          stderr: s,
+        })
+        .stop(),
+    ).not.toThrow();
+    expect(() =>
+      progress
+        .spinner({ label: undefined, frames: undefined, intervalMs: undefined, stderr: s })
+        .stop(),
+    ).not.toThrow();
+  });
+
+  it("rejects filled and empty whose display width is not 1, but not spinner frames", () => {
+    for (const key of ["filled", "empty"] as const) {
+      for (const value of ["", "ab", "██", "漢"]) {
+        const error = catchError(() => progress.bar({ total: 1, [key]: value }));
+        expect(error).toBeInstanceOf(RangeError);
+        expect(error.code).toBe("ERR_INVALID_ARG_VALUE");
+        expect(error.message).toContain(`The "${key}" option of progress.bar()`);
+      }
+    }
+    const group = progress.multi({ stderr: stream() });
+    expect(catchError(() => group.add({ total: 1, filled: "ab" })).code).toBe(
+      "ERR_INVALID_ARG_VALUE",
+    );
+    group.stop();
+    expect(() => progress.spinner({ frames: ["ab", "cd"], stderr: stream() }).stop()).not.toThrow();
+    expect(() =>
+      progress.bar({ total: 1, filled: "#", empty: "-", stderr: stream() }).stop(),
+    ).not.toThrow();
+  });
+
+  it("rejects wrongly typed arguments to the handle methods", () => {
+    const s = stream();
+    const bar = progress.bar({ total: 5, stderr: s });
+    const spinner = progress.spinner({ stderr: s });
+    const group = progress.multi({ stderr: s });
+    const child = group.add({ total: 5 });
+    const calls: (() => unknown)[] = [
+      () => bar.setLabel(1 as never),
+      () => bar.update("1" as never),
+      () => bar.tick("1" as never),
+      () => spinner.setLabel(undefined as never),
+      () => child.setLabel(null as never),
+      () => child.update({} as never),
+      () => child.tick("1" as never),
+    ];
+    for (const call of calls) {
+      const error = catchError(call);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(error.code).toBe("ERR_INVALID_ARG_TYPE");
+    }
+    bar.stop();
+    spinner.stop();
+    group.stop();
+  });
+
+  it("still ignores NaN updates", () => {
+    const tty = createMockTTY();
+    const bar = progress.bar({ total: 10, stderr: tty });
+    bar.update(4);
+    expect(() => bar.update(Number.NaN)).not.toThrow();
+    expect(() => bar.tick(Number.NaN)).not.toThrow();
+    expect(stripAnsi(tty.getOutput())).not.toContain("NaN");
+    bar.stop();
+  });
+});
+
+describe("terminals that cannot animate", () => {
+  let previousTerm: string | undefined;
+  beforeEach(() => {
+    previousTerm = process.env.TERM;
+    setColorEnabled(false);
+  });
+  afterEach(() => {
+    if (previousTerm === undefined) delete process.env.TERM;
+    else process.env.TERM = previousTerm;
+    setColorEnabled("auto");
+  });
+
+  it("treats TERM=dumb as a non-TTY for spinner, bar and multi", () => {
+    process.env.TERM = "dumb";
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ label: "s", stderr: stream });
+    const bar = progress.bar({ total: 2, stderr: createMockTTY() });
+    const dumb = createMockTTY();
+    const multi = progress.multi({ stderr: dumb });
+    multi.add({ total: 1 }).update(1);
+    expect(stream.getOutput()).toBe("");
+    expect(dumb.getOutput()).toBe("");
+    spinner.succeed("done");
+    expect(stream.getOutput()).toBe("[OK] done\n");
+    expect(stream.getOutput()).not.toContain("\x1b[");
+    bar.stop();
+    multi.stop();
+  });
+
+  it("does not claim the stream, so a second indicator is not busy", () => {
+    process.env.TERM = "dumb";
+    const stream = createMockTTY();
+    const a = progress.spinner({ stderr: stream });
+    expect(() => progress.spinner({ stderr: stream })).not.toThrow();
+    a.stop();
+  });
+});
+
+describe("status marks", () => {
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const key of ["NO_COLOR", "FORCE_COLOR", "TERM"]) saved[key] = process.env[key];
+    setColorEnabled("auto");
+    delete process.env.NO_COLOR;
+    delete process.env.FORCE_COLOR;
+    process.env.TERM = "xterm-256color";
+  });
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const verbs = [
+    ["succeed", "✔", "[OK]"],
+    ["fail", "✖", "[ERROR]"],
+    ["warn", "⚠", "[WARN]"],
+  ] as const;
+
+  it.each(verbs)("%s: symbol and colour on a coloured TTY", (verb, symbol) => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ label: "x", stderr: stream });
+    spinner[verb]("msg");
+    expect(stream.getOutput()).toContain(`${symbol}\x1b[`);
+    expect(stream.getOutput()).toContain("msg");
+  });
+
+  it.each(verbs)("%s: symbol without colour on a TTY under NO_COLOR", (verb, symbol) => {
+    process.env.NO_COLOR = "1";
+    const stream = createMockTTY();
+    const bar = progress.bar({ total: 1, label: "x", stderr: stream });
+    bar[verb]("msg");
+    expect(stream.getOutput()).toContain(`${symbol} msg\n`);
+    expect(stream.getOutput().split("msg")[1]).not.toContain("\x1b[3");
+  });
+
+  it.each(verbs)("%s: coloured ASCII on a non-TTY under FORCE_COLOR", (verb, _symbol, ascii) => {
+    process.env.FORCE_COLOR = "1";
+    const stream = createMockStdout();
+    const spinner = progress.spinner({ label: "x", stderr: stream });
+    spinner[verb]("msg");
+    expect(stream.getOutput()).toMatch(new RegExp(`\\x1b\\[\\d+m\\${ascii.replace("]", "\\]")}`));
+    expect(stripAnsi(stream.getOutput())).toBe(`${ascii} msg\n`);
+  });
+
+  it.each(verbs)("%s: plain ASCII on a non-TTY", (verb, _symbol, ascii) => {
+    const stream = createMockStdout();
+    const spinner = progress.spinner({ label: "x", stderr: stream });
+    spinner[verb]("msg");
+    expect(stream.getOutput()).toBe(`${ascii} msg\n`);
+  });
+
+  it("applies the same rule to a group's rows", () => {
+    const stream = createMockStdout();
+    const multi = progress.multi({ stderr: stream });
+    multi.add({ total: 1, label: "a" }).fail();
+    multi.stop();
+    expect(stream.getOutput()).toBe("[ERROR] a\n");
+  });
+});
+
+describe("output busy message", () => {
+  beforeEach(() => setColorEnabled(false));
+  afterEach(() => setColorEnabled("auto"));
+
+  it("names a spinner holder and does not suggest multi()", () => {
+    const stream = createMockTTY();
+    const spinner = progress.spinner({ stderr: stream });
+    const error = catchError(() => progress.bar({ total: 1, stderr: stream }));
+    expect(error.code).toBe("ERR_OUTPUT_BUSY");
+    expect(error.message).toContain("spinner");
+    expect(error.message).toMatch(/finish|end/);
+    expect(error.message).not.toContain("progress.multi()");
+    spinner.stop();
+  });
+
+  it("names a bar holder and suggests multi() only to another bar", () => {
+    const stream = createMockTTY();
+    const bar = progress.bar({ total: 1, stderr: stream });
+    const another = catchError(() => progress.bar({ total: 1, stderr: stream }));
+    expect(another.message).toContain("bar");
+    expect(another.message).toContain("progress.multi()");
+    const spinnerError = catchError(() => progress.spinner({ stderr: stream }));
+    expect(spinnerError.code).toBe("ERR_OUTPUT_BUSY");
+    expect(spinnerError.message).not.toContain("progress.multi()");
+    bar.stop();
+  });
+
+  it("names a multi-bar holder", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi({ stderr: stream });
+    const error = catchError(() => progress.bar({ total: 1, stderr: stream }));
+    expect(error.message).toContain("multi-bar");
+    expect(error.message).not.toContain("progress.multi()");
+    multi.stop();
+  });
+});
+
+describe("group bar handles", () => {
+  beforeEach(() => setColorEnabled(false));
+  afterEach(() => setColorEnabled("auto"));
+
+  it("binds [Symbol.dispose] so it works detached from the handle", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi({ stderr: stream });
+    const bar = multi.add({ total: 2, label: "a" });
+    const dispose = bar[Symbol.dispose];
+    dispose();
+    bar.update(1);
+    multi.succeed();
+    expect(stripAnsi(stream.getOutput())).not.toContain("✔ a");
+  });
+
+  it("stops making renders after a throwing format has torn the group down (repro)", () => {
+    const stream = createMockTTY();
+    const multi = progress.multi({ stderr: stream });
+    const bar = multi.add({
+      total: 10,
+      format(state) {
+        if (state.current > 1) throw new Error("format failed");
+        return "ok";
+      },
+    });
+    expect(() => bar.update(2)).toThrow("format failed");
+    const after = stream.getOutput();
+    // A later call must not re-claim the stream and hide the cursor again.
+    expect(() => bar.update(1)).not.toThrow();
+    expect(() => multi.add({ total: 1 })).not.toThrow();
+    expect(stream.getOutput()).toBe(after);
+    expect(stream.getOutput().split("\x1b[?25l").length - 1).toBe(1);
   });
 });

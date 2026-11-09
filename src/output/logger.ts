@@ -1,9 +1,9 @@
 import type { Writable } from "node:stream";
 import { format } from "node:util";
-import { usageError } from "../errors.js";
+import { describeReceived, usageError } from "../errors.js";
 import { guardCall, ownValue } from "../guard.js";
 import { createColorizer, isColorEnabled, renderSafe, type StyleName } from "./color.js";
-import { writeThrough } from "./region.js";
+import { canAnimate, writeThrough } from "./region.js";
 
 // ── Types ──
 
@@ -16,16 +16,21 @@ export type LogLevel = "debug" | "info" | "warn" | "error" | "silent";
  * Configuration options for creating a logger instance.
  */
 export interface LoggerOptions {
-  /** Minimum log level to output. Messages below this level are suppressed. Defaults to "info". */
-  level?: LogLevel;
-  /** Prefix string displayed in brackets before each message. */
-  prefix?: string;
-  /** Whether to include a timestamp (HH:MM:SS) in each log line. Defaults to false. */
-  timestamp?: boolean;
-  /** Output stream for log messages. Defaults to process.stderr. */
-  stderr?: Writable;
-  /** Maximum log lines queued while the stream is backpressured. Defaults to 1000. */
-  bufferLimit?: number;
+  /** Minimum log level to output. Messages below this level are suppressed. Defaults to `"info"`. */
+  level?: LogLevel | undefined;
+  /** Prefix string displayed in brackets before each message. Defaults to none. */
+  prefix?: string | undefined;
+  /** Whether to include a timestamp (HH:MM:SS) in each log line. Defaults to `false`. */
+  timestamp?: boolean | undefined;
+  /** Output stream for log messages. Defaults to `process.stderr`. */
+  stderr?: Writable | undefined;
+  /**
+   * Maximum log lines queued while the stream is backpressured, a non-negative
+   * safe integer. When the queue is full the oldest line is dropped; `0` drops
+   * every line written while the stream is backpressured, until it drains.
+   * Defaults to 1000.
+   */
+  bufferLimit?: number | undefined;
 }
 
 /**
@@ -36,7 +41,7 @@ export interface Logger {
   debug(message: unknown, ...args: unknown[]): void;
   /** Logs an informational message. */
   info(message: unknown, ...args: unknown[]): void;
-  /** Logs a success message (displayed at info level with a check mark). */
+  /** Logs a success message (shown at info level, marked `✔` or `[OK]`). */
   success(message: unknown, ...args: unknown[]): void;
   /** Logs a warning message. */
   warn(message: unknown, ...args: unknown[]): void;
@@ -44,9 +49,18 @@ export interface Logger {
   error(message: unknown, ...args: unknown[]): void;
   /** Changes the minimum log level at runtime. Returns this logger for chaining. */
   setLevel(level: LogLevel): this;
-  /** Creates a child logger with an additional prefix segment. */
+  /**
+   * Creates a child logger with an additional prefix segment (`parent:child`).
+   * The child shares the parent's stream, timestamp setting and buffer limit, and
+   * follows the parent's current level until its own `setLevel` is called.
+   */
   child(prefix: string): Logger;
-  /** Resolves after buffered lines reach the stream; rejects if the stream errors or closes first. */
+  /**
+   * Resolves after buffered lines reach the stream; rejects if the stream errors
+   * or closes first. After a stream failure the logger and its children become
+   * no-ops: later lines are dropped silently and the failure is reported only
+   * through `flush()`.
+   */
   flush(): Promise<void>;
 }
 
@@ -66,11 +80,11 @@ const levelOrder: Record<LogLevel, number> = {
  * Display configuration for a single log level.
  */
 interface LevelConfig {
-  /** Label used when color is disabled, e.g. `[INFO]`. */
+  /** Label used where symbols cannot be drawn, e.g. `[INFO]`. */
   icon: string;
-  /** Glyph used when color is enabled, e.g. `\u2139`. */
+  /** Glyph used where the stream can animate, e.g. `\u2139`. */
   ttyIcon: string;
-  /** Color style name applied to the icon in TTY mode. */
+  /** Color style name applied to the icon when colour is enabled. */
   colorName: StyleName;
   /** Short label for the level. */
   label: string;
@@ -102,29 +116,88 @@ function formatTimestamp(): string {
  *
  * The logger supports leveled output (debug, info, warn, error, silent),
  * optional timestamps, prefixes, and child logger creation for scoped logging.
+ * Pass a command's `ctx` to log to its `stderr`. A status line is marked with a
+ * symbol where the stream can animate and an ASCII tag elsewhere, coloured
+ * independently of that choice.
  *
- * @param options - Logger configuration options.
+ * The first logger on a stream attaches one `error` and one `close` listener to
+ * it; every logger and child on that stream shares the pair, which stays for the
+ * stream's lifetime so a stream failure never surfaces as an unhandled error event.
+ *
+ * @param options - Logger configuration options. Defaults to `{}`.
  * @returns A Logger instance.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a wrongly typed option.
  * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown `level` or an invalid `bufferLimit`.
+ * @example
+ * ```ts
+ * const log = createLogger({ ...ctx, prefix: "deploy" });
+ * log.info("starting");
+ * log.child("db").success("migrated");
+ * ```
  */
 export function createLogger(options: LoggerOptions = {}): Logger {
   return buildLogger(options);
 }
 
-/** Returns whether `level` is one of the {@link LogLevel} values. */
-function isLogLevel(level: unknown): level is LogLevel {
-  return typeof level === "string" && ownValue(levelOrder, level) !== undefined;
+/**
+ * Returns whether `value` is one of the {@link LogLevel} values.
+ *
+ * @param value - Any value.
+ * @returns True for `"debug"`, `"info"`, `"warn"`, `"error"` and `"silent"`.
+ */
+export function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === "string" && ownValue(levelOrder, value) !== undefined;
 }
 
+const LOGGER_SUBJECT = "createLogger()";
+
 /** Throws a RangeError naming the accepted levels when `level` is not one of them. */
-function assertLogLevel(level: unknown): asserts level is LogLevel {
+function assertLogLevel(level: unknown, noun: "option" | "argument", subject: string): void {
+  if (typeof level !== "string") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "level" ${noun} of ${subject} must be a string. Received ${describeReceived(level, "type")}`,
+    );
+  }
   if (!isLogLevel(level)) {
     throw usageError(
       "range",
       "ERR_INVALID_ARG_VALUE",
-      `Logger level must be one of: ${Object.keys(levelOrder).join(", ")}`,
+      `The "level" ${noun} of ${subject} must be one of: ${Object.keys(levelOrder).join(", ")}. Received ${describeReceived(level, "range")}`,
     );
   }
+}
+
+/** Throws a TypeError for an option that is neither omitted nor of the expected type. */
+function assertOptionType(
+  value: unknown,
+  name: string,
+  expected: "string" | "boolean" | "number",
+): void {
+  if (value !== undefined && typeof value !== expected) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" option of ${LOGGER_SUBJECT} must be ${expected === "boolean" ? "a boolean" : `a ${expected}`}. Received ${describeReceived(value, "type")}`,
+    );
+  }
+}
+
+function resolveStream(value: unknown): Writable {
+  if (value === undefined) return process.stderr;
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as Writable).write !== "function"
+  ) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "stderr" option of ${LOGGER_SUBJECT} must be a writable stream. Received ${describeReceived(value, "type")}`,
+    );
+  }
+  return value as Writable;
 }
 
 /**
@@ -142,7 +215,11 @@ interface StreamState {
 
 const streamStates = new WeakMap<Writable, StreamState>();
 
-/** Returns the shared state for `stream`, attaching its persistent listeners on first use. */
+/**
+ * Returns the shared state for `stream`, attaching its single `error` and `close`
+ * listener pair on first use. Nothing tells the logger when a stream is no longer
+ * wanted, so the pair stays; it is one per stream, never one per logger.
+ */
 function stateFor(stream: Writable): StreamState {
   const existing = streamStates.get(stream);
   if (existing) return existing;
@@ -259,22 +336,31 @@ function buildLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel)
   // propagates to children that have no explicit level of their own, while
   // `child.setLevel(...)` only overrides that child (never the parent).
   // `inheritLevel` is an internal hook wired up by `child()`.
-  if (options.level !== undefined) assertLogLevel(options.level);
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "options" argument of ${LOGGER_SUBJECT} must be an object. Received ${describeReceived(options, "type")}`,
+    );
+  }
+  if (options.level !== undefined) assertLogLevel(options.level, "option", LOGGER_SUBJECT);
   let ownLevel: LogLevel | undefined = options.level;
 
+  assertOptionType(options.prefix, "prefix", "string");
+  assertOptionType(options.timestamp, "timestamp", "boolean");
+  assertOptionType(options.bufferLimit, "bufferLimit", "number");
   const prefix = options.prefix;
   const timestamp = options.timestamp ?? false;
-  const stream = options.stderr ?? process.stderr;
+  const stream = resolveStream(options.stderr);
   const bufferLimit = options.bufferLimit ?? 1000;
   if (!Number.isSafeInteger(bufferLimit) || bufferLimit < 0) {
     throw usageError(
       "range",
       "ERR_INVALID_ARG_VALUE",
-      "Logger bufferLimit must be a non-negative safe integer",
+      `The "bufferLimit" option of ${LOGGER_SUBJECT} must be a non-negative safe integer. Received ${describeReceived(bufferLimit, "range")}`,
     );
   }
   const col = createColorizer(stream);
-  const colorOn = () => isColorEnabled(stream);
   const state = stateFor(stream);
   const writeLine = (line: string) => enqueue(stream, state, line, bufferLimit);
 
@@ -301,14 +387,10 @@ function buildLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel)
     const formatted = formatMessage(message, args);
 
     const parts: string[] = [];
-    const colored = colorOn();
+    const colored = isColorEnabled(stream);
 
-    // Icon
-    if (colored) {
-      parts.push(col[config.colorName](config.ttyIcon));
-    } else {
-      parts.push(config.icon);
-    }
+    // Symbol where the stream can animate, ASCII tag elsewhere; colour is separate.
+    parts.push(col[config.colorName](canAnimate(stream) ? config.ttyIcon : config.icon));
 
     // Timestamp
     if (timestamp) {
@@ -345,7 +427,7 @@ function buildLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel)
       writeLog("error", message, args);
     },
     setLevel(level) {
-      assertLogLevel(level);
+      assertLogLevel(level, "argument", "Logger.setLevel()");
       ownLevel = level;
       return this;
     },
