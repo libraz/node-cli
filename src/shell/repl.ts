@@ -402,6 +402,7 @@ export class InteractiveShell implements Shell {
         async () => {
           try {
             await mode.action(input, {
+              stdin: process.stdin,
               stdout: process.stdout,
               stderr: process.stderr,
               signal: controller.signal,

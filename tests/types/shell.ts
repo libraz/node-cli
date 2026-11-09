@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import type {
   Completer,
   CompletionContext,
@@ -35,12 +36,12 @@ void tupleCompleter;
 const oldName: ModeOptions = { prompt: "> ", message: "hi", action: () => {} };
 void oldName;
 
-// A mode action context carries stdout, stderr and signal, and no stdin.
+// A mode action context carries the shell's streams, stdin included, and the signal.
 declare const modeCtx: ModeContext;
 const signal: AbortSignal = modeCtx.signal;
 void signal;
-// @ts-expect-error modes have no stdin
-void modeCtx.stdin;
+const modeIn: Readable | null = modeCtx.stdin;
+void modeIn;
 // @ts-expect-error members are readonly
 modeCtx.signal = new AbortController().signal;
 

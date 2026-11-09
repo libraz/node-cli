@@ -41,8 +41,9 @@ const streams: CommandStreams = ctx;
 const stdio: StdioOptions = ctx;
 const emptyStdio: StdioOptions = {};
 const modeContext: ModeContext = ctx;
-// @ts-expect-error a mode context has no stdin
-void modeContext.stdin;
+// A mode context carries stdin, so a mode action can prompt.
+const modeStdin: Readable | null = modeContext.stdin;
+void modeStdin;
 void streams;
 void stdio;
 void emptyStdio;

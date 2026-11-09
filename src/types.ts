@@ -540,10 +540,10 @@ export type MutableCommandContext = { -readonly [K in keyof CommandContext]: Com
 export interface FallbackContext extends CommandStreams {}
 
 /**
- * Context passed to a shell mode's action. A mode never reads stdin, so only
- * the output streams and the signal are present.
+ * Context passed to a shell mode's action: the shell's streams, including
+ * stdin for prompting, and the signal that aborts the action.
  */
-export type ModeContext = Pick<CommandStreams, "stdout" | "stderr" | "signal">;
+export interface ModeContext extends CommandStreams {}
 
 /**
  * Context object passed to a plugin for extending the CLI. Its setters return
