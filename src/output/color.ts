@@ -30,9 +30,10 @@ export type StyleName =
   | "bgWhite";
 
 /**
- * A style, or a dot-separated chain of styles, as taken by options such as a
- * progress bar color. The first two links are checked by the type system; any
- * further link is checked when the value is used.
+ * A style, or a dot-separated chain of styles, as taken by options such as
+ * `style` on a progress bar and `borderStyle` / `headerStyle` on a table. The
+ * first two links are checked by the type system; any further link is checked
+ * when the value is used.
  */
 export type StyleSpec =
   | StyleName
@@ -99,6 +100,21 @@ function assertText(fn: string, name: string, value: unknown): asserts value is 
   }
 }
 
+/** Throws `ERR_INVALID_ARG_TYPE` unless `value` is an object with a `write` function. */
+function assertWritable(fn: string, value: unknown): void {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as { write?: unknown }).write !== "function"
+  ) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "stream" argument of ${fn}() must be an object with a write function. Received ${describeReceived(value)}`,
+    );
+  }
+}
+
 /**
  * Determines whether color output is enabled.
  *
@@ -114,8 +130,10 @@ function assertText(fn: string, name: string, value: unknown): asserts value is 
  *
  * @param stream - Optional output stream to evaluate. Defaults to `process.stdout`.
  * @returns Whether color escape codes should be emitted.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `stream` is given but is not an object with a `write` function.
  */
 export function isColorEnabled(stream?: Writable): boolean {
+  if (stream !== undefined) assertWritable("isColorEnabled", stream);
   if (_enabled !== null) return _enabled;
   if (process.env.NO_COLOR != null && process.env.NO_COLOR !== "") return false;
   // FORCE_COLOR is evaluated before TERM/TTY checks: "0"/"false" disable, any
@@ -191,7 +209,7 @@ function applyStyle(text: string, codes: [number, number][], enabled: boolean): 
   return result;
 }
 
-// ── Proxy-based chainable color ──
+// ── Chainable color ──
 
 /**
  * A callable color function that also supports chaining via property access.
@@ -200,12 +218,16 @@ function applyStyle(text: string, codes: [number, number][], enabled: boolean): 
  */
 export type ColorFn = ((text: string) => string) & { readonly [K in StyleName]: ColorFn };
 
-/** The object behind {@link color} and {@link createColorizer}: one chainable {@link ColorFn} per style. */
+/**
+ * The object behind {@link color} and {@link createColorizer}: one chainable {@link ColorFn} per style.
+ *
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when a property that is not a style name is read.
+ */
 export type Colorizer = { readonly [K in StyleName]: ColorFn };
 
 /**
  * True when `name` is one of the built-in style names. Callers that resolve a
- * style chosen by option (table borders and headers, bar colour) check here so
+ * style chosen by option (table borders and headers, a progress bar's `style`) check here so
  * inherited members such as `toString` never resolve. Any other value, including
  * a non-string, yields false.
  *
@@ -243,7 +265,16 @@ function styleTrap<T extends object>(
 }
 
 function createChain(accumulated: [number, number][], isEnabled: () => boolean): ColorFn {
-  const apply = (text: string): string => applyStyle(text, accumulated, isEnabled());
+  const apply = (text: string): string => {
+    if (typeof text !== "string") {
+      throw usageError(
+        "type",
+        "ERR_INVALID_ARG_TYPE",
+        `The "text" argument of a Colorizer style function must be a string. Received ${describeReceived(text)}`,
+      );
+    }
+    return applyStyle(text, accumulated, isEnabled());
+  };
 
   return new Proxy(apply, {
     get: (target, prop) =>
@@ -259,11 +290,14 @@ function createColorProxy(isEnabled: () => boolean): Colorizer {
 }
 
 /**
- * Proxy-based color utility. Access any style name as a property to get a
- * chainable {@link ColorFn}. Styles can be chained for combined effects.
+ * Color utility. Access any style name as a property to get a chainable
+ * {@link ColorFn}. Styles can be chained for combined effects.
  *
  * Color is enabled based on `process.stdout`; use {@link createColorizer} to
  * bind colorization to a specific output stream.
+ *
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when a property that is not a style name is read.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when a style function is called with a non-string, whether color is on or off.
  *
  * @example
  * ```ts
@@ -274,23 +308,35 @@ function createColorProxy(isEnabled: () => boolean): Colorizer {
 export const color: Colorizer = createColorProxy(() => isColorEnabled());
 
 /**
- * Creates a color proxy whose enablement is tied to a specific output stream.
+ * Creates a {@link Colorizer} whose enablement is tied to a specific output stream.
  *
  * Use this when writing to a stream other than `process.stdout` (e.g. a logger
  * on stderr or a redirected command stream) so color is only emitted when that
  * stream is a TTY.
  *
  * @param stream - The output stream color will be written to.
- * @returns A chainable color proxy bound to the stream's TTY status.
+ * @returns A chainable colorizer bound to the stream's TTY status.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `stream` is not an object with a `write` function.
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when a property that is not a style name is read from the result.
  */
 export function createColorizer(stream: Writable): Colorizer {
+  assertWritable("createColorizer", stream);
   return createColorProxy(() => isColorEnabled(stream));
 }
 
 // ── Template tag ──
 
 function templateTag(isEnabled: () => boolean): ColorTag {
-  return (strings, ...values) => formatTemplate(isEnabled(), strings, values);
+  return (strings, ...values) => {
+    if (!Array.isArray(strings) || !Array.isArray((strings as { raw?: unknown }).raw)) {
+      throw usageError(
+        "type",
+        "ERR_INVALID_ARG_TYPE",
+        `The "strings" argument of a color template tag must be a template literal; use it as a tag, not as a function. Received ${describeReceived(strings)}`,
+      );
+    }
+    return formatTemplate(isEnabled(), strings, values);
+  };
 }
 
 /**
@@ -303,8 +349,9 @@ function templateTag(isEnabled: () => boolean): ColorTag {
  *   never closed, stays literal text.
  * - Interpolated `${values}` are converted with `String()` and inserted
  *   verbatim; they are never parsed as markup.
- * - With colour disabled the markup is removed and plain text is returned.
+ * - With color disabled the markup is removed and plain text is returned.
  *
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when called as a plain function rather than as a tag.
  * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when markup nests deeper than 64 levels.
  *
  * @example
@@ -327,6 +374,7 @@ export type ColorTag = (strings: TemplateStringsArray, ...values: unknown[]) => 
  *
  * @param stream - The output stream the text will be written to.
  * @returns A template tag that emits escapes only when color is enabled for `stream`.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `stream` is not an object with a `write` function, or when the returned tag is called as a plain function.
  * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when markup nests deeper than 64 levels (thrown by the returned tag).
  *
  * @example
@@ -336,6 +384,7 @@ export type ColorTag = (strings: TemplateStringsArray, ...values: unknown[]) => 
  * ```
  */
 export function createColorTag(stream: Writable): ColorTag {
+  assertWritable("createColorTag", stream);
   return templateTag(() => isColorEnabled(stream));
 }
 
@@ -348,6 +397,7 @@ export function createColorTag(stream: Writable): ColorTag {
  * style name followed by a space, or that is never closed, stays literal text.
  * Interpolated values are inserted verbatim and never parsed as markup.
  *
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when called as a plain function rather than as a tag.
  * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when markup nests deeper than 64 levels.
  *
  * @example
@@ -531,6 +581,7 @@ const stringTerminator = "\x1b\\";
  *
  * @param text - A string potentially containing ANSI codes.
  * @returns The input string with all ANSI escape sequences removed.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `text` is not a string.
  */
 export function stripAnsi(text: string): string {
   assertText("stripAnsi", "text", text);

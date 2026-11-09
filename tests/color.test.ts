@@ -115,7 +115,7 @@ describe("color", () => {
 });
 
 describe("color environment detection", () => {
-  const stream = { isTTY: true } as NodeJS.WritableStream;
+  const stream = { isTTY: true, write: () => true } as unknown as NodeJS.WritableStream;
 
   beforeEach(() => {
     setColorEnabled("auto");
@@ -152,13 +152,17 @@ describe("color environment detection", () => {
 
   it("lets FORCE_COLOR=1 beat a stream that is not a terminal", () => {
     process.env.FORCE_COLOR = "1";
-    expect(isColorEnabled({ isTTY: false } as NodeJS.WritableStream)).toBe(true);
+    expect(
+      isColorEnabled({ isTTY: false, write: () => true } as unknown as NodeJS.WritableStream),
+    ).toBe(true);
   });
 
   it("falls back to the stream's terminal status", () => {
     expect(isColorEnabled(stream)).toBe(true);
-    expect(isColorEnabled({ isTTY: false } as NodeJS.WritableStream)).toBe(false);
-    expect(isColorEnabled({} as NodeJS.WritableStream)).toBe(false);
+    expect(
+      isColorEnabled({ isTTY: false, write: () => true } as unknown as NodeJS.WritableStream),
+    ).toBe(false);
+    expect(isColorEnabled({ write: () => true } as unknown as NodeJS.WritableStream)).toBe(false);
   });
 
   it("does not let an empty NO_COLOR decide on its own", () => {
@@ -618,15 +622,15 @@ describe("setColorEnabled", () => {
     delete process.env.NO_COLOR;
     delete process.env.FORCE_COLOR;
     setColorEnabled(true);
-    expect(isColorEnabled({ isTTY: false } as never)).toBe(true);
+    expect(isColorEnabled({ isTTY: false, write: () => true } as never)).toBe(true);
     setColorEnabled("auto");
-    expect(isColorEnabled({ isTTY: false } as never)).toBe(false);
-    expect(isColorEnabled({ isTTY: true } as never)).toBe(true);
+    expect(isColorEnabled({ isTTY: false, write: () => true } as never)).toBe(false);
+    expect(isColorEnabled({ isTTY: true, write: () => true } as never)).toBe(true);
   });
 
   it("forces color off with false regardless of the stream", () => {
     setColorEnabled(false);
-    expect(isColorEnabled({ isTTY: true } as never)).toBe(false);
+    expect(isColorEnabled({ isTTY: true, write: () => true } as never)).toBe(false);
   });
 });
 
@@ -642,7 +646,7 @@ describe("isTTY", () => {
 });
 
 describe("createColorTag and createColorizer", () => {
-  const stream = (isTTY: boolean) => ({ isTTY }) as never;
+  const stream = (isTTY: boolean) => ({ isTTY, write: () => true }) as never;
 
   afterEach(() => {
     setColorEnabled("auto");
