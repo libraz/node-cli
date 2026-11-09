@@ -3,7 +3,7 @@ import type { CommandRouter } from "../command/router.js";
 import { presentError } from "../errors.js";
 import { isTTY } from "../output/color.js";
 import { inputExhausted, type LineReader, openLineReader } from "../output/line-reader.js";
-import { releaseAll } from "../output/progress.js";
+import { releaseAll, runWithProgressScope } from "../output/progress.js";
 import type { Completer, CompletionContext, ModeContext } from "../types.js";
 import { isShellCommand } from "./builtins.js";
 import { ShellCompleter } from "./completion.js";
@@ -29,14 +29,16 @@ export interface ModeOptions {
    */
   action: ModeAction;
   /** Banner printed once when entering the mode. */
-  banner?: string;
+  banner?: string | undefined;
   /**
-   * Optional mode-specific tab completer, called with a {@link CompletionContext}
-   * whose `commandPath` is empty. Top-level command completion is disabled by default.
+   * Tab-completion candidates inside the mode: a static list, or a
+   * {@link Completer} called with a {@link CompletionContext} whose `commandPath`
+   * is empty. Either is filtered by prefix match on `ctx.current`. Top-level
+   * command completion is not offered inside a mode. Defaults to no completion.
    */
-  completer?: Completer;
+  completer?: readonly string[] | Completer | undefined;
   /** In-memory mode history policy. Mode input is never persisted to disk. Defaults to `session`. */
-  history?: "session" | "none";
+  history?: "session" | "none" | undefined;
 }
 
 /**
@@ -46,10 +48,10 @@ export interface Shell {
   /** Changes the prompt; inside a mode the change applies after leaving it. */
   setPrompt(text: string): this;
   /** Enters a mode sub-REPL that routes every line to the mode's action. */
-  enterMode(config: ModeOptions): void;
+  enterMode(config: ModeOptions): this;
   /** Leaves the current mode and returns to the command prompt. */
-  exitMode(): void;
-  /** Ends the shell session after the current input. */
+  exitMode(): this;
+  /** Ends the shell session after the current input. Terminal, so it returns nothing. */
   stop(): void;
 }
 
@@ -134,7 +136,7 @@ export class InteractiveShell implements Shell {
       history: activeHistory,
       completer: mode
         ? modeCompleter
-          ? (line: string) => Promise.resolve(this.completer.runModeProvider(modeCompleter, line))
+          ? (line: string) => this.completer.runModeProvider(modeCompleter, line)
           : undefined
         : (line: string) => this.completer.complete(line),
       terminal: isTTY(process.stdin) && isTTY(process.stdout),
@@ -399,20 +401,17 @@ export class InteractiveShell implements Shell {
     this.modeController = controller;
     try {
       await this.router.runWithSigintCancel(
-        async () => {
-          try {
+        () =>
+          // Releases only the indicators this action created, before any error
+          // is reported below.
+          runWithProgressScope(async () => {
             await mode.action(input, {
               stdin: process.stdin,
               stdout: process.stdout,
               stderr: process.stderr,
               signal: controller.signal,
             });
-          } finally {
-            // The same progress cleanup router.execute gives a command, before
-            // any error is reported below.
-            releaseAll();
-          }
-        },
+          }),
         {
           stderr: process.stderr,
           onInterrupt: () => {
@@ -470,22 +469,26 @@ export class InteractiveShell implements Shell {
    * instead of the command router.
    *
    * @param config - The mode configuration.
+   * @returns The shell, so calls chain.
    */
-  enterMode(config: ModeOptions): void {
+  enterMode(config: ModeOptions): this {
     this.mode = config;
     this.modeHistory = [];
     if (config.banner) {
       process.stdout.write(`${config.banner}\n`);
     }
     this.reader?.rl.setPrompt(config.prompt);
+    return this;
   }
 
   /**
    * Exits the current mode, returning to the normal command prompt.
+   * @returns The shell, so calls chain.
    */
-  exitMode(): void {
+  exitMode(): this {
     this.mode = null;
     this.modeHistory = [];
     this.reader?.rl.setPrompt(this.promptStr);
+    return this;
   }
 }

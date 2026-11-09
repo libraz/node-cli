@@ -185,7 +185,9 @@ export class History {
    * Adds a line to the history.
    * Empty or whitespace-only lines are ignored. Consecutive duplicate
    * entries are also skipped. A throwing filter is reported and the line is
-   * not recorded, since it may be the secret the filter exists to redact.
+   * not recorded, since it may be the secret the filter exists to redact. The
+   * warning goes to `process.stderr`, where the interactive shell writes all of
+   * its diagnostics; the shell has no separate stderr.
    * @param line - The command line string to add.
    */
   add(line: string): void {

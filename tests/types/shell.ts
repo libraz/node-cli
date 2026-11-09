@@ -22,7 +22,8 @@ const config: ModeOptions = {
   },
 };
 const asyncConfig: ModeOptions = { prompt: "> ", completer: async_, action: () => {} };
-void [config, asyncConfig];
+const listConfig: ModeOptions = { prompt: "> ", completer: ["select", "insert"], action: () => {} };
+void [config, asyncConfig, listConfig];
 
 // @ts-expect-error the completer takes a context, not a line
 const lineCompleter: ModeOptions["completer"] = (line: string) => [line];
@@ -48,5 +49,11 @@ modeCtx.signal = new AbortController().signal;
 // setPrompt returns the shell, so configuration calls chain.
 const chained: Shell = shell.setPrompt("a> ").setPrompt("b> ");
 void chained;
+
+// enterMode and exitMode return the shell; stop is terminal and returns nothing.
+const entered: Shell = shell.enterMode(config).exitMode().setPrompt("c> ");
+void entered;
+// @ts-expect-error stop() returns void, so it cannot be chained
+shell.stop().setPrompt("x");
 
 export type { CompletionContext };

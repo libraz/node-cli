@@ -155,7 +155,7 @@ describe("mode command", () => {
     }
   });
 
-  it("returns mode candidates unfiltered and replaces the raw last word", async () => {
+  it("filters mode candidates by the word under the cursor and replaces its raw form", async () => {
     const registry = new CommandRegistry();
     const router = new CommandRouter(registry);
     const shell = new InteractiveShell({
@@ -178,7 +178,7 @@ describe("mode command", () => {
     internal.openReader([]);
     try {
       await expect(internal.reader?.rl.completer?.("SELECT * FROM 'us")).resolves.toEqual([
-        ["users", "orders"],
+        ["users"],
         "'us",
       ]);
     } finally {

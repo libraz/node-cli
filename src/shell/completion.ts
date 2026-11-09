@@ -348,28 +348,38 @@ export class ShellCompleter {
    * context has `line` and `fullLine` set to the input, `current` set to the
    * last word (`""` at a word boundary), an empty command path, args and
    * options, and the same Tab counting and deadline signal as command
-   * completion. Candidates are made terminal-safe but not filtered: the mode
-   * owns its own matching.
-   * @param completer - The mode's completer.
+   * completion. Static lists and function results alike are filtered by prefix
+   * match on `current` and quoted for insertion, as command completers are.
+   * @param completer - The mode's static list or {@link Completer}.
    * @param line - The input line readline is completing.
    * @returns The candidates paired with the word readline replaces.
    */
-  async runModeProvider(completer: Completer, line: string): Promise<CompletionResult> {
+  async runModeProvider(
+    completer: readonly string[] | Completer,
+    line: string,
+  ): Promise<CompletionResult> {
     this.countTab(line);
     const { words, atBoundary } = scanWords(line);
     const last = atBoundary ? undefined : words[words.length - 1];
+    const current = last?.value ?? "";
+    const rawCurrent = last?.raw ?? "";
+    if (typeof completer !== "function") {
+      return [formatCompletionCandidates(completer, current), rawCurrent];
+    }
     const controller = new AbortController();
     const ctx: CompletionContext = {
       line,
       fullLine: line,
-      current: last?.value ?? "",
+      current,
       commandPath: [],
       args: {},
       options: {},
       iteration: this.tabCount,
       signal: controller.signal,
     };
-    return this.runCompleter(completer, ctx, controller, last?.raw ?? "", safeCandidates);
+    return this.runCompleter(completer, ctx, controller, rawCurrent, (candidates) =>
+      formatCompletionCandidates(candidates, current),
+    );
   }
 
   /**

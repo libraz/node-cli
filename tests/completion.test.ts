@@ -618,3 +618,17 @@ describe("ShellCompleter", () => {
     });
   });
 });
+
+describe("ShellCompleter mode completion", () => {
+  it("filters a static list and a function result by the word under the cursor", async () => {
+    const completer = new ShellCompleter(new CommandRegistry());
+    expect(await completer.runModeProvider(["select", "insert"], "SELECT x ins")).toEqual([
+      ["insert"],
+      "ins",
+    ]);
+    expect(await completer.runModeProvider(() => ["select", "insert"], "sel")).toEqual([
+      ["select"],
+      "sel",
+    ]);
+  });
+});
