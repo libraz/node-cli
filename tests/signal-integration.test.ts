@@ -101,67 +101,41 @@ describe.skipIf(process.platform === "win32")("OS signal integration", () => {
     expect(stderr).not.toContain("uncaught");
     expect(stderr).not.toContain("cancel cleanup failed");
   });
-  it("cancels every concurrent execution on a single interrupt", async () => {
-    const child = spawn(process.execPath, [resolve("tests/fixtures/concurrent-sigint-child.mjs")], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1" },
-    });
-    let output = "";
-    child.stdout.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-
+  it("leaves SIGINT to the host for programmatic executions", async () => {
+    const { child, output } = spawnFixture([
+      resolve("tests/fixtures/exec-force-quit-child.mjs"),
+      "programmatic",
+    ]);
     try {
-      const timeout = setTimeout(() => child.kill("SIGKILL"), 8_000);
-      const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
-      clearTimeout(timeout);
-      // Not 130: the first press requests cooperative cancellation, it is not a
-      // force quit just because a second execution also saw the signal.
-      expect({ code, signal }).toEqual({ code: 0, signal: null });
+      expect(await exitOf(child, 8_000)).toMatchObject({ code: 0, signal: null });
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
 
-    expect(output).toContain("CANCELLED first");
-    expect(output).toContain("CANCELLED second");
-    expect(output).toContain("BOTH_SETTLED");
-    // The hint belongs to the interrupt, not to each listener that saw it.
-    expect(output.match(/Press Ctrl-C again to force quit/g) ?? []).toHaveLength(1);
+    // Only the host's own listener exists while both executions are pending.
+    expect(output()).toContain("LISTENERS:0\n");
+    expect(output()).toContain("PENDING_LISTENERS:1\n");
+    expect(output()).toContain("CANCELLED first");
+    expect(output()).toContain("CANCELLED second");
+    expect(output()).toContain("SETTLED:fulfilled,fulfilled");
+    expect(output()).not.toContain("Press Ctrl-C again to force quit");
   });
 
-  it("runs every exit listener when a programmatic execution is force-quit", async () => {
-    const child = spawn(process.execPath, [resolve("tests/fixtures/exec-force-quit-child.mjs")], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1" },
-    });
-    let output = "";
-    child.stdout.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-
+  it("runs every exit listener when a start() command is force-quit", async () => {
+    const { child, output } = spawnFixture([
+      resolve("tests/fixtures/exec-force-quit-child.mjs"),
+      "start",
+    ]);
     try {
-      await waitForOutput(() => output, "HANGING");
-      child.kill("SIGINT");
-      await waitForOutput(() => output, "Press Ctrl-C again to force quit");
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 300));
-      child.kill("SIGINT");
-
-      const timeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
-      const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
-      clearTimeout(timeout);
-      expect({ code, signal }).toEqual({ code: 130, signal: null });
+      await waitForOutput(output, "HANGING");
+      await forceQuit(child, output);
+      expect(await exitOf(child)).toMatchObject({ code: 130, signal: null });
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
 
-    expect(output).toContain("EXIT_FIRST");
-    expect(output).toContain("EXIT_LAST");
+    expect(output()).toContain("EXIT_FIRST");
+    expect(output()).toContain("EXIT_LAST");
   });
 
   it("runs exit listeners once when the action settles during a direct force quit", async () => {

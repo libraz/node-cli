@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createCLI, progress } from "../src/index.js";
-import { setColorEnabled, stripAnsi } from "../src/output/color.js";
+import { createCLI, progress, setColorEnabled, stripAnsi } from "../src/index.js";
 import { runWithProgressScope } from "../src/output/progress.js";
 import { createMockTTY } from "./helpers.js";
 

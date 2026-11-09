@@ -9,6 +9,7 @@ import {
   CommandNotFoundError,
   ExtraArgumentError,
   formatErrorMessage,
+  InputEndedError,
   InvalidOptionError,
   isCancellationError,
   MissingArgumentError,
@@ -215,10 +216,16 @@ describe("option resolver", () => {
     expect(out.tags).toEqual(["A", "B"]);
   });
 
-  it("matches choices leniently across string/number", () => {
-    const d = defs("--level <n>", { type: "number", choices: ["1", "2", "3"] });
-    const out = resolveOptions({ level: "2" }, d, ctxStub());
-    expect(out.level).toBe(2);
+  it("matches choices strictly against the coerced value", () => {
+    const d = defs("--level <n>", { type: "number", choices: [1, 2, 3] });
+    expect(resolveOptions({ level: "2" }, d, ctxStub()).level).toBe(2);
+    expect(() => resolveOptions({ level: "4" }, d, ctxStub())).toThrow(InvalidOptionError);
+  });
+
+  it("rejects choices whose type differs from the option type", () => {
+    expect(() => defs("--level <n>", { type: "number", choices: ["1", "2", "3"] })).toThrow(
+      /choice of type string/,
+    );
   });
 });
 
@@ -463,7 +470,7 @@ describe("prompt fixes", () => {
   });
 
   it("select rejects empty choices", async () => {
-    await expect(prompt.select("Pick", [])).rejects.toThrow(/at least one/);
+    await expect(prompt.select("Pick", [])).rejects.toThrow(/must not be empty/);
   });
 });
 
@@ -712,9 +719,11 @@ describe("async plugin failures", () => {
     cli.command("foo").action(() => {});
     cli.use(() => Promise.reject(undefined));
 
-    await expect(cli.execLine("foo")).rejects.toBeUndefined();
+    const failure = await cli.execLine("foo").catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "ERR_PLUGIN_FAILED" });
+    expect((failure as Error).cause).toBeUndefined();
     // The failure must persist rather than degrade into a silent command-not-found.
-    await expect(cli.execLine("foo")).rejects.toBeUndefined();
+    await expect(cli.execLine("foo")).rejects.toBe(failure);
   });
 });
 
@@ -768,13 +777,13 @@ describe("cancel handler failures", () => {
 // ── Prompting after end of input ──
 
 describe("prompting after end of input", () => {
-  it("cancels instead of hanging when the input stream already ended", async () => {
+  it("rejects with InputEndedError instead of hanging when the input stream already ended", async () => {
     const stdin = createMockStdin();
     stdin.push(null);
     await new Promise((resolve) => stdin.once("end", resolve).resume());
 
     await expect(prompt.text("name", { stdin, stderr: createMockStdout() })).rejects.toBeInstanceOf(
-      CancelledError,
+      InputEndedError,
     );
   });
 });

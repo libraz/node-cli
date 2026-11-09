@@ -93,7 +93,22 @@ async function loadSurface() {
 }
 
 /** Type-level helpers reachable only through builder signatures, never named by consumers. */
-const TRANSITIVE_ONLY = new Set(["AddOption", "CheckedOptionSchema", "CommandBuilderFor"]);
+const TRANSITIVE_ONLY = new Set([
+  "AddOption",
+  "CheckedOptionSchema",
+  "CommandBuilderFor",
+  "OptionSchemaInput",
+  "OptionValue",
+  "ColumnName",
+  "ColumnSettings",
+]);
+
+interface RemovedNameRule {
+  name: string;
+  scope: "docs" | "exports" | "both";
+  patterns: string[];
+  files?: string[];
+}
 
 describe("public surface and documentation agree", () => {
   it("reads the same runtime exports from the barrel and the module", async () => {
@@ -178,17 +193,32 @@ describe("public surface and documentation agree", () => {
   it.each(["en", "ja"])(
     "gives every migration-v2 section (%s) a before and an after",
     async (lang) => {
+      const rules = JSON.parse(
+        await readFile("scripts/removed-names.json", "utf8"),
+      ) as RemovedNameRule[];
       const markdown = await readFile(`docs/${lang}/migration-v2.md`, "utf8");
       const sections = markdown.split(/^### (?=\d+\.)/m).slice(1);
       const blocks = new Map<number, number>();
+      const stale: string[] = [];
       for (const section of sections) {
         const number = Number.parseInt(section, 10);
-        blocks.set(number, (section.match(/^```/gm) ?? []).length / 2);
+        const fences = [...section.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)].map((m) => m[1]);
+        blocks.set(number, fences.length);
+        const after = fences[1] ?? "";
+        for (const rule of rules.filter((r) => r.scope !== "exports")) {
+          for (const source of rule.patterns) {
+            const pattern = new RegExp(source);
+            if (after.split("\n").some((line) => pattern.test(line))) {
+              stale.push(`${number}: ${rule.name}`);
+            }
+          }
+        }
       }
 
-      const numbers = Array.from({ length: 19 }, (_, index) => index + 1);
+      const numbers = Array.from({ length: 25 }, (_, index) => index + 1);
       expect([...blocks.keys()].sort((a, b) => a - b)).toEqual(numbers);
       expect(numbers.filter((number) => (blocks.get(number) ?? 0) < 2)).toEqual([]);
+      expect(stale).toEqual([]);
     },
   );
 });
