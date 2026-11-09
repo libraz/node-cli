@@ -60,10 +60,14 @@ export class CLIError extends Error {
    * Creates a new CLIError.
    * @param message - Human-readable error message.
    * @param options - Code, exit code and cause. Every member is optional.
-   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `exitCode` is not a number.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `message` is not a string,
+   * `options` is not an object, `code` is not a string, or `exitCode` is not a number.
    * @throws {RangeError} ERR_INVALID_ARG_VALUE when `exitCode` is not an integer from 1 to 255.
    */
   constructor(message: string, options: CLIErrorOptions = {}) {
+    checkString(message, "message", "CLIError");
+    checkOptions(options, "CLIError");
+    checkOptionalString(options.code, "code", "CLIError");
     const exitCode = checkExitCode(options.exitCode);
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "CLIError";
@@ -92,6 +96,40 @@ function checkExitCode(exitCode: unknown): number {
     );
   }
   return exitCode;
+}
+
+/** Rejects a required string argument, naming the class that received it. */
+function checkString(value: unknown, name: string, subject: string): void {
+  if (typeof value !== "string") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument of ${subject} must be a string. Received ${describeReceived(value)}`,
+    );
+  }
+}
+
+/** Rejects an `options` argument that is neither omitted nor a plain object bag. */
+function checkOptions(options: unknown, subject: string): void {
+  if (options === undefined) return;
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "options" argument of ${subject} must be an object. Received ${describeReceived(options)}`,
+    );
+  }
+}
+
+/** Rejects an options member that was given but is not a string. */
+function checkOptionalString(value: unknown, name: string, subject: string): void {
+  if (value !== undefined && typeof value !== "string") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" option of ${subject} must be a string. Received ${describeReceived(value)}`,
+    );
+  }
 }
 
 /** Appends the usage hint shared by every command-resolution error. */
@@ -130,11 +168,26 @@ export class CommandNotFoundError extends CLIError {
    * @param options.available - Commands available at the point the lookup
    * failed, listed under `Available commands:` in the message.
    * @param options.cause - The underlying error.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `input` is not a string,
+   * `options` is not an object, or `available` is not an array of strings.
    */
   constructor(
     input: string,
     options: { available?: readonly string[] | undefined; cause?: unknown } = {},
   ) {
+    checkString(input, "input", "CommandNotFoundError");
+    checkOptions(options, "CommandNotFoundError");
+    if (
+      options.available !== undefined &&
+      (!Array.isArray(options.available) ||
+        options.available.some((name: unknown) => typeof name !== "string"))
+    ) {
+      throw usageError(
+        "type",
+        "ERR_INVALID_ARG_TYPE",
+        `The "available" option of CommandNotFoundError must be an array of strings. Received ${describeReceived(options.available)}`,
+      );
+    }
     const available = options.available?.length
       ? `\nAvailable commands: ${options.available.join(", ")}`
       : "";
@@ -145,7 +198,7 @@ export class CommandNotFoundError extends CLIError {
     });
     this.name = "CommandNotFoundError";
     this.input = input;
-    this.available = options.available;
+    this.available = options.available && [...options.available];
   }
 }
 
@@ -156,15 +209,26 @@ export class MissingArgumentError extends CLIError {
   declare readonly code: "MISSING_ARGUMENT";
   /** The name of the missing argument. */
   readonly argName: string;
-  /** Usage line of the command, appended to the message when present. */
+  /**
+   * Usage line of the command, appended to the message when present. In direct
+   * execution it starts with the program name; inside the interactive shell it
+   * does not.
+   */
   readonly usage?: string;
 
   /**
    * @param argName - The name of the missing argument.
-   * @param options.usage - Usage line of the command, appended to the message.
+   * @param options.usage - Usage line of the command, appended to the message. In
+   * direct execution it starts with the program name; inside the interactive
+   * shell it does not.
    * @param options.cause - The underlying error.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `argName` is not a string,
+   * `options` is not an object, or `usage` is not a string.
    */
   constructor(argName: string, options: { usage?: string | undefined; cause?: unknown } = {}) {
+    checkString(argName, "argName", "MissingArgumentError");
+    checkOptions(options, "MissingArgumentError");
+    checkOptionalString(options.usage, "usage", "MissingArgumentError");
     const { usage } = options;
     super(withUsage(`Missing required argument: <${argName}>`, usage), {
       code: "MISSING_ARGUMENT",
@@ -184,14 +248,21 @@ export class ExtraArgumentError extends CLIError {
   declare readonly code: "EXTRA_ARGUMENT";
   /** Every unexpected argument value, in input order. Never empty. */
   readonly extras: readonly string[];
-  /** Usage line of the command, appended to the message when present. */
+  /**
+   * Usage line of the command, appended to the message when present. In direct
+   * execution it starts with the program name; inside the interactive shell it
+   * does not.
+   */
   readonly usage?: string;
 
   /**
    * @param extras - The unexpected argument values. Must not be empty.
-   * @param options.usage - Usage line of the command, appended to the message.
+   * @param options.usage - Usage line of the command, appended to the message. In
+   * direct execution it starts with the program name; inside the interactive
+   * shell it does not.
    * @param options.cause - The underlying error.
-   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `extras` is not an array of strings.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `extras` is not an array of strings,
+   * `options` is not an object, or `usage` is not a string.
    * @throws {RangeError} ERR_INVALID_ARG_VALUE when `extras` is empty.
    */
   constructor(
@@ -212,6 +283,8 @@ export class ExtraArgumentError extends CLIError {
         'The "extras" argument of ExtraArgumentError must not be empty',
       );
     }
+    checkOptions(options, "ExtraArgumentError");
+    checkOptionalString(options.usage, "usage", "ExtraArgumentError");
     const { usage } = options;
     const quoted = extras.map(quoteValue).join(", ");
     super(withUsage(`Unexpected argument${extras.length > 1 ? "s" : ""}: ${quoted}`, usage), {
@@ -235,15 +308,26 @@ export class MissingOptionError extends CLIError {
    * spelling (`dry-run`). Its key in `ctx.options` is the camelCase form.
    */
   readonly optionName: string;
-  /** Usage line of the command, appended to the message when present. */
+  /**
+   * Usage line of the command, appended to the message when present. In direct
+   * execution it starts with the program name; inside the interactive shell it
+   * does not.
+   */
   readonly usage?: string;
 
   /**
    * @param optionName - The canonical long name of the missing option, without dashes.
-   * @param options.usage - Usage line of the command, appended to the message.
+   * @param options.usage - Usage line of the command, appended to the message. In
+   * direct execution it starts with the program name; inside the interactive
+   * shell it does not.
    * @param options.cause - The underlying error.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `optionName` is not a string,
+   * `options` is not an object, or `usage` is not a string.
    */
   constructor(optionName: string, options: { usage?: string | undefined; cause?: unknown } = {}) {
+    checkString(optionName, "optionName", "MissingOptionError");
+    checkOptions(options, "MissingOptionError");
+    checkOptionalString(options.usage, "usage", "MissingOptionError");
     const { usage } = options;
     super(withUsage(`Missing required option: --${optionName}`, usage), {
       code: "MISSING_OPTION",
@@ -268,15 +352,23 @@ export class InvalidOptionError extends CLIError {
   readonly optionName?: string;
   /** The rejected value, if known. */
   readonly value?: unknown;
-  /** Usage line of the command, appended to the message when present. */
+  /**
+   * Usage line of the command, appended to the message when present. In direct
+   * execution it starts with the program name; inside the interactive shell it
+   * does not.
+   */
   readonly usage?: string;
 
   /**
    * @param message - Description of why the option value is invalid.
    * @param options.optionName - The canonical long name of the option, without dashes.
    * @param options.value - The rejected value.
-   * @param options.usage - Usage line of the command, appended to the message.
+   * @param options.usage - Usage line of the command, appended to the message. In
+   * direct execution it starts with the program name; inside the interactive
+   * shell it does not.
    * @param options.cause - The underlying error.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `message` is not a string,
+   * `options` is not an object, or `optionName` or `usage` is not a string.
    */
   constructor(
     message: string,
@@ -287,6 +379,10 @@ export class InvalidOptionError extends CLIError {
       cause?: unknown;
     } = {},
   ) {
+    checkString(message, "message", "InvalidOptionError");
+    checkOptions(options, "InvalidOptionError");
+    checkOptionalString(options.optionName, "optionName", "InvalidOptionError");
+    checkOptionalString(options.usage, "usage", "InvalidOptionError");
     const { usage } = options;
     super(withUsage(message, usage), {
       code: "INVALID_OPTION",
@@ -315,15 +411,26 @@ export class UnknownOptionError extends CLIError {
    * there is no canonical name to report.
    */
   readonly optionName: string;
-  /** Usage line of the command, appended to the message when present. */
+  /**
+   * Usage line of the command, appended to the message when present. In direct
+   * execution it starts with the program name; inside the interactive shell it
+   * does not.
+   */
   readonly usage?: string;
 
   /**
    * @param flag - The unknown flag, normalized as described on {@link UnknownOptionError.flag}.
-   * @param options.usage - Usage line of the command, appended to the message.
+   * @param options.usage - Usage line of the command, appended to the message. In
+   * direct execution it starts with the program name; inside the interactive
+   * shell it does not.
    * @param options.cause - The underlying error.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `flag` is not a string,
+   * `options` is not an object, or `usage` is not a string.
    */
   constructor(flag: string, options: { usage?: string | undefined; cause?: unknown } = {}) {
+    checkString(flag, "flag", "UnknownOptionError");
+    checkOptions(options, "UnknownOptionError");
+    checkOptionalString(options.usage, "usage", "UnknownOptionError");
     const { usage } = options;
     super(withUsage(`Unknown option: ${quoteValue(flag)}`, usage), {
       code: "UNKNOWN_OPTION",
@@ -353,15 +460,23 @@ export class ValidationError extends CLIError {
    * the value handed to `validate` when its validation failed.
    */
   readonly value?: unknown;
-  /** Usage line of the command, appended to the message when present. */
+  /**
+   * Usage line of the command, appended to the message when present. In direct
+   * execution it starts with the program name; inside the interactive shell it
+   * does not.
+   */
   readonly usage?: string;
 
   /**
    * @param message - Description of the validation failure.
    * @param options.optionName - The canonical long name of the option, without dashes.
    * @param options.value - The rejected value.
-   * @param options.usage - Usage line of the command, appended to the message.
+   * @param options.usage - Usage line of the command, appended to the message. In
+   * direct execution it starts with the program name; inside the interactive
+   * shell it does not.
    * @param options.cause - The original error that caused the failure, if any.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `message` is not a string,
+   * `options` is not an object, or `optionName` or `usage` is not a string.
    */
   constructor(
     message: string,
@@ -372,6 +487,10 @@ export class ValidationError extends CLIError {
       cause?: unknown;
     } = {},
   ) {
+    checkString(message, "message", "ValidationError");
+    checkOptions(options, "ValidationError");
+    checkOptionalString(options.optionName, "optionName", "ValidationError");
+    checkOptionalString(options.usage, "usage", "ValidationError");
     const { usage } = options;
     super(withUsage(message, usage), {
       code: "VALIDATION_FAILED",
@@ -395,8 +514,10 @@ export class CancelledError extends CLIError {
   /**
    * @param options.cause - What triggered the cancellation, such as the abort
    * signal's `reason`.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `options` is not an object.
    */
   constructor(options: { cause?: unknown } = {}) {
+    checkOptions(options, "CancelledError");
     super("Cancelled", { code: "CANCELLED", exitCode: EXIT_CANCELLED, cause: options.cause });
     this.name = "CancelledError";
   }
@@ -411,8 +532,12 @@ export class InputEndedError extends CLIError {
   /**
    * @param promptMessage - The message of the prompt that could not be answered.
    * @param options.cause - The underlying error.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `promptMessage` is not a string
+   * or `options` is not an object.
    */
   constructor(promptMessage: string, options: { cause?: unknown } = {}) {
+    checkString(promptMessage, "promptMessage", "InputEndedError");
+    checkOptions(options, "InputEndedError");
     super(`No input available for the prompt: ${promptMessage}`, {
       code: "INPUT_ENDED",
       exitCode: EXIT_NO_INPUT,
@@ -433,11 +558,23 @@ export class ParseError extends CLIError {
    * @param message - Description of the parse failure.
    * @param options.quote - Quote left open by the input.
    * @param options.cause - The underlying error.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `message` is not a string or
+   * `options` is not an object.
+   * @throws {RangeError} ERR_INVALID_ARG_VALUE when `quote` is neither `"single"` nor `"double"`.
    */
   constructor(
     message: string,
     options: { quote?: "single" | "double" | undefined; cause?: unknown } = {},
   ) {
+    checkString(message, "message", "ParseError");
+    checkOptions(options, "ParseError");
+    if (options.quote !== undefined && options.quote !== "single" && options.quote !== "double") {
+      throw usageError(
+        "range",
+        "ERR_INVALID_ARG_VALUE",
+        `The "quote" option of ParseError must be "single" or "double". Received ${describeReceived(options.quote, "range")}`,
+      );
+    }
     super(message, { code: "PARSE_FAILED", exitCode: EXIT_USAGE, cause: options.cause });
     this.name = "ParseError";
     this.quote = options.quote;
@@ -554,14 +691,27 @@ export function isAbortError(value: unknown): boolean {
 
 /**
  * Reports whether an error represents a cancellation rather than a genuine
- * failure: any {@link CancelledError}, whatever the state of `signal`, or an
- * `AbortError` raised while `signal` is aborted. Used to present a clean
- * "Cancelled" message and the conventional 130 exit code instead of an
- * `Error:` line.
+ * failure: any {@link CancelledError}, whatever the state of `signal`, or, while
+ * `signal` is aborted, an `AbortError` or a rejection with the signal's own
+ * `signal.reason` (what `signal.throwIfAborted()` and `fetch` throw), whatever
+ * its type. Used to present a clean "Cancelled" message and the conventional 130
+ * exit code instead of an `Error:` line.
+ *
+ * @param err - The thrown or rejected value.
+ * @param signal - The signal of the work that failed.
+ * @throws {TypeError} ERR_INVALID_ARG_TYPE when `signal` is not an `AbortSignal`,
+ * even if `err` is a {@link CancelledError}.
  */
 export function isCancellationError(err: unknown, signal: AbortSignal): boolean {
+  if (!(signal instanceof AbortSignal)) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "signal" argument of isCancellationError() must be an AbortSignal. Received ${describeReceived(signal)}`,
+    );
+  }
   if (err instanceof CancelledError) return true;
-  return signal.aborted && isAbortError(err);
+  return signal.aborted && (isAbortError(err) || err === signal.reason);
 }
 
 /**
