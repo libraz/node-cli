@@ -303,7 +303,7 @@ A Windows path therefore needs single quotes in a line. A program that passes pa
 
 ### Unsupported syntax
 
-Redirection operators are rejected with a `ParseError`:
+Redirection operators are rejected with a `ParseError`, which is also how `execLine()` treats a lone `<` or `>` (the free function `tokenize()` keeps them as ordinary characters, so `exec(tokenize(line))` and `execLine(line)` differ on a line that contains `|`, `<` or `>`):
 
 ```
 Error: Redirection operator "<" is not supported
@@ -377,6 +377,7 @@ A mode `completer` is either a fixed list of strings or the same `Completer` a c
 - `exit` and `quit` always leave the mode. A registered command of that name cannot be reached from inside a mode, so honouring it would strand the user there.
 - Ctrl+D leaves the mode and returns to the main prompt. If the input stream has already ended, it ends the session instead.
 - Ctrl+C aborts the `signal` passed to the running action; a second press force-quits the process.
+- An action that throws or rejects fires `error` and the failure is printed on stderr, as for a command; `commandError` is not fired because no command ran. A cancellation fires neither.
 
 Leaving a mode with `exit`, `quit`, or Ctrl+D restores the main prompt. A command can also leave programmatically with `ctx.shell?.exitMode()`.
 

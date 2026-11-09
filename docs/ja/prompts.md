@@ -55,7 +55,7 @@ cli.command("init").action(async (ctx) => {
 
 `required` は共通ではありません。`text` と `password` にだけあります。
 
-文字列でない `message`、関数でない `validate`、配列でない `choices`、真偽値でない `confirm` の `default` を渡すと、何かを書き出す前にコード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
+文字列でない `message`、関数でない `validate`、配列でない `choices`、型の違うオプション（`default`、`trim`、`required`、`placeholder`、`marker`、`stdin`、`stderr`、`signal`、選択肢の `hint`）を渡すと、何かを書き出す前にコード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。メッセージには `prompt.text()` のように、呼んだプロンプト関数の名前が入ります。
 
 `message` と `marker` は1行で描画します。改行は空白に置き換わり、カーソル制御シーケンスは取り除かれます。質問の前に空行を出したいときは、先に stderr のストリームへ書いてください。
 
@@ -134,10 +134,12 @@ const env = await prompt.select("Environment:", ["dev", "staging", "prod"], {
 | フィールド | 挙動 |
 | --- | --- |
 | `default` | あらかじめ選択しておく値の `readonly T[]`。どの要素も選択肢のいずれかに一致する必要があり、一致しないと質問を出す前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。 |
-| `min` | 選択する項目数の下限。 |
-| `max` | 選択する項目数の上限。 |
+| `min` | 選択する項目数の下限。既定では下限なしで、`default` がなければ空の入力は `[]` を返します。 |
+| `max` | 選択する項目数の上限。既定では上限なし。 |
 
-`choices` が空の配列のとき、`min` または `max` が非負の安全な整数でないとき、`min` が `max` を超えるとき、`min` が選択肢の数を超えるときは、質問を出す前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+`choices` が空の配列のとき、`min` または `max` が非負の安全な整数でないとき、`min` が `max` を超えるとき、`min` が選択肢の数を超えるとき、`default` の異なる項目の数が `min`〜`max` の範囲外のときは、質問を出す前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+
+件数が範囲外のときは `Select at least 1 item` や `Select at most 1 item`（2 件以上なら `items`）と表示して再度尋ねます。`select` で答えが不正なときは `Please enter a number between 1 and N, or a choice label` と表示して再度尋ねます。
 
 入力はカンマ区切りの 1 始まりの番号です。同じ番号の重複は `min` と `max` を数える **前に** 取り除かれるため、`1,1,2` は2件の選択として数えられます。値は番号を入力した順に返されます（`3,1` なら3番目の選択肢が先頭）。空の入力は、既定値を選択肢の順に返します。
 

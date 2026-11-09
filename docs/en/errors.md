@@ -18,7 +18,7 @@ In direct mode (`cli.start()` with command-line arguments), a failure is written
 $ mycli deploy
 Error: Missing required argument: <env>
 
-  Usage: deploy <env> [region] [options]
+  Usage: mycli deploy <env> [region] [options]
 $ echo $?
 64
 ```
@@ -35,7 +35,7 @@ Error: Missing required argument: <env>
 mycli>
 ```
 
-The message text is identical in both modes; only the process-level consequence differs.
+The message text is identical in both modes except for the `Usage:` line, which starts with the program name in direct mode (`mycli deploy …`) and not in the shell, where the program name is never typed. Otherwise only the process-level consequence differs.
 
 ## Error classes
 
@@ -44,7 +44,7 @@ All of these are exported from the package and all extend `CLIError`. Every cons
 | Class | `code` | `exitCode` | Extra fields | Thrown when |
 |---|---|---|---|---|
 | `CLIError(message, CLIErrorOptions)` | as given, default `FAILED` | as given, default `1` | `code`, `exitCode`, `cause?` | The base class. Safe to subclass |
-| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `64` | `input`, `available?` | Unrecognized input with no `fallback` handler; an unknown child of a command group; `help <unknown>` |
+| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `64` | `input`, `available?` | Unrecognized input with no `fallback` handler; an unknown child of a command group; `help <unknown>` (`input` and `available` are reported as for any other unknown command) |
 | `MissingArgumentError(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `64` | `argName`, `usage?` | A required positional argument is absent. A required variadic argument with no values reports `...name` |
 | `ExtraArgumentError(extras, { usage?, cause? })` | `EXTRA_ARGUMENT` | `64` | `extras`, `usage?` | Positional values are left over after the command's arguments are filled |
 | `MissingOptionError(optionName, { usage?, cause? })` | `MISSING_OPTION` | `64` | `optionName`, `usage?` | An option declared `required: true` is absent |
@@ -61,7 +61,7 @@ Every constructor accepts `{ cause }`, which is forwarded to `Error` and exposed
 
 The `Extra fields` column holds what each class adds. The fields have these meanings:
 
-- `usage` is the command's usage line. When present, it is appended to the message as `\n\n  Usage: <usage>`. Every error raised while a command is being resolved (missing or extra argument, missing, invalid or unknown option, validation) carries it, so the hint is the same for all of them.
+- `usage` is the command's usage line. In direct execution it starts with the program name (`mycli deploy <env> [options]`); in the interactive shell it does not (`deploy <env> [options]`). When present, it is appended to the message as `\n\n  Usage: <usage>`. Every error raised while a command is being resolved (missing or extra argument, missing, invalid or unknown option, validation) carries it, so the hint is the same for all of them.
 - `optionName` is the canonical long name in its kebab-case spelling, without dashes (`dry-run`), for an option that has a definition. For `UnknownOptionError`, which has no definition, it is the typed flag without its dashes. The key of the same option in `ctx.options` is the camelCase form (`dryRun`).
 - `flag` is one unknown flag in a normalized spelling: `--xyz=3` is reported as `--xyz`, and an unknown `x` inside the cluster `-vx` as `-x`.
 - `value` on `InvalidOptionError` and `ValidationError` is the rejected value: the raw input string when type coercion or `parse` failed, the value handed to `validate` when its check failed. A command-level validation failure carries neither `value` nor `optionName`.
@@ -230,7 +230,7 @@ A cancellation is not a failure: the user asked for the work to stop. It is a `C
 Cancelled
 ```
 
-A cancellation does not fire `commandError` or `error`. Every entry point treats it the same way: `exec()`, `execLine()`, `cli.start()` and the interactive shell reject or report a `CancelledError`, and a raw `AbortError` raised while the signal is aborted is wrapped once, with the signal's `reason` as `cause`. Passing an already aborted signal to `exec()` or `execLine()` rejects with `CancelledError` before any hook, validator or action runs. An action that ignores the abort and returns normally simply resolves.
+A cancellation does not fire `commandError` or `error`. Every entry point treats it the same way: `exec()`, `execLine()`, `cli.start()` and the interactive shell reject or report a `CancelledError`, and a raw `AbortError`, or the signal's own `reason`, raised while the signal is aborted is wrapped once, with the signal's `reason` as `cause`. Passing an already aborted signal to `exec()` or `execLine()` rejects with `CancelledError` before any hook, validator or action runs. An action that ignores the abort and returns normally simply resolves.
 
 Two exported helpers classify and format a thrown value.
 
@@ -239,9 +239,10 @@ Two exported helpers classify and format a thrown value.
 Returns `true` when the value represents a user-initiated cancellation:
 
 - any `CancelledError`, whatever the state of `signal`, or
-- an `Error` whose `name` is `"AbortError"` **when the supplied `signal` is aborted**.
+- an `Error` whose `name` is `"AbortError"` **when the supplied `signal` is aborted**, or
+- any rejection that is the signal's own `signal.reason`, **when the supplied `signal` is aborted**. That is what `signal.throwIfAborted()` and `fetch` throw, and the reason may be any value, including a `TimeoutError` from `AbortSignal.timeout()` or a value that is not an `Error`.
 
-The signal argument is required. A bare `AbortError` is **not** treated as a cancellation unless the signal is aborted — an abort raised by unrelated code should not be silently reported as "the user cancelled".
+The signal argument is required. A bare `AbortError`, or any other value, is **not** treated as a cancellation unless the signal is aborted — an abort raised by unrelated code should not be silently reported as "the user cancelled". A non-signal `signal` throws `TypeError` (`ERR_INVALID_ARG_TYPE`), whatever `err` is.
 
 ```typescript
 import { isCancellationError } from "@libraz/node-cli";

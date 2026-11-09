@@ -215,7 +215,7 @@ describe("public surface and documentation agree", () => {
         }
       }
 
-      const numbers = Array.from({ length: 25 }, (_, index) => index + 1);
+      const numbers = Array.from({ length: 27 }, (_, index) => index + 1);
       expect([...blocks.keys()].sort((a, b) => a - b)).toEqual(numbers);
       expect(numbers.filter((number) => (blocks.get(number) ?? 0) < 2)).toEqual([]);
       expect(stale).toEqual([]);

@@ -1,8 +1,8 @@
 # 1.x からの移行
 
-バージョン 2.0.0 では、公開面の名前、シグネチャ、既定の挙動が変わります。旧い形は非推奨の別名を残さずに削除しています。以下の各節に、1.x のコードと置き換え後のコードを載せます。1〜25 が破壊的変更です。末尾のノートでは、テストやスクリプトを移すときに押さえる挙動を扱います。
+バージョン 2.0.0 では、公開面の名前、シグネチャ、既定の挙動が変わります。旧い形は非推奨の別名を残さずに削除しています。以下の各節に、1.x のコードと置き換え後のコードを載せます。1〜27 が破壊的変更です。末尾のノートでは、テストやスクリプトを移すときに押さえる挙動を扱います。
 
-多くの変更は TypeScript がコンパイル時に報告します。実行時にだけ現れる変更は 1、7、8、9（終了コード）、10、11、16、18、19、20〜25 です。
+多くの変更は TypeScript がコンパイル時に報告します。実行時にだけ現れる変更は 1、7、8、9（終了コード）、10、11、16、18、19、20〜27 です。
 
 ### 1. 入口
 
@@ -581,6 +581,54 @@ const level = await prompt.select("Level", ["low", "high"], { ...ctx, default: "
 ```text
 # after: TTY with NO_COLOR=1
 ✔ Build finished
+```
+
+### 26. 直接実行モードのヘルプと usage はプログラム名で始まる
+
+ヘルプのページ、コマンドの一覧、エラーの `Usage:` の行、末尾の案内は、CLI を直接実行したときにプログラム名を含みます。表示された文面をそのままシェルに貼り付けられます。`<name>` は `createCLI` に渡した `name` です。対話シェルでは、プログラム名を打つことがないので、これまでの文面のままです。`--help` の出力やエラーの `usage` を比較するテストは、新しい文面に合わせてください。
+
+```text
+# before
+$ myapp deploy
+Error: Missing required argument: <env>
+
+  Usage: deploy <env> [options]
+$ myapp help deploy
+Usage: deploy <env> [options]
+$ myapp
+...
+Type "help <command>" for more information.
+```
+
+```text
+# after
+$ myapp deploy
+Error: Missing required argument: <env>
+
+  Usage: myapp deploy <env> [options]
+$ myapp help deploy
+Usage: myapp deploy <env> [options]
+$ myapp
+...
+Usage: myapp <command> [options]
+...
+Run "myapp help <command>" for more information.
+```
+
+### 27. 先頭の `--` はオプションの終わりを表す
+
+`--` はオプションの終わりを表す印で、コマンド名ではありません。先頭の `--` は、`start()`、`exec()`、`execLine()`、対話シェルのどれでも、コマンドを探す前に取り除かれます。1.x ではこれを未知のコマンドとして報告していました。取り除いたあとに何も残らない入力は、何もせずに resolve します（`start()` はヘルプ一覧を表示します）。先頭の空文字列のあとにコマンドが続く場合は、これまでどおり `CommandNotFoundError` です。
+
+```text
+# before
+$ myapp -- greet World
+Error: Command not found: "--"
+```
+
+```text
+# after
+$ myapp -- greet World
+Hello, World!
 ```
 
 ## ノート

@@ -12,7 +12,7 @@
 | `afterExecute` | `(ctx) => void \| Promise<void>` | アクションが成功して解決したときだけ |
 | `commandError` | `(error, ctx) => void \| Promise<void>` | 解決済みのコマンドが失敗したとき |
 | `error` | `(error) => void \| Promise<void>` | あらゆる失敗。コマンドが解決される前の失敗と、非同期プラグインの初期化失敗も含みます。キャンセルでは発生しません |
-| `exit` | `() => void \| Promise<void>` | `cli.start()` が終わったとき、または強制終了や SIGTERM でプロセスが終わるときに一度だけ。`cli.exec()` と `cli.execLine()` からは発生しません |
+| `exit` | `(exitCode: number) => void \| Promise<void>` | `cli.start()` が終わったとき、または強制終了や SIGTERM でプロセスが終わるときに一度だけ。`cli.exec()` と `cli.execLine()` からは発生しません |
 
 `ctx` は `CommandContext` で、アクションが受け取るものと同じオブジェクトです。`args`、`options`、`commandPath`、各ストリーム、`signal` を持ちます。[コマンド](commands.md)を参照してください。
 
@@ -28,6 +28,8 @@
 4. `beforeExecute` が発生します
 5. アクションが実行されます
 6. `afterExecute` が発生します
+
+ヘルプやバージョンの表示はコマンドの実行ではありません。`help [...]`、`--help`、`-h`、`<command> --help`、アクションを持たないグループ、`--version`、`-V` は `beforeExecute`、`afterExecute`、`commandError` を発生させません。アプリケーションが自分で登録した `help` コマンドは通常のコマンドなので、これらのイベントを発生させます。存在しない `help` の対象は `error` だけを発生させます。
 
 手順 1、2、3、5 のいずれかで失敗すると、`afterExecute` は飛ばされます。`beforeExecute` のリスナーが例外を投げた場合は `error` で報告され、アクションと `afterExecute` は実行されます。
 
@@ -123,13 +125,15 @@ cli.on("error", (error) => {
 
 `cli.exec()` と `cli.execLine()` からは**発生しません**。この 2 つは、プロセスのライフサイクルを呼び出し側に任せます。
 
+ハンドラは終了コードを受け取ります。これは `cli.start()` が resolve する値と同じで、失敗ならそのコード、強制終了と SIGTERM なら 130 または 143、それ以外は `process.exitCode`（未設定なら 0）です。最初の発火が優先され、あとからプロセスを終わらせる別の経路のコードは渡されません。引数を使わないハンドラはそのまま動きます。
+
 CLI が処理しないシグナルを受けると、プロセスは Node の既定の動作で終わるため、`exit` ハンドラもキャンセルハンドラも実行されません。直接実行モードの SIGTERM と SIGHUP、対話シェルの SIGHUP がこれにあたります。
 
 ```typescript
 import { writeFile } from "node:fs/promises";
 
-cli.on("exit", async () => {
-  await writeFile("/tmp/mycli-session.log", "session ended\n", { flag: "a" });
+cli.on("exit", async (exitCode) => {
+  await writeFile("/tmp/mycli-session.log", `session ended (${exitCode})\n`, { flag: "a" });
 });
 ```
 

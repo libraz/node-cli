@@ -17,7 +17,7 @@ const rows = [
 console.log(table(rows, { border: "rounded" }));
 ```
 
-戻り値に **末尾の改行** は付きません。描画するものが何もない入力は `""` を返します。結果は `console.log` に渡すか、コマンドの中ならコンテキストの出力ストリームへ渡してください（[コマンド](commands.md)を参照）。
+戻り値に **末尾の改行** は付きません。描画するものが何もない入力は `""` を返します。空の `data` でも `columns` を宣言していればヘッダーは描画されます（`table([], { columns: ["a", "b"], border: "simple" })` は `"a | b\n--|--"` を返します）。`columns` がない場合と `header: false` の場合は `""` です。結果は `console.log` に渡すか、コマンドの中ならコンテキストの出力ストリームへ渡してください（[コマンド](commands.md)を参照）。
 
 ```ts
 import { createCLI, table } from "@libraz/node-cli";

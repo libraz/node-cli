@@ -40,7 +40,7 @@ A bar, a spinner and a multi-bar group all end with the same four verbs, and eve
 | `warn(message?)` | Replaces the frame with a yellow `⚠` and `message ?? label`. A bar stops where it is. | Writes that one line with `[WARN]`. |
 | `stop()` | Leaves the last frame in place and ends the line. | Writes nothing. |
 
-Once a verb has run, the handle is finished: later calls on it do nothing. `[Symbol.dispose]()` is the same as `stop()`.
+Once a verb has run, the handle is finished: later calls on it do nothing, except that a `message` that is neither `undefined` nor a string still throws `TypeError` (`ERR_INVALID_ARG_TYPE`), before any state changes. `[Symbol.dispose]()` is the same as `stop()`: it leaves the last frame and writes nothing to a stream that cannot animate. Call `succeed`, `fail` or `warn` first when the run needs a result line.
 
 The symbol and the color of a result line are decided independently:
 
@@ -86,7 +86,7 @@ Passed to `format` on every redraw. Every member is `readonly`.
 | `percent` | Integer percentage from 0 to 100; `100` when `total` is `0`. |
 | `elapsedMs` | Milliseconds since the bar was created. |
 | `etaMs` | Estimated milliseconds remaining. `Infinity` until some progress has been made, `0` once complete. |
-| `ratePerSecond` | Units per second. |
+| `ratePerSecond` | Average units per second since the bar was created. |
 
 ```ts
 import { progress } from "@libraz/node-cli";

@@ -70,7 +70,7 @@ Line by line:
 - `.description(...)` supplies the text that appears next to the command in generated help.
 - `.action((ctx) => { ... })` registers the function that runs when the command is invoked. `ctx` is the [command context](commands.md): `ctx.args` holds the positional arguments keyed by name, `ctx.options` holds the parsed options, and `ctx.stdout` is the stream to write results to.
 - `ctx.args.name` is typed `string`. The type comes from the definition string: `<name>` is a `string`, `[name]` is `string | undefined`, and `<...name>` is a `readonly string[]`. Positional arguments are never converted, so a numeric value is parsed in the action. Keys are camelCase: `<file-name>` is read as `ctx.args.fileName`.
-- `await cli.start()` hands control to the library. It reads the terminal arguments, picks an execution mode, runs the matching command, and resolves to the exit code.
+- `await cli.start()` hands control to the library. It reads the terminal arguments, picks an execution mode, runs the matching command, and resolves to the exit code the process ends with.
 
 Write to `ctx.stdout` rather than calling `console.log`. `ctx.stdout` is the stream belonging to the current execution, which is what makes the same command work when its output is piped into another command inside the interactive shell, and what makes it testable by passing a substitute stream.
 
@@ -174,12 +174,12 @@ In order:
 
 1. Any registered plugins are awaited. An asynchronous plugin that rejects is fatal: `cli.start()` reports the error (exit code 1), the `exit` event fires, and no command runs. A plugin that throws synchronously throws from `cli.use()` instead.
 2. The argument list is `process.argv.slice(2)` — everything typed after the command name — unless an array was passed to `cli.start()` explicitly.
-3. If arguments were supplied but none of them carries content (all empty strings, or exactly the end-of-options marker `--`), the help index is printed and `cli.start()` resolves to 0.
+3. If arguments were supplied but none of them carries content (all empty strings, or exactly the end-of-options marker `--`), the help index is printed and `cli.start()` resolves to 0 when `process.exitCode` is unset (otherwise to its current value). A leading `--` is dropped before the command is looked up, so `myapp -- greet World` runs `greet World`.
 4. If there is at least one argument, that one command runs. This is **direct mode**.
 5. If there are no arguments and both standard input and standard output are terminals, the **interactive shell** opens.
-6. Otherwise — no arguments, with output piped or input redirected — the help index is printed and `cli.start()` resolves to 0. No prompt is opened, because there is no terminal to prompt on.
+6. Otherwise — no arguments, with output piped or input redirected — the help index is printed and `cli.start()` resolves to 0 when `process.exitCode` is unset. No prompt is opened, because there is no terminal to prompt on.
 
-For a direct-mode failure or interruption, the library sets `process.exitCode` rather than calling `process.exit()`, so pending output is flushed and any `exit` event handler gets to run. A successful direct-mode command leaves the exit code unchanged. Either way, `cli.start()` resolves to the code the process will exit with (0 when none is set), so a caller can read it without inspecting `process.exitCode`. The exceptions are a force-quit (a second interrupt, exit code 130) and the interactive shell's shutdown on a termination signal (exit code 143). A direct-mode command interrupted with Ctrl-C exits with code 130. See [Errors](errors.md) for the full list.
+For a direct-mode failure or interruption, the library sets `process.exitCode` rather than calling `process.exit()`, so pending output is flushed and any `exit` event handler gets to run. A successful direct-mode command leaves `process.exitCode` unchanged, so an action may set it itself. Either way, `cli.start()` resolves to the code the process will exit with (0 when none is set), so a caller can read it without inspecting `process.exitCode`. The exceptions are a force-quit (a second interrupt, exit code 130) and the interactive shell's shutdown on a termination signal (exit code 143). A direct-mode command interrupted with Ctrl-C exits with code 130. See [Errors](errors.md) for the full list.
 
 ### Direct mode
 
@@ -202,7 +202,7 @@ A missing required argument is reported the same way, with the command's usage l
 $ myapp greet
 Error: Missing required argument: <name>
 
-  Usage: greet <name> [options]
+  Usage: myapp greet <name> [options]
 ```
 
 ### Interactive shell
@@ -244,6 +244,8 @@ With no arguments and output going somewhere other than a terminal, the help ind
 $ myapp | less
 myapp v1.0.0
 
+Usage: myapp <command> [options]
+
 Available commands:
 
   greet <name>         Greet someone by name
@@ -253,7 +255,7 @@ Options:
   -h, --help       Show help
   -V, --version    Show the CLI version
 
-Type "help <command>" for more information.
+Run "myapp help <command>" for more information.
 ```
 
 This is deliberate: an interactive prompt written into a pipe would hang waiting for input that never arrives. The same applies to `myapp > out.txt` and to running the tool from a script or a CI job.
@@ -332,7 +334,7 @@ The generated help follows the nesting:
 
 ```
 $ myapp help db
-Usage: db <command> [options]
+Usage: myapp db <command> [options]
 
 Database commands
 
@@ -342,7 +344,7 @@ Options:
 Commands:
   migrate    Apply pending migrations
 
-Type "help db <command>" for more information.
+Run "myapp help db <command>" for more information.
 ```
 
 A group command has no action of its own, so invoking `myapp db` with no subcommand prints that same help page. See [Commands](commands.md) for nesting rules and aliases.

@@ -303,7 +303,7 @@ mycli> note add 'C:\Users\me'  # single quotes keep the backslashes
 
 ### 未対応の構文
 
-リダイレクト演算子は `ParseError` で拒否されます。
+リダイレクト演算子は `ParseError` で拒否されます。`execLine()` は単独の `<` や `>` も同じように拒否しますが、関数 `tokenize()` はこれらを普通の文字として残します。そのため、`|`、`<`、`>` を含む行では `exec(tokenize(line))` と `execLine(line)` の結果が異なります。
 
 ```
 Error: Redirection operator "<" is not supported
@@ -377,6 +377,7 @@ cli
 - `exit` と `quit` は常にモードを抜けます。同名の登録コマンドはモード内から到達できないため、そちらを優先すると利用者がモードから出られなくなります。
 - Ctrl+D はモードを抜けてメインのプロンプトに戻ります。入力ストリームがすでに終わっている場合は、代わりにセッションを終了します。
 - Ctrl+C は、実行中のアクションに渡された `signal` を中断します。もう一度押すとプロセスを強制終了します。
+- アクションが throw または reject すると、コマンドと同じく `error` が発生し、失敗は標準エラーに表示されます。実行されたコマンドがないので `commandError` は発生しません。キャンセルはどちらも発生させません。
 
 `exit`、`quit`、Ctrl+D のいずれかでモードを抜けると、メインのプロンプトに戻ります。コマンドから `ctx.shell?.exitMode()` を呼んで抜けることもできます。
 

@@ -1,8 +1,8 @@
 # Migrating from 1.x
 
-Version 2.0.0 changes names, signatures and defaults across the public surface. The old forms are removed without deprecated aliases, and each section below shows the 1.x code and its replacement. Items 1 to 25 are the breaking changes; the notes at the end cover behaviour that matters when you move tests and scripts.
+Version 2.0.0 changes names, signatures and defaults across the public surface. The old forms are removed without deprecated aliases, and each section below shows the 1.x code and its replacement. Items 1 to 27 are the breaking changes; the notes at the end cover behaviour that matters when you move tests and scripts.
 
-TypeScript reports most of these at compile time. The changes that appear only at runtime are items 1, 7, 8, 9 (exit codes), 10, 11, 16, 18, 19 and 20 to 25.
+TypeScript reports most of these at compile time. The changes that appear only at runtime are items 1, 7, 8, 9 (exit codes), 10, 11, 16, 18, 19 and 20 to 27.
 
 ### 1. Entry points
 
@@ -581,6 +581,54 @@ const level = await prompt.select("Level", ["low", "high"], { ...ctx, default: "
 ```text
 # after: TTY with NO_COLOR=1
 ✔ Build finished
+```
+
+### 26. Direct-mode help and usage start with the program name
+
+Help pages, the command index, the `Usage:` line of an error and the closing hint now name the program when the CLI runs directly, so the text can be copied into a shell. `<name>` is the `name` given to `createCLI`. The interactive shell keeps the old text, because nobody types the program name there. A test that compares `--help` output, or an error's `usage`, must expect the new text.
+
+```text
+# before
+$ myapp deploy
+Error: Missing required argument: <env>
+
+  Usage: deploy <env> [options]
+$ myapp help deploy
+Usage: deploy <env> [options]
+$ myapp
+...
+Type "help <command>" for more information.
+```
+
+```text
+# after
+$ myapp deploy
+Error: Missing required argument: <env>
+
+  Usage: myapp deploy <env> [options]
+$ myapp help deploy
+Usage: myapp deploy <env> [options]
+$ myapp
+...
+Usage: myapp <command> [options]
+...
+Run "myapp help <command>" for more information.
+```
+
+### 27. A leading `--` ends the options
+
+`--` is the end-of-options marker, not a command name. A leading `--` is dropped before the command is looked up, in `start()`, `exec()`, `execLine()` and the interactive shell. 1.x reported it as an unknown command. An input with nothing left after it resolves without doing anything (`start()` prints the help index); a leading empty string followed by a command is still `CommandNotFoundError`.
+
+```text
+# before
+$ myapp -- greet World
+Error: Command not found: "--"
+```
+
+```text
+# after
+$ myapp -- greet World
+Hello, World!
 ```
 
 ## Notes

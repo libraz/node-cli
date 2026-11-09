@@ -133,7 +133,7 @@ log.info("Payload: %j", { ok: true });
 
 ## 子ロガー
 
-`child(prefix)` は、サブシステムに絞ったロガーを返します。接頭辞は `:` でつながります。
+`child(prefix)` は、サブシステムに絞ったロガーを返します。接頭辞は `:` でつながります。`prefix` が文字列でなければ `TypeError`（`ERR_INVALID_ARG_TYPE`）を投げます。
 
 ```ts
 import { createLogger } from "@libraz/node-cli";

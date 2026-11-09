@@ -405,14 +405,16 @@ Help is available without declaring anything.
 
 ```bash
 $ myapp deploy --help
-Usage: deploy <env> [options]
+Usage: myapp deploy <env> [options]
 ```
 
 Required arguments are not checked when help is requested, so `myapp deploy --help` works even though `<env>` was not supplied.
 
 A bare `--help` or `-h` as the only token prints the index of all commands. Followed by a command, as in `myapp --help deploy`, it prints that command's page, the same as `myapp help deploy`.
 
-These flags stop working on a command that declares an option named `help` or aliased `h`. That is intentional: an application flag always wins. Help output and tab completion adapt automatically, advertising only the forms that still trigger help.
+These flags stop working on a command that declares an option named `help` or aliased `h`. That is intentional: an application flag always wins. Help output and tab completion adapt automatically, advertising only the forms that still trigger help. A command that binds only `-h` to its own option keeps `--help` as its help flag, and `help <command>` remains available as well.
+
+Showing help or the version is not a command execution, so it fires no `beforeExecute`, `afterExecute` or `commandError` event (see [Events and plugins](events-and-plugins.md)).
 
 `--version` and `-V` print the version string, but only when they are the sole token and only when `version` was passed to `createCLI`. Without `version`, they are unknown flags like any other. There is no `-v` short form; `-v` is free for the application to use.
 

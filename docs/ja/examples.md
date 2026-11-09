@@ -59,6 +59,8 @@ $ hello --help
 hello v1.0.0
 A friendly greeting CLI
 
+Usage: hello <command> [options]
+
 Available commands:
 
   greet <name>         Say hello to someone
@@ -68,7 +70,7 @@ Options:
   -h, --help       Show help
   -V, --version    Show the CLI version
 
-Type "help <command>" for more information.
+Run "hello help <command>" for more information.
 ```
 
 必須の引数が欠けている場合はアクションが走る前に失敗し、プロセスは終了コード 64 で終わります。
@@ -77,7 +79,7 @@ Type "help <command>" for more information.
 $ hello greet
 Error: Missing required argument: <name>
 
-  Usage: greet <name> [options]
+  Usage: hello greet <name> [options]
 ```
 
 [`01-minimal.ts`](../../examples/01-minimal.ts) を要約したものです。[コマンド](commands.md) も参照してください。
@@ -150,7 +152,7 @@ Error: No such remote: nope
 
 ```text
 $ vcs remote
-Usage: remote <command> [options]
+Usage: vcs remote <command> [options]
 
 Manage repository remotes
 
@@ -162,7 +164,7 @@ Commands:
   remove <name>       Delete a remote (alias: rm)
   list                List configured remotes (alias: ls)
 
-Type "help remote <command>" for more information.
+Run "vcs help remote <command>" for more information.
 ```
 
 [`02-git-style.ts`](../../examples/02-git-style.ts) を要約したものです。
@@ -258,17 +260,17 @@ Aborted.
 $ deployer deploy prod --tag latest --yes
 Error: Invalid value "latest" for --tag: expected a tag like v1.2.3, got "latest"
 
-  Usage: deploy <env> [options]
+  Usage: deployer deploy <env> [options]
 
 $ deployer deploy edge --tag v1.0.0 --yes
 Error: Unknown environment "edge". Expected one of: dev, staging, prod
 
-  Usage: deploy <env> [options]
+  Usage: deployer deploy <env> [options]
 
 $ deployer deploy prod --yes
 Error: Missing required option: --tag
 
-  Usage: deploy <env> [options]
+  Usage: deployer deploy <env> [options]
 ```
 
 プログレスバーの出力先は `ctx.stderr` です。stdout が別のプログラムへパイプされる可能性がある以上、進捗はこちらに出すべきものです。確認の質問も同じ理由で `ctx.stderr` に出ます。プロンプトに `ctx` を渡すと、コマンドの `stdin`、`stderr`、`signal` がそのまま使われます。[`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts) を土台にしています。[プログレス](progress.md) と [プロンプト](prompts.md) も参照してください。
@@ -918,14 +920,14 @@ no changes
 $ infra plan --since nope
 Error: Invalid value "nope" for --since: not a date: nope
 
-  Usage: plan [stack] [options]
+  Usage: infra plan [stack] [options]
 ```
 
 `parse` が失敗すると、そのオプション名を含む `ValidationError` に包まれます。生成されたヘルプには既定値と、ブール値オプションの否定形が並びます。
 
 ```text
 $ infra help plan
-Usage: plan [stack] [options]
+Usage: infra plan [stack] [options]
 
 Preview the changes for a stack
 

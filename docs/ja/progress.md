@@ -40,7 +40,7 @@ spinner.succeed("Done!");
 | `warn(message?)` | フレームを、黄の `⚠` と `message ?? label` に置き換えます。バーはその位置で止まります。 | `[WARN]` を付けたその1行を書きます。 |
 | `stop()` | 最後のフレームを残して、行を終えます。 | 何も書きません。 |
 
-動詞を一度呼ぶと、そのハンドルは終了します。以後の呼び出しは何もしません。`[Symbol.dispose]()` は `stop()` と同じです。
+動詞を一度呼ぶと、そのハンドルは終了します。以後の呼び出しは何もしません。ただし、`undefined` でも文字列でもない `message` は、状態を変える前に `TypeError`（`ERR_INVALID_ARG_TYPE`）を投げます。`[Symbol.dispose]()` は `stop()` と同じで、最後のフレームを残し、アニメーションできないストリームには何も書きません。結果の行が必要なときは、先に `succeed`、`fail`、`warn` を呼んでください。
 
 結果の行の記号と色は、別々に決まります。
 
@@ -86,7 +86,7 @@ spinner.succeed("Done!");
 | `percent` | 0 から 100 までの整数の百分率。`total` が `0` のときは `100` です。 |
 | `elapsedMs` | バーを作ってからの経過時間（ミリ秒）。 |
 | `etaMs` | 残り時間の推定値（ミリ秒）。進捗が出るまでは `Infinity`、完了後は `0` です。 |
-| `ratePerSecond` | 1秒あたりのユニット数。 |
+| `ratePerSecond` | バーの作成からの、1秒あたりの平均ユニット数。 |
 
 ```ts
 import { progress } from "@libraz/node-cli";

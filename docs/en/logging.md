@@ -133,7 +133,7 @@ Redirecting output to a file therefore produces plain, greppable `[WARN]`-style 
 
 ## Child loggers
 
-`child(prefix)` returns a logger scoped to a subsystem. Prefixes compose with `:`.
+`child(prefix)` returns a logger scoped to a subsystem. Prefixes compose with `:`. A `prefix` that is not a string throws `TypeError` (`ERR_INVALID_ARG_TYPE`).
 
 ```ts
 import { createLogger } from "@libraz/node-cli";

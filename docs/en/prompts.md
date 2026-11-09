@@ -55,7 +55,7 @@ Every method accepts these, through `PromptOptions<T>`:
 
 `required` is not shared: it exists only on `text` and `password`.
 
-A `message` that is not a string, a `validate` that is not a function, `choices` that is not an array, or a `confirm` `default` that is not a boolean throws `TypeError` with code `ERR_INVALID_ARG_TYPE` before anything is written.
+A `message` that is not a string, a `validate` that is not a function, `choices` that is not an array, or an option of the wrong type (`default`, `trim`, `required`, `placeholder`, `marker`, `stdin`, `stderr`, `signal`, or a choice `hint`) throws `TypeError` with code `ERR_INVALID_ARG_TYPE` before anything is written; the message names the prompt function, such as `prompt.text()`.
 
 `message` and `marker` are rendered on one line: a newline becomes a space and cursor-control sequences are removed. To print a blank line before the question, write it to the stderr stream first.
 
@@ -134,10 +134,12 @@ Returns `Promise<readonly T[]>`. The result is read-only.
 | Field | Behavior |
 | --- | --- |
 | `default` | `readonly T[]` of pre-selected values. Every element must match a choice, otherwise `RangeError` (code `ERR_INVALID_ARG_VALUE`) is thrown before the question is asked. |
-| `min` | Minimum number of items. |
-| `max` | Maximum number of items. |
+| `min` | Minimum number of items. No minimum by default; with no `default`, an empty submission then returns `[]`. |
+| `max` | Maximum number of items. No maximum by default. |
 
-An empty `choices` array, a `min` or `max` that is not a non-negative safe integer, a `min` above `max`, and a `min` above the number of choices all throw `RangeError` (code `ERR_INVALID_ARG_VALUE`) before the question is asked.
+An empty `choices` array, a `min` or `max` that is not a non-negative safe integer, a `min` above `max`, a `min` above the number of choices, and a `default` whose count of distinct items falls outside `min` to `max` all throw `RangeError` (code `ERR_INVALID_ARG_VALUE`) before the question is asked.
+
+When the count is out of range the prompt says `Select at least 1 item` or `Select at most 1 item` (`items` for other counts) and asks again. A `select` that gets an invalid answer asks again with `Please enter a number between 1 and N, or a choice label`.
 
 Input is comma-separated 1-based numbers. Repeated numbers are **deduplicated before** `min` and `max` are counted, so `1,1,2` counts as two selections. The values come back in the order the numbers were entered (`3,1` returns the third choice first), and an empty submission returns the defaults in choice order.
 

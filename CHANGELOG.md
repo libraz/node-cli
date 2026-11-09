@@ -20,6 +20,8 @@ Major release. The public interface is renamed and reshaped so that one concept 
 - `cli.catch()` is `cli.fallback()`, `PluginContext.catch` is `fallback`, and `CatchContext` is `FallbackContext` (now with `stdin`, `signal` and `rawArgv`).
 - Top level: `--help <cmd>` and `-h <cmd>` print that command's help. An unknown top-level flag, and `--version` without a configured version, is `UnknownOptionError` (was `Command not found`). The command list always shows `-h, --help`, and `Shell commands` appears only in the interactive shell.
 - Commands and aliases are limited to letters and digits joined by single dashes; others throw `ERR_INVALID_DEFINITION`.
+- Help and usage text in direct execution starts with the program name: `Usage: myapp deploy <env> [options]`, an index with `Usage: myapp <command> [options]` and the closing `Run "myapp help <command>" for more information.`. The `usage` of an error starts with the program name in direct execution and not in the interactive shell, which keeps the old text.
+- A leading `--` is dropped as the end-of-options marker before the command is looked up, in `start()`, `exec()`, `execLine()` and the interactive shell: `exec(["--", "greet", "x"])` runs `greet x` (was `CommandNotFoundError`). An input with no command left resolves without doing anything.
 
 #### Commands and options
 
@@ -80,6 +82,14 @@ Major release. The public interface is renamed and reshaped so that one concept 
 - `Bar.setLabel()`, `TableOptions.stream` (colour detection only), `ColumnSpec`, `MultiBarOptions`, `SanitizeTerminalTextOptions`.
 - Mode `completer` and `CommandBuilder.completer()` accept a static `readonly string[]`.
 - Configuring methods (`PluginContext.on` / `off` / `fallback`, `Logger.setLevel`, `Shell.setPrompt`, `enterMode`, `exitMode`) return `this`.
+- The `exit` handler receives the exit code `start()` resolves to; the first emission wins. A handler that ignores the argument keeps working.
+- Help and version output (`help`, `--help`, `-h`, `<cmd> --help`, `--version`, `-V`) fires no `beforeExecute`, `afterExecute` or `commandError`. A `help` command the application registers itself is an ordinary command.
+- `isCancellationError()` also accepts a rejection that is the aborted signal's own `reason`, such as what `signal.throwIfAborted()` and `fetch` throw; `exec()` wraps it in `CancelledError` and fires no `commandError` or `error`.
+- A failure in a mode action fires `error` (a cancellation does not). `help <unknown>` reports `input` and `available` like any unknown command, and `help exit` is unknown outside the interactive shell.
+- `table([], { columns })` renders the header row; without `columns`, or with `header: false`, it is still `""`.
+- Programmer mistakes are rejected at the entry point with coded errors in more places: `createCLI()` (`version`, `prompt`, `description`, `banner`), `CommandBuilder.option()` (`flags`, and the schema members as `ERR_INVALID_DEFINITION`), the error constructors, `Shell.setPrompt()` and `enterMode()`, the stream arguments of the colour functions and of `TableOptions.stream`, a colour style function given a non-string, the options of every prompt (including a `multiselect` `default` outside `min`/`max`), the `message` of `succeed` / `fail` / `warn`, and `Logger.child()`.
+- A value-taking option at the end of the arguments reports `Option --port expects a value` without the `--name=value` hint, which appears only when the next word looks like an option.
+- Prompt messages use the singular (`Select at least 1 item`), and an invalid `select` answer is re-asked with `Please enter a number between 1 and N, or a choice label`.
 
 ### Migration
 

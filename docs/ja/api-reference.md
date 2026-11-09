@@ -99,7 +99,7 @@ interface CLI {
 | `historySize` | `number` | `1000` | 保持する履歴の最大件数。 |
 | `historyFilter` | [`HistoryFilter`](#historyfilter) | — | 保存前に行を書き換えます。`null` を返すとその行は保存されません。 |
 
-文字列でない `name` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。空の `name` や、上記の文字集合に収まらない `name` は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。空文字列または文字列以外の `historyFile`、数値以外の `historySize`、関数以外の `historyFilter` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。非負の安全な整数でない `historySize` は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+オブジェクトでない `options`、および文字列でない `name`、`version`、`prompt`、`description`、`banner` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。空の `name` や、上記の文字集合に収まらない `name` は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。空文字列または文字列以外の `historyFile`、数値以外の `historySize`、関数以外の `historyFilter` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。非負の安全な整数でない `historySize` は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
 
 ##### `HistoryFilter`
 
@@ -124,7 +124,7 @@ start(argv?: readonly string[]): Promise<number>
 | 引数がなく、stdin と stdout の両方が端末 | 対話シェルが起動します。シェルが終わると `exit` が発行されます。 |
 | 引数がなく、どちらかのストリームが端末でない | ヘルプの一覧が表示され、その後に `exit` が発行されます。 |
 
-Promise は終了コードで解決され、同じ値が `process.exitCode` にも設定されます。対話セッションの後は、その時点で `process.exitCode` が持っている値で解決され、未設定なら `0` です。失敗は reject されず、stderr に書かれて終了コードに反映されます。[エラー](errors.md)を参照してください。
+Promise は、プロセスが終了するときのコードで解決されます。直接実行モードのコマンドが失敗または中断した場合は、その失敗のコードで、同じ値が `process.exitCode` にも設定されます。それ以外の場合は、その時点で `process.exitCode` が持っている値で、未設定なら `0` です。成功したコマンドは `process.exitCode` を変更しません。失敗は reject されず、stderr に書かれて終了コードに反映されます。[エラー](errors.md)を参照してください。
 
 同じインスタンスで 2 回呼ぶと、コード `ERR_ALREADY_STARTED` のエラーを投げます。文字列の配列でない `argv` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
@@ -137,9 +137,9 @@ exec(argv: readonly string[], options?: StdioOptions): Promise<void>
 execLine(line: string, options?: StdioOptions): Promise<void>
 ```
 
-`exec` は `argv` を、コマンドパスとそれに続く引数として実行します。要素はそのまま使われ、トークン化は行われず、`|` は普通の文字です。そのため、信頼できないデータはこちらに渡します。`[]` は何もせずに解決されます。文字列の配列でない値は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
+`exec` は `argv` を、コマンドパスとそれに続く引数として実行します。要素はそのまま使われ、トークン化は行われず、`|` は普通の文字です。そのため、信頼できないデータはこちらに渡します。先頭の `"--"` はコマンドの前でオプションを終える印で、1 つだけ取り除かれます。そのため `exec(["--", "greet", "x"])` は `greet x` を実行します。コマンドが残らない argv（`[]`、空文字列だけ、または `"--"` だけ）は、fallback ハンドラがあっても何もせずに解決されます。空文字列の後にコマンドが続く場合（`["", "greet"]`）は、`CommandNotFoundError` で reject されます。文字列の配列でない値は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
-`execLine` は、シェル言語の 1 行を、対話プロンプトで入力されたものとして実行します。行はトークン化され（シングルクォート、ダブルクォート、バックスラッシュエスケープ）、最上位の `|` でパイプラインに分割されて、各ステージが並行して実行されます。`""` は何もせずに解決されます。文字列でない値は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。閉じていない引用符は、fallback ハンドラがその行を受け取らない限り `ParseError` で reject されます。信頼できないデータを行に埋め込んではいけません。データ中の `|` が別のコマンドを起動するためです。そのようなデータは `exec([...])` で渡します。Windows のパスは、行の中で引用するか、`exec` で渡します。
+`execLine` は、シェル言語の 1 行を、対話プロンプトで入力されたものとして実行します。行はトークン化され（シングルクォート、ダブルクォート、バックスラッシュエスケープ）、最上位の `|` でパイプラインに分割されて、各ステージが並行して実行されます。先頭の `--` はコマンドを解決する前に 1 つだけ取り除かれ、コマンドが残らない行（`""` または `"--"`）は、fallback ハンドラがあっても何もせずに解決されます。文字列でない値は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。閉じていない引用符、空のパイプまたは末尾のパイプのセグメント、単独の `<` または `>` のリダイレクト演算子を含む行は、fallback ハンドラがその行を受け取らない限り `ParseError` で reject されます。信頼できないデータを行に埋め込んではいけません。データ中の `|` が別のコマンドを起動するためです。そのようなデータは `exec([...])` で渡します。Windows のパスは、行の中で引用するか、`exec` で渡します。
 
 キャンセルは `options.signal` だけで行い、プロセスの SIGINT はホストに任されます。すでに abort 済みのシグナルは、何かが走る前に、保留中のプラグインの初期化も含めて、`CancelledError` で reject されます。実行中にキャンセルされたコマンドは `CancelledError` で reject され、`commandError` も `error` も発行されません。abort を無視して終了したコマンドは、そのまま解決されます。
 
@@ -214,9 +214,9 @@ class CommandBuilder<
 
 | メソッド | 説明 |
 | --- | --- |
-| `description` | ヘルプ出力でこのコマンドに表示するテキストを設定します。 |
-| `hidden` | 生成されるヘルプとタブ補完からコマンドを除外します。引数なしで呼ぶと `true` になります。隠したコマンドも、名前が入力されれば通常どおり実行されます。 |
-| `option` | オプションを宣言し、そのオプションを型に加えたビルダーを返します。[オプション](#オプション)を参照してください。 |
+| `description` | ヘルプ出力でこのコマンドに表示するテキストを設定します。文字列でない引数は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。 |
+| `hidden` | 生成されるヘルプとタブ補完からコマンドを除外します。引数なしで呼ぶと `true` になります。隠したコマンドも、名前が入力されれば通常どおり実行されます。真偽値でない引数は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。 |
+| `option` | オプションを宣言し、そのオプションを型に加えたビルダーを返します。[オプション](#オプション)を参照してください。文字列でない `flags`、および省略もオブジェクトでもない `schema`（`null`、配列、文字列は拒否されます）は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。型の違うスキーマのメンバーは、コード `ERR_INVALID_DEFINITION` のエラーを投げます。 |
 | `action` | コマンドの呼び出し時に実行されるハンドラを設定します。 |
 | `completer` | このコマンドの引数に対するタブ補完の候補を設定します。静的なリストか、[`Completer`](#completer) を渡します。 |
 | `alias` | 別名を追加します。同じ階層の別のコマンドまたはエイリアスに属する名前は、コード `ERR_DEFINITION_CONFLICT` のエラーを投げます。 |
@@ -289,7 +289,7 @@ validate(fn: CommandValidator<A, O>): this
 onCancel(fn: CancelHandler<A, O>): this
 ```
 
-実行中のコマンドが中断されたときに呼ばれます。中断は、Ctrl-C、abort された `exec` のシグナル、シェル内の SIGTERM のいずれかです。ハンドラは待機されず、reject は `error` イベントで報告されます。ハンドラが走る時点で `ctx.signal` はすでに abort されているため、ハンドラとシグナルのリスナーは同じ出来事の 2 つの見え方です。どちらか一方でも両方でも使えます。
+実行中のコマンドが中断されたときに呼ばれます。中断は、Ctrl-C、abort された `exec` のシグナル、シェル内の SIGTERM のいずれかです。ハンドラは待機されず、例外の送出や reject は `error` イベントで報告されます。ハンドラが走る時点で `ctx.signal` はすでに abort されているため、ハンドラとシグナルのリスナーは同じ出来事の 2 つの見え方です。どちらか一方でも両方でも使えます。
 
 ### `Action`
 
@@ -329,7 +329,7 @@ type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonl
 | `line` | `string` | 処理中のパイプラインのセグメント。カーソルがあるコマンドです。 |
 | `fullLine` | `string` | 入力行の全体。前のパイプラインのセグメントも含みます。 |
 | `current` | `string` | カーソル位置の単語。単語の境界では `""` です。 |
-| `commandPath` | `readonly string[]` | 正式なコマンドパス。エイリアスは解決済みです。 |
+| `commandPath` | `readonly string[]` | 現在の入力までに解決されたコマンドの正式なパス。CLI 名は含まず、エイリアスは解決済みです。 |
 | `args` | `Readonly<Record<string, string \| readonly string[]>>` | ここまでに解析された位置引数。camelCase の名前をキーとし、値は生の文字列か、可変長引数なら生の文字列の配列です。 |
 | `options` | `Readonly<Record<string, string \| boolean \| readonly string[]>>` | ここまでに解析されたオプションの値。`ctx.options` と同じキーで、型変換、既定値、検証の前の値です。値を取るオプションは生の文字列、フラグは `true` または `false`、配列オプションは生の文字列の配列です。 |
 | `iteration` | `number` | 連続した Tab の押下回数で、1 から始まります。ほかの入力があるとリセットされます。 |
@@ -406,9 +406,9 @@ interface CommandContext<
 | --- | --- |
 | `args` | 位置引数。引数名を camelCase にしたキーで引けます（`<file-name>` は `fileName`）。 |
 | `options` | 解決済みのオプション。オプションの最初のロング名を camelCase にしたキー（`--dry-run` は `dryRun`）で、ロング形がなければ最初のショート名で引けます。 |
-| `rawInput` | 文字列入力ならその元の文字列。argv 入力なら `argv.join(" ")` で、これは情報が落ちます。空白を含む 1 つの引数と、2 つの引数を区別できません。 |
-| `rawArgv` | 配列入力（`start`、`exec`）のときは argv の要素そのままで、文字列入力のときは `null` です。元へ戻せる形なので、引数の境界が重要なときに使います。 |
-| `commandPath` | 解決されたコマンドの正式なパス。たとえば `["db", "migrate"]` です。エイリアスは実名に解決されるため、利用者が何を入力したかには左右されません。 |
+| `rawInput` | コマンドラインなら入力された行（パイプラインでは、このステージのセグメント）。argv 入力なら `argv.join(" ")` で、これは情報が落ちます。空白を含む 1 つの引数と、2 つの引数を区別できません。 |
+| `rawArgv` | 配列入力（`start`、`exec`）のときは argv の要素そのままで、コマンドライン（`execLine`、対話シェル）のときは `null` です。先頭の `"--"` はそのまま残ります。元へ戻せる形なので、引数の境界が重要なときに使います。 |
+| `commandPath` | 解決されたコマンドの正式なパス（CLI 名は含みません）。たとえば `["db", "migrate"]` です。エイリアスは実名に解決されるため、利用者が何を入力したかには左右されません。 |
 | `shell` | 対話モードでは動作中の `Shell`。直接実行モードとプログラムからの実行では `null` です。 |
 | `signal` | コマンドがキャンセルされると abort されます。`fetch` やタイマーなど、abort に対応した API に渡してください。 |
 | `stdin` | この実行面の読み取りストリーム。該当するものがなければ `null` です。対話シェルでは、行エディタと共有する端末です。`prompt.*` を通して読み、EOF まで読んではいけません。 |
@@ -498,7 +498,7 @@ interface OptionSchema {
 - `parse` は組み込みの型変換を完全に置き換えます。したがって `parse` を持つオプションは、`Date` を含めどんな型にも解決できます。
 - プレースホルダが `<number>` なら `type: "number"` か `"number[]"` が、`<boolean>` なら `type: "boolean"` が必要です。
 - `"number"` は通常の 10 進数と指数表記を受け付けます。`Number.MAX_SAFE_INTEGER` を超える大きさは、桁を正確に表せないため拒否されます。
-- コマンド内の別のオプションがすでに使っている名前や別名は、コード `ERR_DEFINITION_CONFLICT` のエラーを投げます。不正なフラグや、フラグと矛盾するスキーマは `ERR_INVALID_DEFINITION` を投げます。
+- コマンド内の別のオプションがすでに使っている名前や別名は、コード `ERR_DEFINITION_CONFLICT` のエラーを投げます。不正なフラグ、フラグと矛盾するスキーマ、型の違うスキーマのメンバー（未知の `type`、文字列でない `description`、真偽値でない `hidden` や `required`、関数でない `parse` や `validate`、文字列の配列でも関数でもない `completer`、配列でない `choices`）は `ERR_INVALID_DEFINITION` を投げます。
 - フラグ文字列の最初の `--name` が正規の名前で、以降のロング名は別名です。`ctx.options` では、正規の名前を camelCase にしたキーでオプションを引きます。ヘルプ、補完、エラーメッセージはフラグの綴りのままです。1 つのコマンドの 2 つのオプションで camelCase のキーが重なる場合（`--dry-run` と `--dryRun` など）は、`ERR_DEFINITION_CONFLICT` を投げます。
 - 別名を含む名前は、ASCII の英数字を単一のダッシュでつないだ形に限られます。スキーマの `alias` はちょうど 1 文字です。
 - `--no-x` は boolean のオプション `x` を否定します。`x` を持たずに `--no-x` として宣言されたオプションは独立したオプションで、キーは `noX` です。
@@ -520,7 +520,7 @@ interface OptionSchema {
 
 ### 組み込みのフラグ
 
-`--help` と `-h` はコマンドのヘルプページを表示します。入力のどの位置でも、`-vh` のような短い束の中でも使えます。`help` という名前、または `h` というエイリアスのオプションを宣言したコマンドでは使えなくなります。その場合、ヘルプ出力と補完は、引き続き使える方の形だけを案内します。
+`--help` と `-h` はコマンドのヘルプページを表示します。入力のどの位置でも、`-vh` のような短い束の中でも使えます。`help` という名前、または `h` というエイリアスのオプションを宣言したコマンドでは使えなくなります。その場合、ヘルプ出力と補完は、引き続き使える方の形だけを案内します。`-h` を自分のオプションに割り当てたコマンドでは `--help` が使え続け、`-h` はそのオプションを選びます。
 
 `--version` と `-V` が横取りされるのは、CLI に `version` が設定されていて、かつそのフラグが入力の唯一のトークンであるときだけです。`-v` の形はありません。`version` がなければ、宣言されていない他のトップレベルのフラグと同じく未知のオプションです。トップレベルの `--help <command>` と `-h <command>` は、`help <command>` と同じくそのコマンドのヘルプを表示します。
 
@@ -528,7 +528,9 @@ interface OptionSchema {
 
 ### 組み込みの help コマンド
 
-`help [...command]` は自動的に登録されます。引数なしなら一覧を、パスを渡せばそのコマンドのページを表示します。解決できないパスは、stdout に表示されず、stderr への `CommandNotFoundError` で失敗します。
+`help [...command]` は自動的に登録されます。引数なしなら一覧を、パスを渡せばそのコマンドのページを表示します。解決できないパスは、stdout に表示されず、stderr への `CommandNotFoundError` で失敗します。その `input` は、最も深く一致したコマンドの正式なパスに、最初に一致しなかった語を続けたもので、`available` はそこで見えるコマンドの一覧です。見えるコマンドがなければ `available` はありません。`help exit` と `help quit` が解決されるのは、対話シェルの中だけです。ヘルプの表示はコマンドの実行ではないため、コマンドのイベントは発行されません。
+
+直接実行では、名前を持つ CLI のヘルプにプログラム名が含まれます。コマンドのページは `Usage: app deploy <env> [options]` の形で、一覧には `Usage: app <command> [options]` の行があり、どちらも末尾は `Run "app help <command>" for more information.` のような行です。対話シェルの中ではプログラム名を含めず、末尾は `Type "help <command>" for more information.` です。
 
 ## イベントとプラグイン
 
@@ -540,7 +542,7 @@ interface CLIEventMap {
   afterExecute: (ctx: CommandContext) => void | Promise<void>;
   commandError: (error: Error, ctx: CommandContext) => void | Promise<void>;
   error: (error: Error) => void | Promise<void>;
-  exit: () => void | Promise<void>;
+  exit: (exitCode: number) => void | Promise<void>;
 }
 ```
 
@@ -550,9 +552,11 @@ interface CLIEventMap {
 | `afterExecute` | アクションが正常に解決された後。 |
 | `commandError` | 解決済みのコマンドが、引数の検証、オプションの解決、自身の `validate`、アクションのいずれかで失敗したとき。 |
 | `error` | 入力の処理中に起きる失敗のすべて。コマンドが解決される前に起きるもの（コマンドが見つからない、解析の失敗など）も含みます。非同期プラグインの初期化が失敗したときにも 1 度だけ発行されます。 |
-| `exit` | 多くとも 1 度。`start` が終わったとき、または強制終了やシェルでの SIGTERM がプロセスを終わらせるとき。 |
+| `exit` | 多くとも 1 度。`start` が終わったとき、または強制終了やシェルでの SIGTERM がプロセスを終わらせるとき。ハンドラは `exitCode` を受け取ります。これは `start` が解決されるコードで、失敗ならその失敗のコード、強制終了と SIGTERM なら `130` または `143`、それ以外は `process.exitCode`（未設定なら `0`）です。発行されるのは最初の 1 回だけなので、後から起きた強制終了でこの値は変わりません。 |
 
 解決済みのコマンドの失敗では、`commandError` と `error` の **両方** が発行されます。`commandError` はコンテキストを持ち、`error` は包括的なイベントです。失敗をちょうど 1 度だけ見たいハンドラは、両方ではなくどちらか一方を購読します。キャンセルは失敗ではありません。実行中のコマンドが `ctx.signal` でキャンセルされたときは、どちらも発行されず、実行は `CancelledError` で reject されます。
+
+ヘルプやバージョンの表示はコマンドの実行ではありません。`help`、`--help`、`-h`、`<command> --help`、アクションを持たないグループ、`--version`、`-V` は、`beforeExecute`、`afterExecute`、`commandError` のどれも発行しません。アプリケーションが自分で登録した `help` コマンドは普通のコマンドなので、これらを発行します。
 
 `exit` が発行されるのは、直接実行モードのコマンドが完了したとき、例外を投げたとき、強制終了されたとき、引数のない非端末での起動でヘルプの一覧が表示された後、プラグインの初期化が失敗したとき、対話シェルが終了または SIGTERM を受け取ったとき、そして強制終了が `exec` または `execLine` の呼び出しを終わらせたときです。プログラムからの実行は、正常系では発行しません。CLI が扱わないシグナル（直接実行モードの SIGTERM と SIGHUP、シェルの SIGHUP）は、`exit` もキャンセルハンドラも実行せずにプロセスを終了させます。
 
@@ -590,7 +594,7 @@ interface PluginContext {
 }
 ```
 
-`cli.use(...)` に渡した関数が受け取るオブジェクトです。公開するのは拡張の面だけで、プラグインは CLI を開始することも、そのオプションを変更することもできません。セッターはコンテキストを返すため、登録を連鎖できます。`command` は、パスがすでに登録されていれば既存のコマンドに合流します。
+`cli.use(...)` に渡した関数が受け取るオブジェクトです。公開するのは拡張の面だけで、プラグインは CLI を開始することも、そのオプションを変更することもできません。セッターはコンテキストを返すため、登録を連鎖できます。`command` は、パスがすでに登録されていれば既存のコマンドに合流します。`command` は、文字列でない定義にコード `ERR_INVALID_ARG_TYPE` の `TypeError` を、不正な定義にコード `ERR_INVALID_DEFINITION` のエラーを投げます。`on` と `off` は、未知のイベント名にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を、関数でないハンドラにコード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げ、`fallback` も関数でないハンドラに同じ `TypeError` を投げます。
 
 ### `Plugin`
 
@@ -619,8 +623,8 @@ interface Shell {
 
 | メソッド | 説明 |
 | --- | --- |
-| `setPrompt` | プロンプト文字列を変更します。次のプロンプトから有効になり、モードの間に変更した場合はモードを抜けた後に反映されます。 |
-| `enterMode` | 独自のプロンプトとハンドラを持つサブ REPL に入力を渡します。 |
+| `setPrompt` | プロンプト文字列を変更します。次のプロンプトから有効になり、モードの間に変更した場合はモードを抜けた後に反映されます。文字列でない `text` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。 |
+| `enterMode` | 独自のプロンプトとハンドラを持つサブ REPL に入力を渡します。オブジェクトでない `options`、文字列でない `prompt`、関数でない `action`、文字列でない `banner`、文字列の配列でも関数でもない `completer` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。`"session"` でも `"none"` でもない `history` は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。 |
 | `exitMode` | 現在のモードを抜け、コマンドのプロンプトに戻ります。 |
 | `stop` | 現在の入力の処理を終えた後、シェルのセッションを終了します。 |
 
@@ -642,7 +646,7 @@ interface ModeOptions {
 | --- | --- | --- |
 | `prompt` | — | モードが有効な間に表示されるプロンプト文字列。 |
 | `action` | — | 送信された各行に対するハンドラで、[`ModeAction`](#modeaction) です。モードはコマンドレジストリを通してディスパッチしません。 |
-| `banner` | — | モードに入ったときに 1 度だけ表示されるテキスト。 |
+| `banner` | バナーなし | モードに入ったときに 1 度だけ表示されるテキスト。 |
 | `completer` | — | モード固有の補完。静的なリストか、`commandPath` が空の `CompletionContext` で呼ばれる [`Completer`](#completer) を渡します。どちらも `ctx.current` との前方一致で絞られます。指定がなければ Tab は何も提示しません。モードの中ではトップレベルのコマンド補完は出ません。ほかのプロバイダと同じく 1000 ms で打ち切られます。 |
 | `history` | `"session"` | `"session"` はモードの入力をモードの間だけメモリに保持し、`"none"` は無効にします。モードの入力がディスクの履歴ファイルに書かれることはありません。 |
 
@@ -654,7 +658,7 @@ interface ModeOptions {
 type ModeAction = (input: string, ctx: ModeContext) => void | Promise<void>
 ```
 
-モードの中で送信された各行を受け取ります。例外の送出または reject は stderr に報告され、シェルはモードに留まります。
+モードの中で送信された各行を受け取ります。例外の送出または reject は `error` イベントを発行して stderr に報告され、シェルはモードに留まります。`ctx.signal` のキャンセルは失敗ではないため、`error` イベントは発行されません。
 
 ### `ModeContext`
 
@@ -672,7 +676,7 @@ interface ModeContext extends CommandStreams {}
 const color: Colorizer
 ```
 
-プロパティがスタイル名になっているプロキシです。それぞれが、呼び出し可能でありチェーンもできる関数を返します。
+プロパティがスタイル名になっている `Colorizer` です。それぞれが、呼び出し可能でありチェーンもできる関数を返します。
 
 ```typescript
 import { color } from "@libraz/node-cli";
@@ -682,7 +686,7 @@ color.bold.green("ok");
 color.bgCyan.white.underline("banner");
 ```
 
-未知のスタイル名にアクセスすると、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を **投げます**。そのため、無スタイルのテキストが黙って出力されるのではなく、打ち間違いがその場で表面化します。プロトコル用のプロパティ（`then`、`toString`、`valueOf`、`toJSON`、`constructor`、およびすべてのシンボル）は対象外なので、colorizer を `await` やテンプレートリテラル、`JSON.stringify` に通してもクラッシュしません。
+未知のスタイル名にアクセスすると、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を **投げます**。そのため、無スタイルのテキストが黙って出力されるのではなく、打ち間違いがその場で表面化します。プロトコル用のプロパティ（`then`、`toString`、`valueOf`、`toJSON`、`constructor`、およびすべてのシンボル）は対象外なので、colorizer を `await` やテンプレートリテラル、`JSON.stringify` に通してもクラッシュしません。スタイルの関数を文字列以外で呼ぶと、色の有効・無効にかかわらず、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 有効・無効の判定は `process.stdout` に従います。ほかへ書き込む場合は `createColorizer` を使ってください。
 
@@ -735,7 +739,7 @@ colorTag`{bold.red Error}: ${message}`;
 colorTag`{dim outer {cyan inner} outer}`;
 ```
 
-`color` と違い、このタグは未知の名前でも投げません。未知のスタイル名、閉じていない波括弧、欠けた空白は、そのままの文字として出力されます。埋め込まれた値はそのまま挿入され、マークアップとして解釈されないため、`{green ...}` を含む値もマークアップとは見なされません。色が無効のときはマークアップが取り除かれ、プレーンテキストが返されます。64 段を超える入れ子は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+`color` と違い、このタグは未知の名前でも投げません。未知のスタイル名、閉じていない波括弧、欠けた空白は、そのままの文字として出力されます。埋め込まれた値はそのまま挿入され、マークアップとして解釈されないため、`{green ...}` を含む値もマークアップとは見なされません。色が無効のときはマークアップが取り除かれ、プレーンテキストが返されます。64 段を超える入れ子は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。タグとしてではなく普通の関数として呼ぶと、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ### `ColorTag`
 
@@ -751,7 +755,7 @@ type ColorTag = (strings: TemplateStringsArray, ...values: unknown[]) => string
 function createColorTag(stream: Writable): ColorTag
 ```
 
-`colorTag` と同じ意味を持ち、有効かどうかを `stream` から判定するタグを返します。そのため、そのストリームで色が有効なときにだけエスケープが出力されます。
+`colorTag` と同じ意味を持ち、有効かどうかを `stream` から判定するタグを返します。そのため、そのストリームで色が有効なときにだけエスケープが出力されます。`write` 関数を持つオブジェクトでない `stream` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ```typescript
 const e = createColorTag(process.stderr);
@@ -764,7 +768,7 @@ process.stderr.write(e`{bold.red Error}: something went wrong\n`);
 function createColorizer(stream: Writable): Colorizer
 ```
 
-有効・無効の判定を `process.stdout` ではなく `stream` から行う、`color` と同じ形のプロキシを返します。コマンドのアクション内で使うと、アクションが実際に書き込むストリームに色が追従します。
+有効・無効の判定を `process.stdout` ではなく `stream` から行う、`color` と同じ形の `Colorizer` を返します。コマンドのアクション内で使うと、アクションが実際に書き込むストリームに色が追従します。`write` 関数を持つオブジェクトでない `stream` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ```typescript
 const col = createColorizer(ctx.stdout);
@@ -785,7 +789,7 @@ function isColorEnabled(stream?: Writable): boolean
 4. `TERM=dumb` の場合は、色は無効です。
 5. ストリームが端末かどうか。
 
-答えが `false` のときは、`bold` や `underline` のような修飾を含め、すべてのスタイルが落とされます。`NO_COLOR` と `setColorEnabled(false)` が止めるのは、色だけでなくスタイル全体です。
+答えが `false` のときは、`bold` や `underline` のような修飾を含め、すべてのスタイルが落とされます。`NO_COLOR` と `setColorEnabled(false)` が止めるのは、色だけでなくスタイル全体です。指定された `stream` が `write` 関数を持つオブジェクトでなければ、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ### `setColorEnabled`
 
@@ -801,7 +805,7 @@ function setColorEnabled(value: boolean | "auto"): void
 function stringWidth(text: string): number
 ```
 
-テキストが占める端末の桁数を返します。ANSI シーケンスは先に取り除かれ、結合文字、書式文字、制御文字は 0 桁として数えられます。East Asian Width が Wide または Fullwidth の文字と、絵文字表示の文字は 2 桁です。ゼロ幅接合子でつながれたスカラー値の並び（家族の絵文字など）は、2 桁の 1 つの書記素にまとめられます。
+テキストが占める端末の桁数を返します。ANSI シーケンスは先に取り除かれ、結合文字、書式文字、制御文字は 0 桁として数えられます。East Asian Width が Wide または Fullwidth の文字と、絵文字表示の文字は 2 桁です。ゼロ幅接合子でつながれたスカラー値の並び（家族の絵文字など）は、2 桁の 1 つの書記素にまとめられます。文字列でない `text` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ### `stripAnsi`
 
@@ -809,7 +813,7 @@ function stringWidth(text: string): number
 function stripAnsi(text: string): string
 ```
 
-ANSI エスケープシーケンスをすべて取り除きます。CSI、OSC、DCS/SOS/PM/APC の制御文字列、その他のあらゆるエスケープが対象です。
+ANSI エスケープシーケンスをすべて取り除きます。CSI、OSC、DCS/SOS/PM/APC の制御文字列、その他のあらゆるエスケープが対象です。文字列でない `text` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ### `truncateAnsi`
 
@@ -830,7 +834,7 @@ interface AnsiSegment {
 }
 ```
 
-入力を、エスケープシーケンス（`ansi: true`）と可視テキスト（`ansi: false`）の順序付きの並びに分割します。認識には `stripAnsi` と同じ認識器を使います。すべてのセグメントの `text` を連結すると入力が復元されるので、呼び出し側は可視部分だけを変換できます。
+入力を、エスケープシーケンス（`ansi: true`）と可視テキスト（`ansi: false`）の順序付きの並びに分割します。認識には `stripAnsi` と同じ認識器を使います。すべてのセグメントの `text` を連結すると入力が復元されるので、呼び出し側は可視部分だけを変換できます。文字列でない `text` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ### `splitGraphemes`
 
@@ -838,7 +842,7 @@ interface AnsiSegment {
 function splitGraphemes(text: string): readonly string[]
 ```
 
-表示されるテキストを、ユーザーが 1 文字として知覚する書記素クラスタに分割します。そのため、修飾子つきの絵文字は 1 単位として数えられます。入力にエスケープシーケンスを含めてはいけません。含めると、ほかのテキストと同じように分割されてしまいます。先に `splitAnsi` で分け、`ansi` が `false` のセグメントだけを渡します。
+表示されるテキストを、ユーザーが 1 文字として知覚する書記素クラスタに分割します。そのため、修飾子つきの絵文字は 1 単位として数えられます。入力にエスケープシーケンスを含めてはいけません。含めると、ほかのテキストと同じように分割されてしまいます。先に `splitAnsi` で分け、`ansi` が `false` のセグメントだけを渡します。文字列でない `text` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ### `sanitizeTerminalText`
 
@@ -851,7 +855,7 @@ interface SanitizeTerminalTextOptions {
 }
 ```
 
-信頼できないテキストを、描画領域に出せる形に整えます。SGR のスタイルと OSC 8 のハイパーリンクは残り、カーソル移動、画面消去、タイトル変更は取り除かれます。テキストが開いたままにしたスタイルやハイパーリンクは閉じられます。
+信頼できないテキストを、描画領域に出せる形に整えます。SGR のスタイルと OSC 8 のハイパーリンクは残り、カーソル移動、画面消去、タイトル変更は取り除かれます。テキストが開いたままにしたスタイルやハイパーリンクは閉じられます。文字列でない `text`、および型の違う `options` やそのフラグは、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 | フィールド | 既定値 | 説明 |
 | --- | --- | --- |
@@ -883,7 +887,9 @@ function table<T extends object>(
 
 `table` は折り返しません。列より幅の広いセルは省略記号付きで切り詰められ、セル内の改行とタブはすでに空白に畳まれています。全体の幅も端末に合わせて切り詰められることはなく、幅の広いテーブルは再整形されずに端末側で折り返されます。
 
-未知の罫線やスタイル名、範囲外の数値は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。型の違う値は、文字列でも `ColumnSpec` でもない `columns` の要素を含め、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
+未知の罫線やスタイル名、範囲外の数値は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。型の違う値は、文字列でも `ColumnSpec` でもない `columns` の要素を含め、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。`write` 関数を持つオブジェクトでない `stream` も `TypeError` です。
+
+行がないとき、`columns` を宣言していて `header: false` でない表は、オプションが選ぶ枠とともにヘッダだけを描画します。それ以外は `""` を返します。
 
 #### 列
 
@@ -894,7 +900,7 @@ function table<T extends object>(
 | オブジェクトの配列で、`columns` なし | すべての行が持つプロパティ名の和集合で、最初に現れた順。 |
 | オブジェクトの配列で、`columns` あり | 列挙した列だけ。`key` がプロパティを選びます。 |
 | 配列の配列で、`columns` なし | 0 行目がヘッダ。列は位置で対応付けられ、キーは `"0"`、`"1"`、… になります。 |
-| 配列の配列、`columns` あり | 列は位置で対応付けられ、`ColumnSpec` は `key` を持ちません。このとき 0 行目はヘッダではなくデータです。 |
+| 配列の配列、`columns` あり | 列は位置で対応付けられます。文字列の要素はその列のヘッダの文字列になり、`ColumnSpec` は `key` を持ちません。このとき 0 行目はヘッダではなくデータです。 |
 
 ### `TableOptions`
 
@@ -918,10 +924,10 @@ interface TableOptions<T extends object = Record<string, unknown>> {
 | フィールド | 既定値 | 説明 |
 | --- | --- | --- |
 | `columns` | データから導出 | 描画する列を順に並べたもの。[列](#列)を参照してください。 |
-| `header` | `true` | ヘッダ行を描画するかどうか。 |
+| `header` | `true` | ヘッダ行を描画するかどうか。`columns` のない配列の行では、`false` にすると 0 行目もデータになります。 |
 | `border` | `"none"` | 罫線のプリセット。`border` なしで `chars` を渡すと `"custom"` になります。`"none"` では `chars` と `rowSeparators` は無視されます。 |
-| `chars` | — | 罫線の文字を上書きします。`"custom"` は `"single"` プリセットを土台にします。どの文字も端末の 1 桁幅でなければならず、そうでなければコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。上辺と下辺の `top`、`bottom` と `horizontal` の埋め文字は、その線を省くために `""` にもできます。`border: "simple"` では、`vertical` と `cross` に任意の文字列を使えます。 |
-| `borderStyle` | — | 罫線の文字のスタイル。`"dim"` や `"cyan.bold"` など。`border` が形を選び、`borderStyle` が色と修飾を選びます。 |
+| `chars` | `border` プリセットの文字 | 罫線の文字を上書きします。`"custom"` は `"single"` プリセットを土台にします。どの文字も端末の 1 桁幅でなければならず、そうでなければコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。上辺と下辺の `top`、`bottom` と `horizontal` の埋め文字は、その線を省くために `""` にもできます。`border: "simple"` では、`vertical` と `cross` に任意の文字列を使えます。 |
+| `borderStyle` | スタイルなし | 罫線の文字のスタイル。`"dim"` や `"cyan.bold"` など。`border` が形を選び、`borderStyle` が色と修飾を選びます。 |
 | `headerStyle` | `"bold"` | ヘッダ文字のスタイル。`"none"` はそのままにします。 |
 | `paddingLeft` | 枠あり（`rounded`、`single`、`double`、`custom`）なら `1`、`none` と `simple` なら `0` | 各セルの内側の左の空白数。 |
 | `paddingRight` | `paddingLeft` と同じ規則 | 各セルの内側の右の空白数。 |
@@ -945,10 +951,10 @@ type ColumnSpec<T extends object = Record<string, unknown>> = {
 | フィールド | 既定値 | 説明 |
 | --- | --- | --- |
 | `key` | — | オブジェクトの行で読むプロパティ。`keyof T & string` で型付けされます。配列の行は位置で対応付けられ、`key` を持ちません。 |
-| `label` | `key` | ヘッダの文字列。 |
+| `label` | `key`。配列の行では `""` | ヘッダの文字列。 |
 | `align` | `"left"` | ヘッダとセルの揃え。 |
-| `width` | 自動 | 列の内容の固定幅。パディングを含まない正の整数です。`maxWidth` より優先されます。 |
-| `maxWidth` | — | パディングを除いた内容の幅の上限。正の整数か `Infinity` です。 |
+| `width` | 列で最も幅の広いセル（`maxWidth` が上限） | 列の内容の固定幅。パディングを含まない正の整数です。`maxWidth` より優先されます。 |
+| `maxWidth` | 上限なし | パディングを除いた内容の幅の上限。正の整数か `Infinity` です。 |
 
 `width` と `maxWidth` はどちらも内容の桁数を数えるため、パディングが文字の入る余地を減らすことはありません。内容の幅より広いセルは省略記号つきで切り詰められ、どの罫線モードでも、パディングはその外側に描かれます。
 
@@ -989,9 +995,9 @@ interface TableChars {
 
 ## プログレス
 
-インジケーターの出力先の既定値はすべて `process.stderr` で、リダイレクトされた stdout に進捗表示が混ざりません。インジケーターは作成と同時に描画を始め、終了動詞（`succeed`、`fail`、`warn`、`stop`）のどれかで終わります。終了後にどのメソッドを呼んでも何も起きません。コマンドコンテキストをオプションのオブジェクトとして渡すこともでき（`progress.spinner(ctx)`）、その場合は `ctx.stderr` に描画されます。
+インジケーターの出力先の既定値はすべて `process.stderr` で、リダイレクトされた stdout に進捗表示が混ざりません。インジケーターは作成と同時に描画を始め、終了動詞（`succeed`、`fail`、`warn`、`stop`）のどれかで終わります。終了後にどのメソッドを呼んでも何も起きませんが、引数の検査は行われます。コマンドコンテキストをオプションのオブジェクトとして渡すこともでき（`progress.spinner(ctx)`）、その場合は `ctx.stderr` に描画されます。
 
-動詞 `succeed`、`fail`、`warn` は、インジケーターを結果の行に置き換えます。緑の `✔`、赤の `✖`、黄の `⚠` の後に `message` が続き、既定値はラベルです。ストリームが記号を描けない場合（端末でない、または `TERM=dumb`）は、行頭が記号の代わりに ASCII の印 `[OK]`、`[ERROR]`、`[WARN]` になります。色は [`isColorEnabled`](#iscolorenabled) が別に判定します。`stop` は最後のフレームを残して行を終えます。
+動詞 `succeed`、`fail`、`warn` は、インジケーターを結果の行に置き換えます。緑の `✔`、赤の `✖`、黄の `⚠` の後に `message` が続き、既定値はラベルです。ストリームが記号を描けない場合（端末でない、または `TERM=dumb`）は、行頭が記号の代わりに ASCII の印 `[OK]`、`[ERROR]`、`[WARN]` になります。色は [`isColorEnabled`](#iscolorenabled) が別に判定します。`stop` は最後のフレームを残して行を終えます。省略でも文字列でもない `message` は、状態を変える前に、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。`MultiBar` のグループの動詞も同じように検査します。
 
 ### progress.bar
 
@@ -1025,7 +1031,7 @@ progress.bar(options: BarOptions): Bar
 | `fail(message?: string)` | 現在の位置のまま、バーを `✖` の結果行で終えます。 |
 | `warn(message?: string)` | 現在の位置のまま、バーを `⚠` の結果行で終えます。 |
 | `stop()` | 最後のフレームを残して行を終えます。`MultiBar` の中では、そのバーの行を固定し、グループの動詞はその行を飛ばします。 |
-| `[Symbol.dispose]()` | `stop()` の別名。 |
+| `[Symbol.dispose]()` | `stop()` と同じです。最後のフレームを残し、アニメーションできないストリームには何も書きません。結果の行が必要なら、先に `succeed`、`fail`、`warn` を呼びます。 |
 
 `Symbol.dispose` があるので、バーは `using` 宣言で使えます。`using` はブロックの終わりで、ブロックが例外を投げた場合も含めて、破棄用のメソッドを自動的に呼びます。
 
@@ -1045,7 +1051,7 @@ interface BarState {
   readonly percent: number; // integer, 0 to 100; 100 when total is 0
   readonly elapsedMs: number; // ms since the bar was created
   readonly etaMs: number; // ms remaining; Infinity until some progress is made, 0 once complete
-  readonly ratePerSecond: number; // units per second
+  readonly ratePerSecond: number; // average units per second since the bar was created
 }
 ```
 
@@ -1071,12 +1077,12 @@ progress.spinner(options?: SpinnerOptions): Spinner
 
 | メソッド | 説明 |
 | --- | --- |
-| `setLabel(label: string)` | ラベルを置き換えます。次のフレームから反映されます。 |
+| `setLabel(label: string)` | ラベルを置き換えます。次のフレームから反映されます。既定の結果メッセージにもなります。 |
 | `succeed(message?: string)` | スピナーを `✔` の結果行で終えます。 |
 | `fail(message?: string)` | スピナーを `✖` の結果行で終えます。 |
 | `warn(message?: string)` | スピナーを `⚠` の結果行で終えます。 |
 | `stop()` | 最後のフレームをそのまま残して、行を終わらせます。 |
-| `[Symbol.dispose]()` | `stop()` の別名。 |
+| `[Symbol.dispose]()` | `stop()` と同じです。最後のフレームを残し、アニメーションできないストリームには何も書きません。結果の行が必要なら、先に `succeed`、`fail`、`warn` を呼びます。 |
 
 ### 端末でないストリームでの挙動
 
@@ -1105,7 +1111,7 @@ progress.multi(options?: MultiBarOptions): MultiBar
 | `fail(message?: string)` | 未完了のバーをすべて `✖` で終え、グループを閉じます。 |
 | `warn(message?: string)` | 未完了のバーをすべて `⚠` で終え、グループを閉じます。 |
 | `stop()` | 最後のフレームをそのまま残して、グループを閉じます。 |
-| `[Symbol.dispose]()` | `stop()` の別名。 |
+| `[Symbol.dispose]()` | `stop()` と同じです。最後のフレームを残し、アニメーションできないストリームには何も書きません。結果の行が必要なら、先に `succeed`、`fail`、`warn` を呼びます。 |
 
 グループのメソッドでは、`message` が記号なしの最終行として 1 行書かれます。端末でないストリームでは、各バーの結果行がバーの終了時に書かれます。
 
@@ -1125,7 +1131,7 @@ progress.releaseAll(): void
 
 ## プロンプト
 
-プロンプトは stderr で質問するため、質問がリダイレクトされた stdout を汚すことはありません。どのプロンプトも、Ctrl-C のとき、または `signal` が abort されたときに `CancelledError` で reject されます。後者の `cause` はシグナルの reason です。すでに abort 済みの `signal` は、すぐに reject されます。`stdin` が `null` のとき、または答える前に入力が終わった（Ctrl-D）ときは、再質問の最中も含めて `InputEndedError` で reject されます。入力ストリームの読み取りエラーは、そのストリーム自身のエラーで reject されます。例外を投げる `validate` は reject ではありません。メッセージが表示され、プロンプトはもう一度質問します。メッセージと `marker` は 1 行で描画され、改行は空白になり、カーソル制御は取り除かれます。
+プロンプトは stderr で質問するため、質問がリダイレクトされた stdout を汚すことはありません。どのプロンプトも、Ctrl-C のとき、または `signal` が abort されたときに `CancelledError` で reject されます。後者の `cause` はシグナルの reason です。すでに abort 済みの `signal` は、すぐに reject されます。`stdin` が `null` のとき、または答える前に入力が終わった（Ctrl-D）ときは、再質問の最中も含めて `InputEndedError` で reject されます。入力ストリームの読み取りエラーは、そのストリーム自身のエラーで reject されます。例外を投げる `validate` は reject ではありません。メッセージが表示され、プロンプトはもう一度質問します。メッセージと `marker` は 1 行で描画され、改行は空白になり、カーソル制御は取り除かれます。どのオプションも、質問を書く前に検査されます。型の違う値は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げ、そのメッセージには `prompt.text()` のようにプロンプト名が含まれます。
 
 同じ入力ストリームから 2 つのプロンプトが同時に読もうとすると、コード `ERR_INPUT_BUSY` のエラーを投げます。2 つ目が 1 つ目のキー入力を奪ってしまうためです。
 
@@ -1156,7 +1162,7 @@ prompt.text(message: string, options?: TextOptions): Promise<string>
 
 | フィールド | 型 | 既定値 | 説明 |
 | --- | --- | --- | --- |
-| `default` | `string` | — | 空のまま送信されたときに補う値。 |
+| `default` | `string` | — | 空のまま送信されたときに補う値。`required` も満たします。 |
 | `placeholder` | `string` | — | `(e.g. …)` の形で表示される例。`default` がないときだけ表示されます。 |
 | `trim` | `boolean` | `true` | 回答の前後の空白を取り除きます。 |
 | `required` | `boolean` | `true` | 空の回答を拒否します。 |
@@ -1189,7 +1195,7 @@ prompt.select<const T = string>(
 | --- | --- | --- | --- |
 | `default` | `T` | — | 空の入力に対して返される値。選択肢の `value`、または選択肢のオブジェクト自体と同一性で照合されます。どの選択肢にも一致しない `default` は、質問を書く前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。 |
 
-選択肢には、表示された番号で答えるか、ラベルを入力して答えます。ラベルの照合は大文字・小文字を区別しません。リストの範囲内の数値は常に番号として選択されるため、数字に見えるラベルも位置で選べます。それ以外の入力はラベルと照合されます。`choices` の配列が空なら、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+選択肢には、表示された番号で答えるか、ラベルを入力して答えます。ラベルの照合は大文字・小文字を区別しません。リストの範囲内の数値は常に番号として選択されるため、数字に見えるラベルも位置で選べます。それ以外の入力はラベルと照合されます。どちらにも一致しない答えは、`Please enter a number between 1 and N, or a choice label`（N は選択肢の数）と表示して再質問されます。`choices` の配列が空なら、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
 
 ### prompt.multiselect
 
@@ -1203,11 +1209,11 @@ prompt.multiselect<const T = string>(
 
 | フィールド | 型 | 既定値 | 説明 |
 | --- | --- | --- | --- |
-| `default` | `readonly T[]` | — | あらかじめ選択される値で、空の入力に対して返されます。各要素はいずれかの選択肢に一致する必要があり、そうでなければ質問を書く前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。 |
-| `min` | `number` | — | 重複を除いた選択数の下限。省略すると、空の結果も受け付けます。 |
+| `default` | `readonly T[]` | — | あらかじめ選択される値で、空の入力に対して選択肢の順に返されます。各要素はいずれかの選択肢に一致し、重複を除いた値の数が `min` と `max` の範囲に収まる必要があり、そうでなければ質問を書く前にコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。 |
+| `min` | `number` | — | 重複を除いた選択数の下限。省略すると下限なしで、`default` がなければ空の入力は `[]` を返します。 |
 | `max` | `number` | — | 重複を除いた選択数の上限。 |
 
-カンマ区切りの番号で答えます。`min` と `max` を検査する前に、重複は 1 つにまとめられます。`min` が `max` より大きい場合、`min` が選択肢の数より大きい場合、境界が整数でない場合は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+カンマ区切りの番号で答えます。`min` と `max` を検査する前に、重複は 1 つにまとめられます。`min` が `max` より大きい場合、`min` が選択肢の数より大きい場合、境界が整数でない場合は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。数値でない `min` や `max`、配列でない `default` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。範囲外の答えは、`Select at least 2 items` や `Select at most 1 item` と表示して再質問されます。
 
 ### prompt.password
 
@@ -1236,7 +1242,7 @@ interface SelectChoice<T> {
 type Choice<T> = SelectChoice<T> | Exclude<T, { label: unknown }>;
 ```
 
-選択肢は、値そのものか、記述子のどちらかです。`label` はあるが `value` がない記述子は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。たまたま `label` プロパティを持つ普通のドメインオブジェクトが、黙って `undefined` に変えられることはありません。`label` メンバーを持つ値のオブジェクトをそのまま渡すと型エラーになります。`{ label, value }` で包みます。
+選択肢は、値そのものか、記述子のどちらかです。`label` はあるが `value` がない記述子は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。たまたま `label` プロパティを持つ普通のドメインオブジェクトが、黙って `undefined` に変えられることはありません。`label` メンバーを持つ値のオブジェクトをそのまま渡すと型エラーになります。`{ label, value }` で包みます。文字列でない `hint` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 使い方の実例は[プロンプト](prompts.md)を参照してください。
 
@@ -1250,7 +1256,7 @@ function createLogger(options?: LoggerOptions): Logger
 
 `info` と `success` を含むすべてのレベルは、1 つのストリームに書かれ、既定は `process.stderr` です。レベルによって stdout と stderr を振り分けることはありません。ストリームは `stderr` オプションで指定し、コマンドコンテキストをオプションのオブジェクトとして渡すこともできます（`createLogger({ ...ctx, prefix: "deploy" })`）。ログを stdout に出すには、`stderr: process.stdout` を渡します。
 
-未知の `level` や不正な `bufferLimit` は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+型の違うオプションは、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。未知の `level` や不正な `bufferLimit` は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
 
 #### `LoggerOptions`
 
@@ -1280,8 +1286,8 @@ function createLogger(options?: LoggerOptions): Logger
 
 | メソッド | 説明 |
 | --- | --- |
-| `setLevel(level: LogLevel)` | 最小レベルを実行時に変更し、ロガー自身を返します。 |
-| `child(prefix: string): Logger` | プレフィックスが `parent:child` の子を作ります。子が独自のレベルを持たない間は親の現在のレベルに従うため、後から `parent.setLevel(...)` を呼ぶと子にも及びます。 |
+| `setLevel(level: LogLevel)` | 最小レベルを実行時に変更し、ロガー自身を返します。文字列でない `level` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を、未知の `level` はコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。 |
+| `child(prefix: string): Logger` | プレフィックスが `parent:child` の子を作ります。子が独自のレベルを持たない間は親の現在のレベルに従うため、後から `parent.setLevel(...)` を呼ぶと子にも及びます。文字列でない `prefix` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。 |
 | `flush(): Promise<void>` | キューにある行が、すべての子の分も含めてストリームに届くと解決します。先にストリームがエラーになるか閉じると reject されます。ストリームが失敗した後は、ロガーとその子は何もしなくなります。以降の行は黙って捨てられ、失敗は `flush()` を通じてだけ報告されます。 |
 
 ### `LogLevel`
@@ -1356,9 +1362,11 @@ type CLIErrorCode =
 
 どのサブクラスのコンストラクタも、先頭に対象を、最後にオプションのオブジェクトを取ります。オプションのオブジェクトは省略でき、どれも `cause` を受け付けます。
 
+コンストラクタは、`CLIError` を含め、引数を検査します。文字列でない先頭の引数（`ExtraArgumentError` では文字列の配列でないもの）、省略でもオブジェクトでもない `options`（`null` と配列は拒否されます）、指定されたのに文字列でない `code`、`usage`、`optionName`、文字列の配列でない `available` は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。`"single"` でも `"double"` でもない `quote` は、コード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。
+
 | クラス | コンストラクタ | `code` | `exitCode` | 追加のフィールド | 投げられるとき |
 | --- | --- | --- | --- | --- | --- |
-| `CommandNotFoundError` | `(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `64` | `input`, `available?` | 入力に一致するコマンドがないとき、またはコマンドグループに未知の子が渡されたとき。 |
+| `CommandNotFoundError` | `(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `64` | `input`, `available?` | 入力に一致するコマンドがないとき、コマンドグループに未知の子が渡されたとき、または `help` に解決できないパスが渡されたとき。 |
 | `MissingArgumentError` | `(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `64` | `argName`, `usage?` | 必須の位置引数がないとき、または必須の可変長引数が値をゼロ個しか受け取らないとき。 |
 | `ExtraArgumentError` | `(extras, { usage?, cause? })` | `EXTRA_ARGUMENT` | `64` | `extras`, `usage?` | コマンドが宣言した数より多くの位置引数の値が渡されたとき。`extras` は空でない `readonly string[]` で、空配列はコード `ERR_INVALID_ARG_VALUE` の `RangeError` を投げます。 |
 | `MissingOptionError` | `(optionName, { usage?, cause? })` | `MISSING_OPTION` | `64` | `optionName`, `usage?` | `required` なオプションがないとき。 |
@@ -1373,9 +1381,11 @@ type CLIErrorCode =
 
 `optionName` は、ダッシュを除いた正規のロング名を kebab-case の綴りのまま表したもの（`dry-run`）で、そのオプションの `ctx.options` でのキーは camelCase の形（`dryRun`）です。`UnknownOptionError.optionName` には対応する定義がないため、入力されたフラグからダッシュを除いたものです。
 
-コマンドの解決中に起きたエラーは、コマンドの使い方の行である `usage` を持ち、メッセージの末尾に `\n\n  Usage: <usage>` を付けます。メッセージは、ユーザーが入力したものを引用符で囲み、アプリケーションが定義した名前は囲みません（`Unknown option: "--x"`、`Missing required option: --x`）。API の誤用のメッセージ（`UsageErrorCode` を参照）は、Node 自身のエラーと同じ形で、アプリケーションの名前も引用符で囲みます。
+コマンドの解決中に起きたエラーは、コマンドの使い方の行である `usage` を持ち、メッセージの末尾に `\n\n  Usage: <usage>` を付けます。メッセージは、ユーザーが入力したものを引用符で囲み、アプリケーションが定義した名前は囲みません（`Unknown option: "--x"`、`Missing required option: --x`）。直接実行では `usage` はプログラム名で始まり（`app deploy <env> [options]`）、対話シェルの中では始まりません。API の誤用のメッセージ（`UsageErrorCode` を参照）は、Node 自身のエラーと同じ形で、アプリケーションの名前も引用符で囲みます。
 
-`ParseError` が扱うのは、閉じていない引用符（`quote` が `"single"` か `"double"` で、どちらかを示します）、空のパイプまたは末尾のパイプ、サポートされないリダイレクト演算子です。コマンドが解決される前に投げられるため、登録済みの `fallback` ハンドラには、エラーが投げられる代わりに入力が渡されます。
+`CommandNotFoundError` の `input` は、最も深く一致したコマンドの正式なパスに、最初に一致しなかった語を続けたものです（`help db zz` なら `"db zz"`）。`available` は、そこで見えるコマンド名のコピーです。見えるコマンドがなければ、`available` はありません。
+
+`ParseError` が扱うのは、閉じていない引用符（`quote` が `"single"` か `"double"` で、どちらかを示します）、空のパイプまたは末尾のパイプ、単独の `<` または `>` のリダイレクト演算子です。コマンドが解決される前に投げられるため、登録済みの `fallback` ハンドラには、エラーが投げられる代わりに入力が渡されます。
 
 ユーザー入力に関するクラスの終了コードは、コマンドラインの使い方の誤りに対する慣例のステータスである `64` です。`InputEndedError` は `66`（入力なし）、`CancelledError` は、中断されたプログラムに対する慣例のステータスである `130` です。素の `CLIError` の既定値は `1` で、アクションが投げたそれ以外の値も `1` です。対話シェルの SIGTERM の経路は `143` で終了します。[終了コード](glossary.md#終了コードexit-code)を参照してください。
 
@@ -1463,7 +1473,7 @@ function formatErrorMessage(err: unknown): string
 function isCancellationError(err: unknown, signal: AbortSignal): boolean
 ```
 
-失敗が本物の障害ではなく、ユーザーが起こしたキャンセルかどうかを判定します。`CancelledError` は常に該当します。素の `AbortError` が該当するのは、`signal` が abort 済みのときに **限ります**。その根拠がなければ、誰のキャンセルなのかを判別できず、無関係な abort 済みのリクエストが、ユーザーが Ctrl-C を押したものと誤って報告されてしまいます。
+失敗が本物の障害ではなく、ユーザーが起こしたキャンセルかどうかを判定します。`CancelledError` は常に該当します。`signal` が abort 済みの間は、素の `AbortError` と、シグナル自身の `signal.reason` での reject も、その型にかかわらず該当します（`signal.throwIfAborted()` や `fetch` が投げるものです）。これらが該当するのは、そのときに **限ります**。その根拠がなければ、誰のキャンセルなのかを判別できず、無関係な abort 済みのリクエストが、ユーザーが Ctrl-C を押したものと誤って報告されてしまいます。`AbortSignal` でない `signal` は、`err` が `CancelledError` であっても、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げます。
 
 ```typescript
 import { isCancellationError } from "@libraz/node-cli";
@@ -1486,7 +1496,7 @@ try {
 function tokenize(input: string): readonly string[]
 ```
 
-1 つのコマンドを、シングルクォート、ダブルクォート、バックスラッシュエスケープを尊重して、argv 形式のトークンに分割します。パイプラインは扱いません。ここでは `|` は普通の文字ですが、`execLine` は引用符に囲まれていない `|` で先に行を分割します。そのため、行に `|` が含まれていると `exec(tokenize(line))` と `execLine(line)` は異なります。文字列でない値は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げ、閉じていない引用符は `ParseError` を投げます。連携するコードがフレームワークと全く同じ挙動を再利用できるようにエクスポートされており、通常のアプリケーションでは必要ありません。
+1 つのコマンドを、シングルクォート、ダブルクォート、バックスラッシュエスケープを尊重して、argv 形式のトークンに分割します。パイプラインは扱いません。ここでは `|`、`<`、`>` は普通の文字ですが、`execLine` は引用符に囲まれていない `|` で先に行を分割し、単独の `<` や `>` は `ParseError` で拒否します。そのため、行にこれらが含まれていると `exec(tokenize(line))` と `execLine(line)` は異なります。文字列でない値は、コード `ERR_INVALID_ARG_TYPE` の `TypeError` を投げ、閉じていない引用符は `ParseError` を投げます。連携するコードがフレームワークと全く同じ挙動を再利用できるようにエクスポートされており、通常のアプリケーションでは必要ありません。
 
 ## 環境変数
 

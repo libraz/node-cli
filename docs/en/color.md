@@ -35,7 +35,7 @@ A terminal renders colors when it receives an **ANSI escape sequence**: a short 
 
 ## Chaining styles
 
-`color` is a proxy object: every style name is a property, and every property is itself a function that also carries the remaining style names as properties. Chaining reads left to right and applies all the named styles at once.
+`color` is a chainable object: every style name is a property, and every property is itself a function that also carries the remaining style names as properties. Chaining reads left to right and applies all the named styles at once.
 
 ```ts
 import { color } from "@libraz/node-cli";
@@ -116,7 +116,7 @@ Interpolated values are converted to strings and substituted **after** the marku
 
 ## When color is enabled
 
-Enablement is decided **at the moment a style function is called**, not when the module is imported. `color` and `colorTag` evaluate it against `process.stdout`. `createColorizer(stream)` returns the same chainable object bound to a different stream, and `createColorTag(stream)` does the same for the tag (`colorTag` is that tag bound to `process.stdout`). Both take any `Writable`:
+Enablement is decided **at the moment a style function is called**, not when the module is imported. `color` and `colorTag` evaluate it against `process.stdout`. `createColorizer(stream)` returns the same chainable object bound to a different stream, and `createColorTag(stream)` does the same for the tag (`colorTag` is that tag bound to `process.stdout`). Both take any `Writable` and throw `TypeError` (`ERR_INVALID_ARG_TYPE`) for anything else, as does `isColorEnabled(stream)` for a defined non-stream. A style function throws the same `TypeError` for text that is not a string, whether or not colour is enabled, and `colorTag` throws it when called as a plain function instead of as a template tag:
 
 ```ts
 import { createColorizer, createColorTag } from "@libraz/node-cli";
@@ -231,7 +231,7 @@ Reports whether a value is a terminal stream rather than a file or a pipe. Any v
 - **Enablement is evaluated per call.** Setting `FORCE_COLOR` after the module was imported still takes effect, and `setColorEnabled` applies to calls made afterwards.
 - **Disabling color removes modifiers too.** `NO_COLOR` and `setColorEnabled(false)` drop `bold` and `underline` along with the colors.
 - **`setColorEnabled` is global, not per stream.** A colorizer built with `createColorizer` still obeys it; `setColorEnabled("auto")` returns to detection.
-- **`color.foo` throws; `colorTag` does not.** An unknown style name is a `RangeError` on the proxy (and a type error at compile time) and a literal `{` in inline markup.
+- **`color.foo` throws; `colorTag` does not.** An unknown style name is a `RangeError` on `color` (and a type error at compile time) and a literal `{` in inline markup.
 - **A missing space breaks inline markup silently.** `` colorTag`{green OK}` `` colors `OK`; `` colorTag`{greenOK}` `` prints `{greenOK}`.
 - **`.length` is not width.** Escape sequences add length, and wide characters add width; use `stringWidth`.
 - **There is no `bgBlack` and no bright or RGB colors.** The list above is complete.

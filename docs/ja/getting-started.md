@@ -70,7 +70,7 @@ await cli.start();
 - `.description(...)` は、生成されるヘルプでコマンドの横に並ぶ説明文を与えます。
 - `.action((ctx) => { ... })` は、コマンドが呼び出されたときに走る関数を登録します。`ctx` は[コマンドコンテキスト](commands.md)です。`ctx.args` には名前をキーとした位置引数、`ctx.options` には解析済みのオプションが入り、`ctx.stdout` は結果を書き出すストリームです。
 - `ctx.args.name` の型は `string` です。型は定義文字列から決まります。`<name>` は `string`、`[name]` は `string | undefined`、`<...name>` は `readonly string[]` です。位置引数は変換されないため、数値として使う場合はアクションの中で解析します。キーは camelCase で、`<file-name>` は `ctx.args.fileName` で読みます。
-- `await cli.start()` で制御をライブラリに渡します。ライブラリは端末の引数を読み、実行モードを選び、一致したコマンドを実行して、終了コードで resolve します。
+- `await cli.start()` で制御をライブラリに渡します。ライブラリは端末の引数を読み、実行モードを選び、一致したコマンドを実行して、プロセスが終了するときの終了コードで resolve します。
 
 出力には `console.log` ではなく `ctx.stdout` を使ってください。`ctx.stdout` はその実行に紐づいたストリームです。だからこそ、対話シェルの中で出力を別のコマンドにパイプしても同じコマンドがそのまま動き、代わりのストリームを渡してテストすることもできます。
 
@@ -174,12 +174,12 @@ npm unlink -g myapp
 
 1. 登録済みのプラグインの完了を待ちます。非同期のプラグインが reject された場合は致命的で、`cli.start()` がエラーを報告し（終了コード 1）、`exit` イベントが発火し、コマンドは実行されません。同期的に例外を投げたプラグインは、代わりに `cli.use()` から例外が送出されます。
 2. 引数リストは `process.argv.slice(2)`、つまりコマンド名の後ろに打たれたものすべてです。ただし `cli.start()` に配列を明示的に渡した場合はそちらを使います。
-3. 引数はあるが中身を持つものが 1 つもない場合（すべて空文字列、またはオプション終端マーカー `--` だけ）、ヘルプ一覧を表示して `cli.start()` は 0 で resolve します。
+3. 引数はあるが中身を持つものが 1 つもない場合（すべて空文字列、またはオプション終端マーカー `--` だけ）、ヘルプ一覧を表示して、`process.exitCode` が未設定なら `cli.start()` は 0 で resolve します（設定されていればその値で resolve します）。先頭の `--` はコマンドを探す前に取り除かれるので、`myapp -- greet World` は `greet World` を実行します。
 4. 引数が 1 つ以上あれば、そのコマンドを 1 回実行します。これが**直接実行モード**です。
 5. 引数がなく、標準入力と標準出力がどちらも端末なら、**対話シェル**が開きます。
-6. それ以外、つまり引数がなく出力がパイプされているか入力がリダイレクトされている場合は、ヘルプ一覧を表示して `cli.start()` は 0 で resolve します。プロンプトを出す端末がないため、プロンプトは開きません。
+6. それ以外、つまり引数がなく出力がパイプされているか入力がリダイレクトされている場合は、ヘルプ一覧を表示して、`process.exitCode` が未設定なら `cli.start()` は 0 で resolve します。プロンプトを出す端末がないため、プロンプトは開きません。
 
-直接実行モードで失敗または中断したとき、ライブラリは `process.exit()` を呼ばずに `process.exitCode` を設定します。そのため未出力のデータが吐き出され、`exit` イベントのハンドラも走ります。直接実行モードのコマンドが成功した場合は、終了コードを変更しません。どちらの場合も `cli.start()` はプロセスが終了するときのコード（設定されていなければ 0）で resolve するので、呼び出し側は `process.exitCode` を見なくてもその値を読めます。例外は強制終了（2 回目の割り込み、終了コード 130）と、終了シグナルを受けた対話シェルのシャットダウン（終了コード 143）です。直接実行モードのコマンドを Ctrl-C で中断した場合の終了コードは 130 です。全一覧は[エラー](errors.md)にあります。
+直接実行モードで失敗または中断したとき、ライブラリは `process.exit()` を呼ばずに `process.exitCode` を設定します。そのため未出力のデータが吐き出され、`exit` イベントのハンドラも走ります。直接実行モードのコマンドが成功した場合は `process.exitCode` を変更しないので、アクションが自分で設定してもかまいません。どちらの場合も `cli.start()` はプロセスが終了するときのコード（設定されていなければ 0）で resolve するので、呼び出し側は `process.exitCode` を見なくてもその値を読めます。例外は強制終了（2 回目の割り込み、終了コード 130）と、終了シグナルを受けた対話シェルのシャットダウン（終了コード 143）です。直接実行モードのコマンドを Ctrl-C で中断した場合の終了コードは 130 です。全一覧は[エラー](errors.md)にあります。
 
 ### 直接実行モード
 
@@ -202,7 +202,7 @@ Available commands: greet, help
 $ myapp greet
 Error: Missing required argument: <name>
 
-  Usage: greet <name> [options]
+  Usage: myapp greet <name> [options]
 ```
 
 ### 対話シェル
@@ -244,6 +244,8 @@ $
 $ myapp | less
 myapp v1.0.0
 
+Usage: myapp <command> [options]
+
 Available commands:
 
   greet <name>         Greet someone by name
@@ -253,7 +255,7 @@ Options:
   -h, --help       Show help
   -V, --version    Show the CLI version
 
-Type "help <command>" for more information.
+Run "myapp help <command>" for more information.
 ```
 
 これは意図した動作です。対話プロンプトをパイプに書き出しても、来ることのない入力を待って固まるだけだからです。`myapp > out.txt` の場合や、スクリプトや CI ジョブからツールを実行した場合も同じです。
@@ -332,7 +334,7 @@ Migrations applied.
 
 ```
 $ myapp help db
-Usage: db <command> [options]
+Usage: myapp db <command> [options]
 
 Database commands
 
@@ -342,7 +344,7 @@ Options:
 Commands:
   migrate    Apply pending migrations
 
-Type "help db <command>" for more information.
+Run "myapp help db <command>" for more information.
 ```
 
 グループコマンドは自前のアクションを持たないため、サブコマンドなしで `myapp db` を実行すると同じヘルプが表示されます。入れ子の規則とエイリアスは[コマンド](commands.md)にあります。

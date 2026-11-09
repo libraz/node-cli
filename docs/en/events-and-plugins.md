@@ -12,7 +12,7 @@ Five events are defined by `CLIEventMap`.
 | `afterExecute` | `(ctx) => void \| Promise<void>` | Only after the action resolves successfully |
 | `commandError` | `(error, ctx) => void \| Promise<void>` | A resolved command failed |
 | `error` | `(error) => void \| Promise<void>` | Any failure, including failures before a command was resolved and a failed asynchronous plugin initialization; never a cancellation |
-| `exit` | `() => void \| Promise<void>` | Once, when `cli.start()` ends or a force-quit or SIGTERM ends the process; never from `cli.exec()` or `cli.execLine()` |
+| `exit` | `(exitCode: number) => void \| Promise<void>` | Once, when `cli.start()` ends or a force-quit or SIGTERM ends the process; never from `cli.exec()` or `cli.execLine()` |
 
 `ctx` is the `CommandContext` — the same object the action receives, with `args`, `options`, `commandPath`, the streams, and `signal`. See [Commands](commands.md).
 
@@ -28,6 +28,8 @@ On a successful run of a resolved command:
 4. `beforeExecute` fires,
 5. the action runs,
 6. `afterExecute` fires.
+
+Showing help or the version is not a command execution. `help [...]`, `--help`, `-h`, `<command> --help`, a group without an action, `--version` and `-V` emit no `beforeExecute`, `afterExecute` or `commandError`; a `help` command the application registers itself is an ordinary command and does emit them. A `help` target that does not exist fires `error` only.
 
 A failure in step 1, 2, 3 or 5 skips `afterExecute`. A `beforeExecute` listener that throws is reported through `error`; the action and `afterExecute` still run.
 
@@ -123,13 +125,15 @@ A cancellation is not a failure, so neither event fires for it. That covers a co
 
 It never fires from `cli.exec()` or `cli.execLine()`, which leave the lifecycle of the process to the host.
 
+The handler receives the exit code: the value `cli.start()` resolves to, which is the failure's code, 130 or 143 for a force-quit or SIGTERM, and otherwise `process.exitCode` (0 when unset). The first emission wins, so a later path that also ends the process does not deliver its code. A handler that ignores the argument keeps working.
+
 A signal the CLI does not handle ends the process with Node's default action, so neither `exit` handlers nor cancel handlers run. That covers SIGTERM and SIGHUP in direct mode, and SIGHUP in the interactive shell.
 
 ```typescript
 import { writeFile } from "node:fs/promises";
 
-cli.on("exit", async () => {
-  await writeFile("/tmp/mycli-session.log", "session ended\n", { flag: "a" });
+cli.on("exit", async (exitCode) => {
+  await writeFile("/tmp/mycli-session.log", `session ended (${exitCode})\n`, { flag: "a" });
 });
 ```
 

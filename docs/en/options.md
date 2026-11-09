@@ -101,6 +101,8 @@ cli
 
 A malformed flags string or an invalid schema throws an `Error` with `code: "ERR_INVALID_DEFINITION"` when `.option()` runs. A name or alias already used by another option on the same command throws `ERR_DEFINITION_CONFLICT`.
 
+A command may declare its own `-h` or `--help`. The command then takes that spelling for the option, and the built-in help stays on the other form and on `help <command>`: with `.option("-h, --host <name>")`, `-h` selects the option and `--help` still prints the command's help; the help page then lists `--help` without `-h, `. Declaring both leaves `help <command>` as the only way to the built-in help.
+
 Aliases from `alias` are merged with those in the specification string, so `.option("--port <n>", { alias: "p" })` and `.option("-p, --port <n>")` declare the same option.
 
 A `completer` function receives a `CompletionContext` whose values are raw, as typed so far and before any conversion. `args` holds each positional argument as a string, or an array of strings for a variadic one, keyed by its camelCase name. `options` is keyed like `ctx.options` and holds a string for a value option, `true` or `false` for a flag or its `--no-` form, and an array of strings for an array option.

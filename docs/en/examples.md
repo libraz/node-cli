@@ -59,6 +59,8 @@ $ hello --help
 hello v1.0.0
 A friendly greeting CLI
 
+Usage: hello <command> [options]
+
 Available commands:
 
   greet <name>         Say hello to someone
@@ -68,7 +70,7 @@ Options:
   -h, --help       Show help
   -V, --version    Show the CLI version
 
-Type "help <command>" for more information.
+Run "hello help <command>" for more information.
 ```
 
 A missing required argument fails before the action runs, and the process exits with status 64:
@@ -77,7 +79,7 @@ A missing required argument fails before the action runs, and the process exits 
 $ hello greet
 Error: Missing required argument: <name>
 
-  Usage: greet <name> [options]
+  Usage: hello greet <name> [options]
 ```
 
 Condensed from [`01-minimal.ts`](../../examples/01-minimal.ts). See [Commands](commands.md).
@@ -150,7 +152,7 @@ A group with no action prints its subcommands, aliases included:
 
 ```text
 $ vcs remote
-Usage: remote <command> [options]
+Usage: vcs remote <command> [options]
 
 Manage repository remotes
 
@@ -162,7 +164,7 @@ Commands:
   remove <name>       Delete a remote (alias: rm)
   list                List configured remotes (alias: ls)
 
-Type "help remote <command>" for more information.
+Run "vcs help remote <command>" for more information.
 ```
 
 Condensed from [`02-git-style.ts`](../../examples/02-git-style.ts).
@@ -258,17 +260,17 @@ Each rejection names the check that produced it, and each exits with status 64:
 $ deployer deploy prod --tag latest --yes
 Error: Invalid value "latest" for --tag: expected a tag like v1.2.3, got "latest"
 
-  Usage: deploy <env> [options]
+  Usage: deployer deploy <env> [options]
 
 $ deployer deploy edge --tag v1.0.0 --yes
 Error: Unknown environment "edge". Expected one of: dev, staging, prod
 
-  Usage: deploy <env> [options]
+  Usage: deployer deploy <env> [options]
 
 $ deployer deploy prod --yes
 Error: Missing required option: --tag
 
-  Usage: deploy <env> [options]
+  Usage: deployer deploy <env> [options]
 ```
 
 The bar writes to `ctx.stderr`, which is where progress belongs when stdout may be piped into another program, and the confirmation question is asked on `ctx.stderr` for the same reason. Passing `ctx` to the prompt hands it the command's `stdin`, `stderr` and `signal`. Builds on [`03-deploy-tool.ts`](../../examples/03-deploy-tool.ts). See [Progress](progress.md) and [Prompts](prompts.md).
@@ -918,14 +920,14 @@ no changes
 $ infra plan --since nope
 Error: Invalid value "nope" for --since: not a date: nope
 
-  Usage: plan [stack] [options]
+  Usage: infra plan [stack] [options]
 ```
 
 A failing `parse` is wrapped in a `ValidationError` naming the option. The generated help lists the defaults and the negated form of every boolean:
 
 ```text
 $ infra help plan
-Usage: plan [stack] [options]
+Usage: infra plan [stack] [options]
 
 Preview the changes for a stack
 

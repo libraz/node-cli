@@ -35,7 +35,7 @@ console.log([color.bold("bold"), color.dim("dim"), color.underline("underline")]
 
 ## スタイルの連結
 
-`color` は Proxy オブジェクトです。すべてのスタイル名がプロパティになっており、そのプロパティ自身も関数でありながら、残りのスタイル名をプロパティとして持ちます。連結は左から右へ読み、並べたスタイルをまとめて適用します。
+`color` は連結可能なオブジェクトです。すべてのスタイル名がプロパティになっており、そのプロパティ自身も関数でありながら、残りのスタイル名をプロパティとして持ちます。連結は左から右へ読み、並べたスタイルをまとめて適用します。
 
 ```ts
 import { color } from "@libraz/node-cli";
@@ -116,7 +116,7 @@ console.log(colorTag`{yellow outer {bold inner} outer}`);
 
 ## カラーが有効になる条件
 
-有効かどうかは、モジュールを import した時点ではなく **スタイル関数を呼び出したその瞬間** に判定されます。`color` と `colorTag` は `process.stdout` を基準に判定します。`createColorizer(stream)` は、同じ連結可能なオブジェクトを別のストリームに結び付けて返し、`createColorTag(stream)` はタグについて同じことを行います（`colorTag` はそのタグを `process.stdout` に結び付けたものです）。どちらも任意の `Writable` を受け取ります。
+有効かどうかは、モジュールを import した時点ではなく **スタイル関数を呼び出したその瞬間** に判定されます。`color` と `colorTag` は `process.stdout` を基準に判定します。`createColorizer(stream)` は、同じ連結可能なオブジェクトを別のストリームに結び付けて返し、`createColorTag(stream)` はタグについて同じことを行います（`colorTag` はそのタグを `process.stdout` に結び付けたものです）。どちらも任意の `Writable` を受け取り、それ以外には `TypeError`（`ERR_INVALID_ARG_TYPE`）を投げます。定義済みで stream でない値を `isColorEnabled(stream)` に渡した場合も同じです。スタイル関数も、文字列でないテキストには色の有効・無効にかかわらず同じ `TypeError` を投げ、`colorTag` はタグとしてではなく普通の関数として呼ぶと投げます。
 
 ```ts
 import { createColorizer, createColorTag } from "@libraz/node-cli";
@@ -231,7 +231,7 @@ console.log(sanitizeTerminalText(fromDatabase)); // "release v2" — the screen 
 - **有効判定は呼び出しごとに行われます。** モジュールを import した後に `FORCE_COLOR` を設定しても効きますし、`setColorEnabled` は以後の呼び出しに適用されます。
 - **カラーを無効にすると修飾も消えます。** `NO_COLOR` と `setColorEnabled(false)` は、色と一緒に `bold` や `underline` も取り除きます。
 - **`setColorEnabled` はストリーム単位ではなくグローバルです。** `createColorizer` で作ったカラライザもこれに従います。`setColorEnabled("auto")` で自動判定に戻ります。
-- **`color.foo` は例外を投げ、`colorTag` は投げません。** 未知のスタイル名は、プロキシでは `RangeError`（コンパイル時には型エラー）になり、インラインマークアップでは文字どおりの `{` になります。
+- **`color.foo` は例外を投げ、`colorTag` は投げません。** 未知のスタイル名は、`color` では `RangeError`（コンパイル時には型エラー）になり、インラインマークアップでは文字どおりの `{` になります。
 - **空白の欠落はインラインマークアップを黙って壊します。** `` colorTag`{green OK}` `` は `OK` を着色しますが、`` colorTag`{greenOK}` `` は `{greenOK}` をそのまま表示します。
 - **`.length` は幅ではありません。** エスケープシーケンスは長さを増やし、全角文字は幅を増やします。`stringWidth` を使ってください。
 - **`bgBlack` はなく、bright 系も RGB もありません。** 上の一覧がすべてです。

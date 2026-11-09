@@ -17,7 +17,7 @@ const rows = [
 console.log(table(rows, { border: "rounded" }));
 ```
 
-The return value carries **no trailing newline**, and an input that produces nothing to render returns `""`. Pass the result to `console.log`, or inside a command to the context's output stream (see [Commands](commands.md)):
+The return value carries **no trailing newline**, and an input that produces nothing to render returns `""`. Empty `data` with `columns` declared still draws the header: `table([], { columns: ["a", "b"], border: "simple" })` returns `"a | b\n--|--"`. Without `columns`, or with `header: false`, it returns `""`. Pass the result to `console.log`, or inside a command to the context's output stream (see [Commands](commands.md)):
 
 ```ts
 import { createCLI, table } from "@libraz/node-cli";

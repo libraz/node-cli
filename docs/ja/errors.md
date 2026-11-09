@@ -18,7 +18,7 @@
 $ mycli deploy
 Error: Missing required argument: <env>
 
-  Usage: deploy <env> [region] [options]
+  Usage: mycli deploy <env> [region] [options]
 $ echo $?
 64
 ```
@@ -35,7 +35,7 @@ Error: Missing required argument: <env>
 mycli>
 ```
 
-メッセージの文面はどちらのモードでも同じで、違うのはプロセスレベルの結果だけです。
+メッセージの文面はどちらのモードでも同じですが、`Usage:` の行だけは、直接実行モードではプログラム名で始まり（`mycli deploy …`）、シェルでは始まりません。シェルではプログラム名を入力しないためです。それ以外に違うのは、プロセスレベルの結果だけです。
 
 ## エラークラス
 
@@ -44,7 +44,7 @@ mycli>
 | クラス | `code` | `exitCode` | 追加フィールド | 投げられる場面 |
 |---|---|---|---|---|
 | `CLIError(message, CLIErrorOptions)` | 指定どおり。既定は `FAILED` | 指定どおり。既定は `1` | `code`, `exitCode`, `cause?` | 基底クラス。サブクラス化して差し支えありません |
-| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `64` | `input`, `available?` | `fallback` ハンドラがない状態で認識できない入力が来たとき、コマンドグループに未知の子コマンドが指定されたとき、`help <unknown>` を実行したとき |
+| `CommandNotFoundError(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `64` | `input`, `available?` | `fallback` ハンドラがない状態で認識できない入力が来たとき、コマンドグループに未知の子コマンドが指定されたとき、`help <unknown>` を実行したとき（`input` と `available` は他の未知のコマンドと同じ形で報告されます） |
 | `MissingArgumentError(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `64` | `argName`, `usage?` | 必須の位置引数がないとき。値が 1 つもない必須の可変長引数は `...name` として報告されます |
 | `ExtraArgumentError(extras, { usage?, cause? })` | `EXTRA_ARGUMENT` | `64` | `extras`, `usage?` | コマンドの引数を埋めたあとに位置引数の値が余ったとき |
 | `MissingOptionError(optionName, { usage?, cause? })` | `MISSING_OPTION` | `64` | `optionName`, `usage?` | `required: true` を宣言したオプションがないとき |
@@ -61,7 +61,7 @@ mycli>
 
 「追加フィールド」の列は、各クラスが足すものです。フィールドの意味は次のとおりです。
 
-- `usage` は、コマンドの使い方の行です。あればメッセージの末尾に `\n\n  Usage: <usage>` として付きます。コマンドを解決している間に出るエラー（引数の不足と過剰、オプションの不足・不正・未知、検証）はすべて持つため、ヒントはどれも同じ形になります。
+- `usage` は、コマンドの使い方の行です。直接実行ではプログラム名で始まり（`mycli deploy <env> [options]`）、対話シェルでは始まりません（`deploy <env> [options]`）。あればメッセージの末尾に `\n\n  Usage: <usage>` として付きます。コマンドを解決している間に出るエラー（引数の不足と過剰、オプションの不足・不正・未知、検証）はすべて持つため、ヒントはどれも同じ形になります。
 - `optionName` は、定義のあるオプションでは、ダッシュなしで kebab-case の綴りのままの正規のロング名（`dry-run`）です。定義のない `UnknownOptionError` では、入力されたフラグからダッシュを除いたものです。同じオプションの `ctx.options` でのキーは camelCase の形（`dryRun`）です。
 - `flag` は、未知のフラグ 1 つを正規化した綴りです。`--xyz=3` は `--xyz`、まとめ書き `-vx` の中の未知の `x` は `-x` と報告されます。
 - `InvalidOptionError` と `ValidationError` の `value` は、拒否された値です。型変換や `parse` が失敗した場合は入力の生の文字列、`validate` の検査が失敗した場合は `validate` に渡した値です。コマンドレベルの検証の失敗は、`value` も `optionName` も持ちません。
@@ -230,7 +230,7 @@ cli
 Cancelled
 ```
 
-キャンセルは `commandError` も `error` も発火しません。どの入口でも扱いは同じです。`cli.exec()`、`cli.execLine()`、`cli.start()`、対話シェルは `CancelledError` を reject または報告し、signal が中断されている間に起きた生の `AbortError` は、signal の `reason` を `cause` にして一度だけ包まれます。すでに中断された signal を `exec()` や `execLine()` に渡すと、フック、検証、アクションのどれも走らず、`CancelledError` で reject されます。中断を無視して正常に戻ったアクションは、そのまま resolve します。
+キャンセルは `commandError` も `error` も発火しません。どの入口でも扱いは同じです。`cli.exec()`、`cli.execLine()`、`cli.start()`、対話シェルは `CancelledError` を reject または報告し、signal が中断されている間に起きた生の `AbortError` や signal 自身の `reason` は、signal の `reason` を `cause` にして一度だけ包まれます。すでに中断された signal を `exec()` や `execLine()` に渡すと、フック、検証、アクションのどれも走らず、`CancelledError` で reject されます。中断を無視して正常に戻ったアクションは、そのまま resolve します。
 
 投げられた値を分類し、整形するためのヘルパーが 2 つエクスポートされています。
 
@@ -240,8 +240,9 @@ Cancelled
 
 - すべての `CancelledError`。`signal` の状態は問いません
 - `name` が `"AbortError"` の `Error` のうち、**渡された `signal` が中断されている**もの
+- **渡された `signal` が中断されている**ときの、signal 自身の `signal.reason` による reject。`signal.throwIfAborted()` や `fetch` が投げる値がこれで、`AbortSignal.timeout()` の `TimeoutError` や `Error` でない値も含みます
 
-`signal` 引数は必須です。`signal` が中断されていない限り、素の `AbortError` は**キャンセルとは見なされません**。無関係なコードが起こした中断を「利用者がキャンセルした」と黙って報告してしまわないためです。
+`signal` 引数は必須です。`signal` が中断されていない限り、素の `AbortError` やその他の値は**キャンセルとは見なされません**。無関係なコードが起こした中断を「利用者がキャンセルした」と黙って報告してしまわないためです。`signal` が signal でなければ、`err` が何であっても `TypeError`（`ERR_INVALID_ARG_TYPE`）を投げます。
 
 ```typescript
 import { isCancellationError } from "@libraz/node-cli";

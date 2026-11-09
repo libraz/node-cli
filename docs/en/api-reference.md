@@ -99,7 +99,7 @@ Every field is read once, when `createCLI` is called. There is no setter; `ctx.s
 | `historySize` | `number` | `1000` | Maximum retained history entries. |
 | `historyFilter` | [`HistoryFilter`](#historyfilter) | — | Rewrites a line before it is persisted. Return `null` to omit the line entirely. |
 
-A non-string `name` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. An empty `name`, or one outside the character set above, throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. An empty or non-string `historyFile`, a non-number `historySize` and a non-function `historyFilter` throw a `TypeError` with code `ERR_INVALID_ARG_TYPE`. A `historySize` that is not a non-negative safe integer throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+A non-object `options`, or a non-string `name`, `version`, `prompt`, `description` or `banner`, throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. An empty `name`, or one outside the character set above, throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. An empty or non-string `historyFile`, a non-number `historySize` and a non-function `historyFilter` throw a `TypeError` with code `ERR_INVALID_ARG_TYPE`. A `historySize` that is not a non-negative safe integer throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 ##### `HistoryFilter`
 
@@ -124,7 +124,7 @@ start(argv?: readonly string[]): Promise<number>
 | No arguments, and both stdin and stdout are terminals | The interactive shell starts. `exit` is emitted when the shell ends. |
 | No arguments, and either stream is not a terminal | The help index is printed, then `exit` is emitted. |
 
-The promise resolves to the exit code, which is also set on `process.exitCode`. After an interactive session it resolves to the value `process.exitCode` holds at that point, or `0` when unset. A failure is written to stderr and reflected in the exit code rather than rejected. See [Errors](errors.md).
+The promise resolves to the code the process will exit with. After a failed or interrupted direct-mode command that is the failure's code, which is also set on `process.exitCode`. Otherwise it is the value `process.exitCode` currently holds, or `0` when unset, and a successful command leaves `process.exitCode` unchanged. A failure is written to stderr and reflected in the exit code rather than rejected. See [Errors](errors.md).
 
 A second call on the same instance throws an error with code `ERR_ALREADY_STARTED`. An `argv` that is not an array of strings throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
@@ -137,9 +137,9 @@ exec(argv: readonly string[], options?: StdioOptions): Promise<void>
 execLine(line: string, options?: StdioOptions): Promise<void>
 ```
 
-`exec` runs `argv` as the command path followed by its arguments. The elements are used as is: nothing is tokenized and `|` is an ordinary character, so untrusted data belongs here. `[]` resolves without doing anything. A value that is not an array of strings throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
+`exec` runs `argv` as the command path followed by its arguments. The elements are used as is: nothing is tokenized and `|` is an ordinary character, so untrusted data belongs here. A leading `"--"` ends the options before the command and is removed once, so `exec(["--", "greet", "x"])` runs `greet x`. An argv with no command left (`[]`, only empty strings, or a lone `"--"`) resolves without doing anything, even when a fallback handler is set. An empty string followed by a command, as in `["", "greet"]`, rejects with `CommandNotFoundError`. A value that is not an array of strings throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
-`execLine` runs a shell-language line as if it had been typed at the interactive prompt. The line is tokenized (single quotes, double quotes, backslash escapes), and a top-level `|` splits it into a pipeline whose stages run concurrently. `""` resolves without doing anything. A value that is not a string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, and an unclosed quote rejects with `ParseError` unless a fallback handler takes the line. Untrusted data must not be interpolated into the line, since a `|` in it starts another command; pass it through `exec([...])` instead. Windows paths in a line are quoted or passed through `exec`.
+`execLine` runs a shell-language line as if it had been typed at the interactive prompt. The line is tokenized (single quotes, double quotes, backslash escapes), and a top-level `|` splits it into a pipeline whose stages run concurrently. A leading `--` is removed once before the command is resolved, and a line with no command left (`""` or `"--"`) resolves without doing anything, even when a fallback handler is set. A value that is not a string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, and a line with an unclosed quote, an empty or trailing pipe segment, or a standalone `<` or `>` redirection operator rejects with `ParseError` unless a fallback handler takes the line. Untrusted data must not be interpolated into the line, since a `|` in it starts another command; pass it through `exec([...])` instead. Windows paths in a line are quoted or passed through `exec`.
 
 Cancellation goes through `options.signal` only; the process's SIGINT is left to the host. An already-aborted signal rejects with `CancelledError` before anything runs, pending plugin initialization included. A command cancelled while it runs rejects with `CancelledError` and fires neither `commandError` nor `error`. A command that ignores the abort and finishes resolves.
 
@@ -214,9 +214,9 @@ class CommandBuilder<
 
 | Method | Description |
 | --- | --- |
-| `description` | Sets the text shown for this command in help output. |
-| `hidden` | Omits the command from generated help and from tab completion. Defaults to `true` when called with no argument. A hidden command is still dispatched normally when its name is typed. |
-| `option` | Declares an option and returns the builder typed with it. See [Options](#options). |
+| `description` | Sets the text shown for this command in help output. A non-string argument throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. |
+| `hidden` | Omits the command from generated help and from tab completion. Defaults to `true` when called with no argument. A hidden command is still dispatched normally when its name is typed. A non-boolean argument throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. |
+| `option` | Declares an option and returns the builder typed with it. See [Options](#options). A `flags` that is not a string, or a `schema` that is neither omitted nor an object (`null`, an array and a string are rejected), throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. A schema member of the wrong type throws an error with code `ERR_INVALID_DEFINITION`. |
 | `action` | Sets the handler run when the command is invoked. |
 | `completer` | Sets the tab-completion candidates for this command's arguments: a static list, or a [`Completer`](#completer). |
 | `alias` | Adds alternative names. A name that belongs to another command or alias at the same level throws an error with code `ERR_DEFINITION_CONFLICT`. |
@@ -289,7 +289,7 @@ Runs after options are resolved and before `beforeExecute`. A `CLIError` thrown 
 onCancel(fn: CancelHandler<A, O>): this
 ```
 
-Invoked when the running command is interrupted: Ctrl-C, an aborted `exec` signal, or SIGTERM in the shell. The handler is not awaited, and a rejection is reported through the `error` event. `ctx.signal` is already aborted by the time the handler runs, so a handler and a signal listener are two views of the same event and either or both may be used.
+Invoked when the running command is interrupted: Ctrl-C, an aborted `exec` signal, or SIGTERM in the shell. The handler is not awaited, and a throw or rejection is reported through the `error` event. `ctx.signal` is already aborted by the time the handler runs, so a handler and a signal listener are two views of the same event and either or both may be used.
 
 ### `Action`
 
@@ -329,7 +329,7 @@ A completer is cut off when `ctx.signal` aborts at a 1000 ms deadline. A synchro
 | `line` | `string` | The active pipeline segment — the command the cursor is inside. |
 | `fullLine` | `string` | The whole input line, earlier pipeline segments included. |
 | `current` | `string` | The word under the cursor; `""` at a word boundary. |
-| `commandPath` | `readonly string[]` | Canonical command path, with aliases resolved. |
+| `commandPath` | `readonly string[]` | Canonical path of the command resolved up to the current input, without the CLI name and with aliases resolved. |
 | `args` | `Readonly<Record<string, string \| readonly string[]>>` | Positional arguments parsed so far, keyed by camelCase name: a raw string, or an array of raw strings for a variadic argument. |
 | `options` | `Readonly<Record<string, string \| boolean \| readonly string[]>>` | Option values parsed so far, keyed like `ctx.options`, before coercion, defaults and validation: a raw string for a value option, `true` or `false` for a flag, an array of raw strings for an array option. |
 | `iteration` | `number` | Count of consecutive Tab presses, starting at 1. Resets on any other input. |
@@ -406,9 +406,9 @@ interface CommandContext<
 | --- | --- |
 | `args` | Positional arguments keyed by the camelCase argument name (`<file-name>` is `fileName`). |
 | `options` | Resolved options keyed by the camelCase form of the option's first long name (`--dry-run` is `dryRun`), or of its first short name when it has no long form. |
-| `rawInput` | For string input, the original string. For argv input, `argv.join(" ")`, which is lossy: an argument containing a space is indistinguishable from two arguments. |
-| `rawArgv` | The exact argv elements for array input (`start`, `exec`), `null` for string input. This is the reversible form; use it when argument boundaries matter. |
-| `commandPath` | The canonical path of the resolved command, for example `["db", "migrate"]`. Aliases are resolved to real names, so it does not depend on what the user typed. |
+| `rawInput` | For a command line, the typed line (in a pipeline, the segment of this stage). For argv input, `argv.join(" ")`, which is lossy: an argument containing a space is indistinguishable from two arguments. |
+| `rawArgv` | The exact argv elements for array input (`start`, `exec`), `null` for a command line (`execLine`, the interactive shell). A leading `"--"` is kept. This is the reversible form; use it when argument boundaries matter. |
+| `commandPath` | The canonical path of the resolved command, without the CLI name, for example `["db", "migrate"]`. Aliases are resolved to real names, so it does not depend on what the user typed. |
 | `shell` | The running `Shell` in interactive mode; `null` in direct mode and in programmatic execution. |
 | `signal` | Aborted when the command is cancelled. Pass it to abort-aware APIs such as `fetch` or timers. |
 | `stdin` | The readable stream for this execution surface, or `null` when none applies. In the interactive shell it is the terminal the line editor shares: read it through `prompt.*`, never to EOF. |
@@ -498,7 +498,7 @@ Rules that are easy to miss:
 - `parse` replaces the built-in coercion entirely, so an option with a `parse` may resolve to any type, `Date` included.
 - A `<number>` placeholder requires `type: "number"` or `"number[]"`, and a `<boolean>` placeholder requires `type: "boolean"`.
 - `"number"` accepts ordinary decimal or scientific notation. A magnitude above `Number.MAX_SAFE_INTEGER` is rejected, because its digits cannot be represented exactly.
-- A name or alias already used by another option of the command throws an error with code `ERR_DEFINITION_CONFLICT`. Malformed flags or a schema that contradicts them throw `ERR_INVALID_DEFINITION`.
+- A name or alias already used by another option of the command throws an error with code `ERR_DEFINITION_CONFLICT`. Malformed flags, a schema that contradicts them, or a schema member of the wrong type — an unknown `type`, a non-string `description`, a non-boolean `hidden` or `required`, a non-function `parse` or `validate`, a `completer` that is neither an array of strings nor a function, or `choices` that is not an array — throw `ERR_INVALID_DEFINITION`.
 - The first `--name` in a flags string is canonical, and later long names are aliases. `ctx.options` keys the option by the camelCase form of the canonical name; help, completion and error messages keep the flag spelling. Two options of one command whose camelCase keys coincide, such as `--dry-run` and `--dryRun`, throw `ERR_DEFINITION_CONFLICT`.
 - Names, aliases included, are ASCII letters and digits in parts joined by single dashes. A schema `alias` is exactly one character.
 - `--no-x` negates a boolean option `x`. An option declared as `--no-x` that has no `x` counterpart is an independent option whose key is `noX`.
@@ -520,7 +520,7 @@ Rules that are easy to miss:
 
 ### Built-in flags
 
-`--help` and `-h` show the command's help page. They work at any position in the input and inside a short cluster such as `-vh`. They stop working on a command that declares an option named `help` or aliased `h`; help output and completion then advertise only the form that still works.
+`--help` and `-h` show the command's help page. They work at any position in the input and inside a short cluster such as `-vh`. They stop working on a command that declares an option named `help` or aliased `h`; help output and completion then advertise only the form that still works. A command that binds `-h` to its own option keeps `--help`, and `-h` then selects the option.
 
 `--version` and `-V` are intercepted only when `version` was set on the CLI and only when the flag is the sole token of the input. There is no `-v` form. Without `version`, they are unknown options like any other undeclared top-level flag, and `--help <command>` or `-h <command>` at the top level shows that command's help, the same as `help <command>`.
 
@@ -528,7 +528,9 @@ A bare `--help` or `-h` as the sole token prints the help index rather than a co
 
 ### The built-in help command
 
-`help [...command]` is registered automatically. With no argument it prints the index; with a path it prints that command's page. An unresolvable path fails with `CommandNotFoundError` on stderr rather than printing to stdout.
+`help [...command]` is registered automatically. With no argument it prints the index; with a path it prints that command's page. An unresolvable path fails with `CommandNotFoundError` on stderr rather than printing to stdout. Its `input` is the canonical path of the deepest match followed by the first word that did not match, and `available` lists the commands visible there, or is absent when there are none. `help exit` and `help quit` resolve only inside the interactive shell. Showing help is not a command execution, so it fires no command events.
+
+In direct execution a named CLI puts the program name in its help. A command page reads `Usage: app deploy <env> [options]`, the index has a `Usage: app <command> [options]` line, and both end with a line such as `Run "app help <command>" for more information.` Inside the interactive shell the program name is left out, and the footer reads `Type "help <command>" for more information.`
 
 ## Events and plugins
 
@@ -540,7 +542,7 @@ interface CLIEventMap {
   afterExecute: (ctx: CommandContext) => void | Promise<void>;
   commandError: (error: Error, ctx: CommandContext) => void | Promise<void>;
   error: (error: Error) => void | Promise<void>;
-  exit: () => void | Promise<void>;
+  exit: (exitCode: number) => void | Promise<void>;
 }
 ```
 
@@ -550,9 +552,11 @@ interface CLIEventMap {
 | `afterExecute` | After the action resolves successfully. |
 | `commandError` | When a resolved command fails during argument validation, option resolution, its own `validate`, or its action. |
 | `error` | For any failure while handling input, including ones raised before a command resolves, such as command-not-found or a parse failure. Also once for a failed asynchronous plugin initialization. |
-| `exit` | At most once, when `start` ends or a force-quit or the shell's SIGTERM ends the process. |
+| `exit` | At most once, when `start` ends or a force-quit or the shell's SIGTERM ends the process. The handler receives `exitCode`, the code `start` resolves to: the failure's code, `130` or `143` for a force-quit or SIGTERM, otherwise `process.exitCode` (`0` when unset). Only the first emission runs, so a later force-quit does not change it. |
 
 `commandError` and `error` **both** fire for a resolved command's failure: `commandError` carries the context, `error` is the catch-all. A handler that must see each failure exactly once should listen to one of them, not both. A cancellation is not a failure: when the running command is cancelled through `ctx.signal`, neither fires, and the execution rejects with `CancelledError`.
+
+Showing help or the version is not a command execution. `help`, `--help`, `-h`, `<command> --help`, a group without an action, `--version` and `-V` fire none of `beforeExecute`, `afterExecute` and `commandError`. A `help` command the application registers itself is an ordinary command and does fire them.
 
 `exit` fires after a direct-mode command completes, throws or is force-quit; after a help index is printed for an argument-free non-terminal start; when plugin initialization fails; when the interactive shell ends or receives SIGTERM; and when a force-quit ends an `exec` or `execLine` call. Programmatic execution never fires it on the normal path. A signal the CLI does not handle — SIGTERM or SIGHUP in direct mode, SIGHUP in the shell — ends the process without running `exit` or cancel handlers.
 
@@ -590,7 +594,7 @@ interface PluginContext {
 }
 ```
 
-The object handed to a function passed to `cli.use(...)`. It exposes only the extension surface — a plugin cannot start the CLI or change its options. Its setters return the context, so registrations chain. `command` merges into an existing command when the path is already registered.
+The object handed to a function passed to `cli.use(...)`. It exposes only the extension surface — a plugin cannot start the CLI or change its options. Its setters return the context, so registrations chain. `command` merges into an existing command when the path is already registered. `command` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE` for a non-string definition and an error with code `ERR_INVALID_DEFINITION` for a malformed one. `on` and `off` throw a `RangeError` with code `ERR_INVALID_ARG_VALUE` for an unknown event name and a `TypeError` with code `ERR_INVALID_ARG_TYPE` for a non-function handler, and `fallback` throws that `TypeError` for a non-function handler.
 
 ### `Plugin`
 
@@ -619,8 +623,8 @@ interface Shell {
 
 | Method | Description |
 | --- | --- |
-| `setPrompt` | Changes the prompt string. Takes effect at the next prompt; while a mode is active the change applies after the mode is left. |
-| `enterMode` | Hands input over to a sub-REPL with its own prompt and handler. |
+| `setPrompt` | Changes the prompt string. Takes effect at the next prompt; while a mode is active the change applies after the mode is left. A non-string `text` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. |
+| `enterMode` | Hands input over to a sub-REPL with its own prompt and handler. A non-object `options`, a `prompt` that is not a string, an `action` that is not a function, a `banner` that is not a string, or a `completer` that is neither an array of strings nor a function throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. A `history` other than `"session"` or `"none"` throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. |
 | `exitMode` | Leaves the current mode and returns to the command prompt. |
 | `stop` | Ends the shell session after the current input. |
 
@@ -642,7 +646,7 @@ interface ModeOptions {
 | --- | --- | --- |
 | `prompt` | — | Prompt string shown while the mode is active. |
 | `action` | — | Handler for each submitted line, a [`ModeAction`](#modeaction). A mode does not dispatch through the command registry. |
-| `banner` | — | Text printed once when the mode is entered. |
+| `banner` | No banner | Text printed once when the mode is entered. |
 | `completer` | — | Mode-specific completion: a static list, or a [`Completer`](#completer) called with a `CompletionContext` whose `commandPath` is empty. Either is filtered by prefix against `ctx.current`. Without one, Tab offers nothing: top-level command completion is not offered inside a mode. Cut off at 1000 ms like every other provider. |
 | `history` | `"session"` | `"session"` keeps mode input in memory for the duration of the mode; `"none"` disables it. Mode input is never written to the on-disk history file. |
 
@@ -654,7 +658,7 @@ Inside a mode, `exit` and `quit` always leave the mode rather than the shell. Th
 type ModeAction = (input: string, ctx: ModeContext) => void | Promise<void>
 ```
 
-Receives each line submitted inside a mode. A throw or rejection is reported on stderr and the shell stays in the mode.
+Receives each line submitted inside a mode. A throw or rejection fires the `error` event and is reported on stderr, and the shell stays in the mode. A cancellation of `ctx.signal` is not a failure and fires no `error` event.
 
 ### `ModeContext`
 
@@ -672,7 +676,7 @@ The context passed to a mode's action: the shell's streams and the signal that a
 const color: Colorizer
 ```
 
-A proxy whose properties are style names. Each returns a callable that is also chainable.
+A `Colorizer`: an object whose properties are style names. Each returns a callable that is also chainable.
 
 ```typescript
 import { color } from "@libraz/node-cli";
@@ -682,7 +686,7 @@ color.bold.green("ok");
 color.bgCyan.white.underline("banner");
 ```
 
-Accessing an unknown style name **throws** a `RangeError` with code `ERR_INVALID_ARG_VALUE`, so a typo surfaces immediately instead of silently printing unstyled text. Protocol properties (`then`, `toString`, `valueOf`, `toJSON`, `constructor`, and any symbol) are exempt, so passing a colorizer through `await`, a template literal or `JSON.stringify` does not crash.
+Accessing an unknown style name **throws** a `RangeError` with code `ERR_INVALID_ARG_VALUE`, so a typo surfaces immediately instead of silently printing unstyled text. Protocol properties (`then`, `toString`, `valueOf`, `toJSON`, `constructor`, and any symbol) are exempt, so passing a colorizer through `await`, a template literal or `JSON.stringify` does not crash. A style function called with a non-string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, whether colour is enabled or not.
 
 Enablement follows `process.stdout`. Use `createColorizer` when writing elsewhere.
 
@@ -735,7 +739,7 @@ colorTag`{bold.red Error}: ${message}`;
 colorTag`{dim outer {cyan inner} outer}`;
 ```
 
-Unlike `color`, the tag never throws on an unknown name: an unknown style name, an unclosed brace or a missing space renders literally. Interpolated values are inserted verbatim and never parsed as markup, so a value that itself contains `{green ...}` is not treated as markup. With colour disabled the markup is removed and plain text is returned. Nesting deeper than 64 levels throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+Unlike `color`, the tag never throws on an unknown name: an unknown style name, an unclosed brace or a missing space renders literally. Interpolated values are inserted verbatim and never parsed as markup, so a value that itself contains `{green ...}` is not treated as markup. With colour disabled the markup is removed and plain text is returned. Nesting deeper than 64 levels throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. Calling the tag as a plain function rather than as a template tag throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 ### `ColorTag`
 
@@ -751,7 +755,7 @@ The type of `colorTag` and of every tag `createColorTag` returns.
 function createColorTag(stream: Writable): ColorTag
 ```
 
-Returns a tag with the semantics of `colorTag` whose enablement is decided from `stream`, so escapes are emitted only when colour is enabled for that stream.
+Returns a tag with the semantics of `colorTag` whose enablement is decided from `stream`, so escapes are emitted only when colour is enabled for that stream. A `stream` that is not an object with a `write` function throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 ```typescript
 const e = createColorTag(process.stderr);
@@ -764,7 +768,7 @@ process.stderr.write(e`{bold.red Error}: something went wrong\n`);
 function createColorizer(stream: Writable): Colorizer
 ```
 
-Returns a `color`-shaped proxy whose enablement is decided from `stream` rather than `process.stdout`. Use it inside a command action so colour follows the stream the action is actually writing to.
+Returns a `Colorizer`, shaped like `color`, whose enablement is decided from `stream` rather than `process.stdout`. Use it inside a command action so colour follows the stream the action is actually writing to. A `stream` that is not an object with a `write` function throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 ```typescript
 const col = createColorizer(ctx.stdout);
@@ -785,7 +789,7 @@ Reports whether escape codes would be emitted for `stream`, which defaults to `p
 4. `TERM=dumb`: colour off.
 5. Whether the stream is a terminal.
 
-When the answer is `false`, every style is dropped, modifiers such as `bold` and `underline` included: `NO_COLOR` and `setColorEnabled(false)` stop all styling, not only colours.
+When the answer is `false`, every style is dropped, modifiers such as `bold` and `underline` included: `NO_COLOR` and `setColorEnabled(false)` stop all styling, not only colours. A `stream` that is given but is not an object with a `write` function throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 ### `setColorEnabled`
 
@@ -801,7 +805,7 @@ function setColorEnabled(value: boolean | "auto"): void
 function stringWidth(text: string): number
 ```
 
-The number of terminal columns the text occupies. ANSI sequences are stripped first, combining marks, format characters and controls count as zero, and characters with East Asian Width Wide or Fullwidth and emoji-presentation characters count as two. A run of scalars joined by zero-width joiners — a family emoji, for instance — collapses to one two-column grapheme.
+The number of terminal columns the text occupies. ANSI sequences are stripped first, combining marks, format characters and controls count as zero, and characters with East Asian Width Wide or Fullwidth and emoji-presentation characters count as two. A run of scalars joined by zero-width joiners — a family emoji, for instance — collapses to one two-column grapheme. A non-string `text` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 ### `stripAnsi`
 
@@ -809,7 +813,7 @@ The number of terminal columns the text occupies. ANSI sequences are stripped fi
 function stripAnsi(text: string): string
 ```
 
-Removes every ANSI escape sequence: CSI, OSC, DCS/SOS/PM/APC control strings and every other escape.
+Removes every ANSI escape sequence: CSI, OSC, DCS/SOS/PM/APC control strings and every other escape. A non-string `text` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 ### `truncateAnsi`
 
@@ -830,7 +834,7 @@ interface AnsiSegment {
 }
 ```
 
-Splits the input into ordered runs of escape sequences (`ansi: true`) and visible text (`ansi: false`), using the same recognizer as `stripAnsi`. Concatenating every segment's `text` reproduces the input, which is what lets a consumer transform only the visible parts.
+Splits the input into ordered runs of escape sequences (`ansi: true`) and visible text (`ansi: false`), using the same recognizer as `stripAnsi`. Concatenating every segment's `text` reproduces the input, which is what lets a consumer transform only the visible parts. A non-string `text` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 ### `splitGraphemes`
 
@@ -838,7 +842,7 @@ Splits the input into ordered runs of escape sequences (`ansi: true`) and visibl
 function splitGraphemes(text: string): readonly string[]
 ```
 
-Splits visible text into user-perceived grapheme clusters, so an emoji with a modifier counts as one unit. The input must not contain escape sequences, which would be split like any other text: split with `splitAnsi` first and pass only the segments whose `ansi` is `false`.
+Splits visible text into user-perceived grapheme clusters, so an emoji with a modifier counts as one unit. The input must not contain escape sequences, which would be split like any other text: split with `splitAnsi` first and pass only the segments whose `ansi` is `false`. A non-string `text` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 ### `sanitizeTerminalText`
 
@@ -851,7 +855,7 @@ interface SanitizeTerminalTextOptions {
 }
 ```
 
-Prepares untrusted text for a rendered region. SGR styling and OSC 8 hyperlinks survive; cursor movement, screen clearing and title changes are removed, and any style or hyperlink the text leaves open is closed.
+Prepares untrusted text for a rendered region. SGR styling and OSC 8 hyperlinks survive; cursor movement, screen clearing and title changes are removed, and any style or hyperlink the text leaves open is closed. A non-string `text`, or an `options` or flag of the wrong type, throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 | Field | Default | Description |
 | --- | --- | --- |
@@ -883,7 +887,9 @@ Renders rows as an aligned string with no trailing newline. Accepts an array of 
 
 `table` never wraps. A cell wider than its column is truncated with the ellipsis, newlines and tabs inside a cell have already been collapsed to spaces, and the total width is never clamped to the terminal — a wide table wraps in the terminal rather than being reflowed.
 
-An unknown border or style name, or a number outside its range, throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. A value of the wrong type, including a `columns` entry that is neither a string nor a `ColumnSpec`, throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
+An unknown border or style name, or a number outside its range, throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. A value of the wrong type, including a `columns` entry that is neither a string nor a `ColumnSpec`, throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. A `stream` that is not an object with a `write` function is a `TypeError` as well.
+
+With no rows, a table that declares `columns` and does not set `header: false` renders its header alone, together with the frame the options choose. Otherwise it returns `""`.
 
 #### Columns
 
@@ -894,7 +900,7 @@ An unknown border or style name, or a number outside its range, throws a `RangeE
 | Array of objects, no `columns` | The union of every row's own property names, in first-seen order. |
 | Array of objects, with `columns` | Exactly the listed columns; `key` selects the property. |
 | Array of arrays, no `columns` | Row 0 is the header; columns are matched by position and keyed `"0"`, `"1"`, … |
-| Array of arrays, with `columns` | Columns are matched by position and a `ColumnSpec` carries no `key`. Row 0 is then data, not a header. |
+| Array of arrays, with `columns` | Columns are matched by position. A string entry is that column's header text, and a `ColumnSpec` carries no `key`. Row 0 is then data, not a header. |
 
 ### `TableOptions`
 
@@ -918,10 +924,10 @@ interface TableOptions<T extends object = Record<string, unknown>> {
 | Field | Default | Description |
 | --- | --- | --- |
 | `columns` | Derived from the data | Columns to render, in order. See [Columns](#columns). |
-| `header` | `true` | Whether a header row is rendered. |
+| `header` | `true` | Whether a header row is rendered. For array rows without `columns`, `false` also makes row 0 data. |
 | `border` | `"none"` | Border preset. Supplying `chars` without `border` implies `"custom"`. `chars` and `rowSeparators` are ignored with `"none"`. |
-| `chars` | — | Border glyph overrides. `"custom"` starts from the `"single"` preset. Every glyph is one terminal column wide, otherwise a `RangeError` with code `ERR_INVALID_ARG_VALUE` is thrown; the edge fills `top`, `bottom` and `horizontal` may also be `""` to omit that line. With `border: "simple"`, `vertical` and `cross` may be any string. |
-| `borderStyle` | — | Style of the border glyphs, such as `"dim"` or `"cyan.bold"`. `border` chooses the shape; `borderStyle` chooses colour and modifiers. |
+| `chars` | The glyphs of the `border` preset | Border glyph overrides. `"custom"` starts from the `"single"` preset. Every glyph is one terminal column wide, otherwise a `RangeError` with code `ERR_INVALID_ARG_VALUE` is thrown; the edge fills `top`, `bottom` and `horizontal` may also be `""` to omit that line. With `border: "simple"`, `vertical` and `cross` may be any string. |
+| `borderStyle` | Unstyled | Style of the border glyphs, such as `"dim"` or `"cyan.bold"`. `border` chooses the shape; `borderStyle` chooses colour and modifiers. |
 | `headerStyle` | `"bold"` | Style of the header text; `"none"` leaves it plain. |
 | `paddingLeft` | `1` with a frame (`rounded`, `single`, `double`, `custom`); `0` with `none` and `simple` | Spaces inside each cell, left. |
 | `paddingRight` | Same rule as `paddingLeft` | Spaces inside each cell, right. |
@@ -945,10 +951,10 @@ type ColumnSpec<T extends object = Record<string, unknown>> = {
 | Field | Default | Description |
 | --- | --- | --- |
 | `key` | — | Property to read for object rows, typed as `keyof T & string`. Array rows are matched by position and have no `key`. |
-| `label` | `key` | Header text. |
+| `label` | `key`, or `""` for array rows | Header text. |
 | `align` | `"left"` | Alignment of the header and the cells. |
-| `width` | Auto | Fixed width of the column content, padding excluded, as a positive integer. Wins over `maxWidth`. |
-| `maxWidth` | — | Upper bound on the content width, padding excluded: a positive integer or `Infinity`. |
+| `width` | The widest cell of the column, capped by `maxWidth` | Fixed width of the column content, padding excluded, as a positive integer. Wins over `maxWidth`. |
+| `maxWidth` | No limit | Upper bound on the content width, padding excluded: a positive integer or `Infinity`. |
 
 `width` and `maxWidth` both count content columns, so padding never reduces the room for text. A cell wider than the content width is truncated with the ellipsis, and every border mode renders the padding on top of it.
 
@@ -989,9 +995,9 @@ Supplied glyphs are sanitized, so an escape sequence in a border character canno
 
 ## Progress
 
-Every indicator defaults to `process.stderr`, which keeps progress output out of a redirected stdout. An indicator starts drawing when it is created, and every terminal verb (`succeed`, `fail`, `warn`, `stop`) ends it. Any method called afterwards does nothing. A command context can be passed as the options object (`progress.spinner(ctx)`), which draws to its `stderr`.
+Every indicator defaults to `process.stderr`, which keeps progress output out of a redirected stdout. An indicator starts drawing when it is created, and every terminal verb (`succeed`, `fail`, `warn`, `stop`) ends it. Any method called afterwards does nothing, although its arguments are still validated. A command context can be passed as the options object (`progress.spinner(ctx)`), which draws to its `stderr`.
 
-The three verbs `succeed`, `fail` and `warn` replace the indicator with a result line: a green `✔`, a red `✖` or a yellow `⚠`, followed by `message`, which defaults to the label. Where the stream cannot draw symbols (it is not a terminal, or `TERM=dumb`), the line starts with the ASCII tag `[OK]`, `[ERROR]` or `[WARN]` instead. Colour is decided separately by [`isColorEnabled`](#iscolorenabled). `stop` leaves the last frame in place and ends the line.
+The three verbs `succeed`, `fail` and `warn` replace the indicator with a result line: a green `✔`, a red `✖` or a yellow `⚠`, followed by `message`, which defaults to the label. Where the stream cannot draw symbols (it is not a terminal, or `TERM=dumb`), the line starts with the ASCII tag `[OK]`, `[ERROR]` or `[WARN]` instead. Colour is decided separately by [`isColorEnabled`](#iscolorenabled). `stop` leaves the last frame in place and ends the line. A `message` that is neither omitted nor a string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE` before any state changes, and the group verbs of a `MultiBar` check it the same way.
 
 ### progress.bar
 
@@ -1025,7 +1031,7 @@ An invalid option throws a `TypeError` with code `ERR_INVALID_ARG_TYPE` or a `Ra
 | `fail(message?: string)` | Ends the bar at its current position with a `✖` result line. |
 | `warn(message?: string)` | Ends the bar at its current position with a `⚠` result line. |
 | `stop()` | Leaves the last frame in place and ends the line. In a `MultiBar` it freezes that bar's row; the group's verbs then skip it. |
-| `[Symbol.dispose]()` | Alias for `stop()`. |
+| `[Symbol.dispose]()` | Same as `stop()`: leaves the last frame, and writes nothing on a stream that cannot animate. Call `succeed`, `fail` or `warn` first for a result line. |
 
 `Symbol.dispose` makes a bar usable with a `using` declaration, which calls the disposal method automatically at the end of the enclosing block, including when the block throws:
 
@@ -1045,7 +1051,7 @@ interface BarState {
   readonly percent: number; // integer, 0 to 100; 100 when total is 0
   readonly elapsedMs: number; // ms since the bar was created
   readonly etaMs: number; // ms remaining; Infinity until some progress is made, 0 once complete
-  readonly ratePerSecond: number; // units per second
+  readonly ratePerSecond: number; // average units per second since the bar was created
 }
 ```
 
@@ -1071,12 +1077,12 @@ progress.spinner(options?: SpinnerOptions): Spinner
 
 | Method | Description |
 | --- | --- |
-| `setLabel(label: string)` | Replaces the label; the next frame shows it. |
+| `setLabel(label: string)` | Replaces the label; the next frame shows it. It is also the default result message. |
 | `succeed(message?: string)` | Ends the spinner with a `✔` result line. |
 | `fail(message?: string)` | Ends the spinner with a `✖` result line. |
 | `warn(message?: string)` | Ends the spinner with a `⚠` result line. |
 | `stop()` | Leaves the last frame in place and ends the line. |
-| `[Symbol.dispose]()` | Alias for `stop()`. |
+| `[Symbol.dispose]()` | Same as `stop()`: leaves the last frame, and writes nothing on a stream that cannot animate. Call `succeed`, `fail` or `warn` first for a result line. |
 
 ### Behaviour on a non-terminal stream
 
@@ -1105,7 +1111,7 @@ The group claims its stream when it is created. One frame cannot be split across
 | `fail(message?: string)` | Ends every unfinished bar with `✖` and closes the group. |
 | `warn(message?: string)` | Ends every unfinished bar with `⚠` and closes the group. |
 | `stop()` | Leaves the last frame in place and closes the group. |
-| `[Symbol.dispose]()` | Alias for `stop()`. |
+| `[Symbol.dispose]()` | Same as `stop()`: leaves the last frame, and writes nothing on a stream that cannot animate. Call `succeed`, `fail` or `warn` first for a result line. |
 
 On a group method, `message` is written as one unmarked final line. On a non-terminal stream, each bar's result line is written as the bar ends.
 
@@ -1125,7 +1131,7 @@ See [Progress](progress.md) for worked usage.
 
 ## Prompts
 
-Prompts ask on stderr, so a question never pollutes a redirected stdout. Every prompt rejects with `CancelledError` on Ctrl-C or when `signal` aborts, and the `cause` of the latter is the signal's reason; an already-aborted `signal` rejects immediately. Every prompt rejects with `InputEndedError` when `stdin` is `null`, or when the input ends (Ctrl-D) before an answer, also while re-asking. A read error on the input stream rejects with the stream's own error. A `validate` that throws is not a rejection: the message is shown and the prompt asks again. A message and a `marker` are rendered on one line: a newline becomes a space and cursor control is removed.
+Prompts ask on stderr, so a question never pollutes a redirected stdout. Every prompt rejects with `CancelledError` on Ctrl-C or when `signal` aborts, and the `cause` of the latter is the signal's reason; an already-aborted `signal` rejects immediately. Every prompt rejects with `InputEndedError` when `stdin` is `null`, or when the input ends (Ctrl-D) before an answer, also while re-asking. A read error on the input stream rejects with the stream's own error. A `validate` that throws is not a rejection: the message is shown and the prompt asks again. A message and a `marker` are rendered on one line: a newline becomes a space and cursor control is removed. Every option is validated before the question is written: a value of the wrong type throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, and its message names the prompt, such as `prompt.text()`.
 
 Two prompts reading from the same input stream at once throws an error with code `ERR_INPUT_BUSY`, since the second would steal the first one's keystrokes.
 
@@ -1156,7 +1162,7 @@ prompt.text(message: string, options?: TextOptions): Promise<string>
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `default` | `string` | — | Fills an empty submission. |
+| `default` | `string` | — | Fills an empty submission and satisfies `required`. |
 | `placeholder` | `string` | — | Example shown as `(e.g. …)`. Displayed only when there is no `default`. |
 | `trim` | `boolean` | `true` | Trims surrounding whitespace from the answer. |
 | `required` | `boolean` | `true` | Refuses an empty answer. |
@@ -1189,7 +1195,7 @@ prompt.select<const T = string>(
 | --- | --- | --- | --- |
 | `default` | `T` | — | Value returned for an empty submission. Matched by identity against a choice's `value`, or against the choice object itself. A `default` that matches no choice throws a `RangeError` with code `ERR_INVALID_ARG_VALUE` before the question is written. |
 
-Choices are answered by their displayed number, or by typing a label, matched case-insensitively. A number within the range of the list always selects by number, so a numeric-looking label stays reachable by its position; any other input is matched against the labels. An empty `choices` array throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+Choices are answered by their displayed number, or by typing a label, matched case-insensitively. A number within the range of the list always selects by number, so a numeric-looking label stays reachable by its position; any other input is matched against the labels. An answer that matches neither asks again with `Please enter a number between 1 and N, or a choice label`, where N is the number of choices. An empty `choices` array throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 ### prompt.multiselect
 
@@ -1203,11 +1209,11 @@ prompt.multiselect<const T = string>(
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `default` | `readonly T[]` | — | Pre-selected values, returned for an empty submission. Each element must match a choice, otherwise a `RangeError` with code `ERR_INVALID_ARG_VALUE` is thrown before the question is written. |
-| `min` | `number` | — | Minimum number of distinct selections. Omitted means an empty result is accepted. |
+| `default` | `readonly T[]` | — | Pre-selected values, returned in choice order for an empty submission. Each element must match a choice, and the number of distinct values must fall within `min` and `max`, otherwise a `RangeError` with code `ERR_INVALID_ARG_VALUE` is thrown before the question is written. |
+| `min` | `number` | — | Minimum number of distinct selections. Omitted means no minimum: with no `default`, an empty answer returns `[]`. |
 | `max` | `number` | — | Maximum number of distinct selections. |
 
-Answered with comma-separated numbers. Duplicates are collapsed before `min` and `max` are checked. A `min` above `max`, a `min` above the number of choices, or a non-integer bound throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+Answered with comma-separated numbers. Duplicates are collapsed before `min` and `max` are checked. A `min` above `max`, a `min` above the number of choices, or a non-integer bound throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. A `min` or `max` that is not a number, or a `default` that is not an array, throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. An answer outside the bounds asks again with `Select at least 2 items` or `Select at most 1 item`.
 
 ### prompt.password
 
@@ -1236,7 +1242,7 @@ interface SelectChoice<T> {
 type Choice<T> = SelectChoice<T> | Exclude<T, { label: unknown }>;
 ```
 
-A choice is either a bare value or a descriptor. A descriptor with a `label` but no `value` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, so an ordinary domain object that happens to carry a `label` property is never silently turned into `undefined`. A bare value object that has a `label` member is a type error: wrap it as `{ label, value }`.
+A choice is either a bare value or a descriptor. A descriptor with a `label` but no `value` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, so an ordinary domain object that happens to carry a `label` property is never silently turned into `undefined`. A bare value object that has a `label` member is a type error: wrap it as `{ label, value }`. A `hint` that is not a string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
 
 See [Prompts](prompts.md) for worked usage.
 
@@ -1250,7 +1256,7 @@ function createLogger(options?: LoggerOptions): Logger
 
 Every level — `info` and `success` included — is written to one stream, which defaults to `process.stderr`. There is no level-based routing between stdout and stderr. The stream is set with the `stderr` option, and a command context can be passed as the options object (`createLogger({ ...ctx, prefix: "deploy" })`). To put log output on stdout, pass `stderr: process.stdout`.
 
-An unknown `level` or an invalid `bufferLimit` throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+A wrongly typed option throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. An unknown `level` or an invalid `bufferLimit` throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
 
 #### `LoggerOptions`
 
@@ -1280,8 +1286,8 @@ Messages go through the `format` function of `node:util`, so `%s`, `%d` and `%j`
 
 | Method | Description |
 | --- | --- |
-| `setLevel(level: LogLevel)` | Changes the minimum level at runtime and returns the logger. |
-| `child(prefix: string): Logger` | Creates a child whose prefix is `parent:child`. Without its own level it follows the parent's current level, so a later `parent.setLevel(...)` reaches it. |
+| `setLevel(level: LogLevel)` | Changes the minimum level at runtime and returns the logger. A non-string `level` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, and an unknown one a `RangeError` with code `ERR_INVALID_ARG_VALUE`. |
+| `child(prefix: string): Logger` | Creates a child whose prefix is `parent:child`. Without its own level it follows the parent's current level, so a later `parent.setLevel(...)` reaches it. A non-string `prefix` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`. |
 | `flush(): Promise<void>` | Resolves once queued lines have reached the stream, every child's included. Rejects if the stream errors or closes first. After a stream failure the logger and its children become no-ops: later lines are dropped silently and the failure is reported only through `flush()`. |
 
 ### `LogLevel`
@@ -1356,9 +1362,11 @@ type CLIErrorCode =
 
 Every subclass constructor takes its subject first and an options object last. The options object is optional, and every one accepts `cause`.
 
+Constructors validate their arguments, `CLIError` included. A first argument that is not a string (an array of strings for `ExtraArgumentError`), an `options` that is neither omitted nor an object (`null` and arrays are rejected), a `code`, `usage` or `optionName` that is given but not a string, and an `available` that is not an array of strings throw a `TypeError` with code `ERR_INVALID_ARG_TYPE`. A `quote` other than `"single"` or `"double"` throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+
 | Class | Constructor | `code` | `exitCode` | Extra fields | Raised when |
 | --- | --- | --- | --- | --- | --- |
-| `CommandNotFoundError` | `(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `64` | `input`, `available?` | No command matches the input, or a command group is given an unknown child. |
+| `CommandNotFoundError` | `(input, { available?, cause? })` | `COMMAND_NOT_FOUND` | `64` | `input`, `available?` | No command matches the input, a command group is given an unknown child, or `help` is given a path that does not resolve. |
 | `MissingArgumentError` | `(argName, { usage?, cause? })` | `MISSING_ARGUMENT` | `64` | `argName`, `usage?` | A required positional argument is absent, or a required variadic receives zero values. |
 | `ExtraArgumentError` | `(extras, { usage?, cause? })` | `EXTRA_ARGUMENT` | `64` | `extras`, `usage?` | More positional values are supplied than the command declares. `extras` is a non-empty `readonly string[]`; an empty array throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`. |
 | `MissingOptionError` | `(optionName, { usage?, cause? })` | `MISSING_OPTION` | `64` | `optionName`, `usage?` | A `required` option is absent. |
@@ -1373,9 +1381,11 @@ Every subclass constructor takes its subject first and an options object last. T
 
 `optionName` is the canonical long name without dashes, in its kebab-case spelling (`dry-run`); the option's key in `ctx.options` is the camelCase form (`dryRun`). `UnknownOptionError.optionName` has no definition behind it, so it is the typed flag without its dashes.
 
-An error raised while a command is being resolved carries `usage`, the command's usage line, and appends `\n\n  Usage: <usage>` to its message. Messages quote what the user typed and leave names the application defined bare: `Unknown option: "--x"`, `Missing required option: --x`. Messages of API misuse (see `UsageErrorCode`) quote the application's names as well, in the manner of Node's own errors.
+An error raised while a command is being resolved carries `usage`, the command's usage line, and appends `\n\n  Usage: <usage>` to its message. Messages quote what the user typed and leave names the application defined bare: `Unknown option: "--x"`, `Missing required option: --x`. In direct execution `usage` starts with the program name (`app deploy <env> [options]`); inside the interactive shell it does not. Messages of API misuse (see `UsageErrorCode`) quote the application's names as well, in the manner of Node's own errors.
 
-`ParseError` covers an unclosed quote (`quote` is `"single"` or `"double"` and names which one), an empty or trailing pipe, and an unsupported redirection operator. It is raised before a command is resolved, so a registered `fallback` handler receives the input instead of the error being thrown.
+For `CommandNotFoundError`, `input` is the canonical path of the deepest matching command followed by the first word that did not match (`help db zz` gives `"db zz"`), and `available` is a copy of the names of the commands visible there. It is absent when none is visible.
+
+`ParseError` covers an unclosed quote (`quote` is `"single"` or `"double"` and names which one), an empty or trailing pipe, and a standalone `<` or `>` redirection operator. It is raised before a command is resolved, so a registered `fallback` handler receives the input instead of the error being thrown.
 
 The user-input classes carry exit code `64`, the conventional status for a command-line usage error. `InputEndedError` carries `66` (no input), and `CancelledError` carries `130`, the conventional status for an interrupted program. A bare `CLIError` defaults to `1`, as does any other value an action throws. The interactive shell's SIGTERM path exits `143`. See [Exit code](glossary.md#exit-code).
 
@@ -1463,7 +1473,7 @@ Renders any thrown value as user-facing text, which may span several lines: the 
 function isCancellationError(err: unknown, signal: AbortSignal): boolean
 ```
 
-Reports whether a failure is a user-initiated cancellation rather than a genuine fault. A `CancelledError` always qualifies. A bare `AbortError` qualifies **only** when `signal` is aborted — without that evidence there is no way to tell whose cancellation it was, and an unrelated aborted request would be misreported as the user pressing Ctrl-C.
+Reports whether a failure is a user-initiated cancellation rather than a genuine fault. A `CancelledError` always qualifies. While `signal` is aborted, a bare `AbortError` and a rejection with the signal's own `signal.reason` qualify too, whatever the type of that reason (it is what `signal.throwIfAborted()` and `fetch` throw). They qualify **only** then — without that evidence there is no way to tell whose cancellation it was, and an unrelated aborted request would be misreported as the user pressing Ctrl-C. A `signal` that is not an `AbortSignal` throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, even when `err` is a `CancelledError`.
 
 ```typescript
 import { isCancellationError } from "@libraz/node-cli";
@@ -1486,7 +1496,7 @@ See [Errors](errors.md).
 function tokenize(input: string): readonly string[]
 ```
 
-Splits one command into argv-style tokens, honouring single quotes, double quotes and backslash escapes. It does not handle pipelines: `|` is an ordinary character here, while `execLine` splits a line at an unquoted `|` first, so `exec(tokenize(line))` differs from `execLine(line)` whenever the line contains one. A non-string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, and an unclosed quote throws `ParseError`. It is exported so an integration can reuse the framework's exact behaviour; ordinary applications do not need it.
+Splits one command into argv-style tokens, honouring single quotes, double quotes and backslash escapes. It does not handle pipelines: `|`, `<` and `>` are ordinary characters here, while `execLine` splits a line at an unquoted `|` first and rejects a standalone `<` or `>` with a `ParseError`, so `exec(tokenize(line))` differs from `execLine(line)` whenever the line contains one of them. A non-string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`, and an unclosed quote throws `ParseError`. It is exported so an integration can reuse the framework's exact behaviour; ordinary applications do not need it.
 
 ## Environment variables
 
