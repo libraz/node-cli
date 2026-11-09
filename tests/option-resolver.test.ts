@@ -12,7 +12,7 @@ function makeDef(long: string, schema: OptionDef["schema"], aliases: string[] = 
   };
 }
 
-const dummyCtx = {} as CommandContext;
+const dummyCtx = { signal: new AbortController().signal } as CommandContext;
 
 describe("resolveOptions", () => {
   it("returns raw value as string by default", () => {
@@ -209,9 +209,17 @@ describe("resolveOptions", () => {
     expect(() => resolveOptions({ env: "staging" }, defs, dummyCtx)).toThrow(InvalidOptionError);
   });
 
-  it("keeps lenient choice matches in the declared option type", () => {
-    const defs = new Map([["port", makeDef("port", { type: "string", choices: [3000] })]]);
-    expect(resolveOptions({ port: "3000" }, defs, dummyCtx).port).toBe("3000");
+  it("compares choices with === after coercion", () => {
+    const numeric = new Map([["port", makeDef("port", { type: "number", choices: [3000] })]]);
+    expect(resolveOptions({ port: "3000" }, numeric, dummyCtx).port).toBe(3000);
+    const textual = new Map([["port", makeDef("port", { type: "string", choices: [3000] })]]);
+    expect(() => resolveOptions({ port: "3000" }, textual, dummyCtx)).toThrow(InvalidOptionError);
+  });
+
+  it("reads and writes values under the camelCase key", () => {
+    const defs = new Map([["dry-run", makeDef("dry-run", { type: "boolean", default: false })]]);
+    expect(resolveOptions({ dryRun: true }, defs, dummyCtx)).toEqual({ dryRun: true });
+    expect(resolveOptions({}, defs, dummyCtx)).toEqual({ dryRun: false });
   });
 
   it("runs custom validate", () => {
@@ -245,7 +253,7 @@ describe("resolveOptions", () => {
       ],
       ["end", makeDef("end", { type: "number", default: 10 })],
     ]);
-    const ctx = { options: {} } as CommandContext;
+    const ctx = { options: {}, signal: new AbortController().signal } as CommandContext;
     expect(resolveOptions({ start: "2" }, defs, ctx)).toMatchObject({ start: 2, end: 10 });
     expect(() => resolveOptions({ start: "20", end: "30" }, defs, ctx)).not.toThrow();
     expect(() => resolveOptions({ start: "20", end: "10" }, defs, ctx)).toThrow("invalid range");

@@ -10,8 +10,16 @@ import type {
   Completer,
   DefinitionArgs,
   OptionSchema,
+  OptionSchemaInput,
+  OptionValue,
 } from "../types.js";
-import { parseDefinitionString, parseOptionFlags, stripOptionPrefix } from "./parser.js";
+import {
+  NAME_PATTERN,
+  parseDefinitionString,
+  parseOptionFlags,
+  stripOptionPrefix,
+  toCamelKey,
+} from "./parser.js";
 import type { CommandRegistry } from "./registry.js";
 
 /**
@@ -29,6 +37,17 @@ export type CommandBuilderFor<D extends string> = string extends D
  * and are chained to configure the command incrementally. `A` and `O` are the
  * types of `ctx.args` and `ctx.options` the handlers receive; each `.option()`
  * adds its key to `O`.
+ *
+ * @example
+ * ```ts
+ * cli
+ *   .command("deploy <target-env>")
+ *   .description("Deploy the current build")
+ *   .option("--dry-run")
+ *   .action((ctx) => {
+ *     ctx.stdout.write(`${ctx.args.targetEnv} ${ctx.options.dryRun}\n`);
+ *   });
+ * ```
  */
 export class CommandBuilder<
   A extends object = Record<string, unknown>,
@@ -109,38 +128,116 @@ export class CommandBuilder<
   }
 
   /**
-   * Adds an option to this command.
+   * Adds an option to this command and returns the builder typed with it.
    *
    * The flags string may contain short and long forms separated by commas,
-   * with an optional value placeholder (e.g., `"-p, --port <port>"`).
+   * with an optional value placeholder (e.g., `"-p, --port <port>"`). Every
+   * name is ASCII letters and digits in parts joined by single dashes. The
+   * first long flag is the canonical name and later long flags are aliases;
+   * without a long flag the first short flag is the canonical name.
+   * `ctx.options` holds the value under the camelCase form of the canonical
+   * name (`--dry-run` → `dryRun`). Help, completion and error messages keep
+   * the flag spellings.
+   *
    * If no type is provided in the schema, it is inferred from the flag format:
    * a placeholder means `string`, none means `boolean`. A `<number>` placeholder
    * requires `type: "number"` or `"number[]"`, and a `<boolean>` placeholder
    * requires `type: "boolean"`.
-   * Repeated call: the same option name replaces the previous definition in
-   * place; a new name adds an option.
    *
    * With a literal flags string the option is added to the type of
-   * `ctx.options` under the key described above. Its value type is the awaited
-   * return of `parse`, else `type`, else `string` or `boolean` from the
-   * placeholder, narrowed to the `choices` union when present. It is optional
-   * unless it has a `default`, is `required`, or is a boolean.
+   * `ctx.options`. Its value type is the `choices` union when present, else the
+   * awaited return of `parse`, else `type`, else `string` or `boolean` from the
+   * placeholder. It is optional unless it has a `default`, is `required`, or is
+   * a boolean. `default` and `validate` are typed by that value type.
+   *
+   * Repeated call: the same canonical name replaces the previous definition
+   * in place, and its type replaces the previous one; a new name adds an
+   * option. The returned builder carries the new type while the receiver keeps
+   * the old one, so chain the call or reassign the result.
+   *
+   * @example
+   * ```ts
+   * cli
+   *   .command("serve")
+   *   .option("-p, --port <n>", { type: "number", default: 8080 })
+   *   .option("--log-level <level>", { choices: ["debug", "info"] })
+   *   .option("--dry-run")
+   *   .action((ctx) => {
+   *     const { port, logLevel, dryRun } = ctx.options; // number, "debug" | "info" | undefined, boolean
+   *   });
+   * ```
    *
    * @param flags - The option flags string.
    * @param schema - Optional schema describing the option's type, default value, etc.
-   * @returns This builder instance for chaining.
-   * @throws {Error} `ERR_INVALID_DEFINITION` for malformed flags or an invalid
-   *   schema, `ERR_DEFINITION_CONFLICT` when a name or alias belongs to another option.
+   * @returns This builder, typed with the added option.
+   * @throws {Error} `ERR_INVALID_DEFINITION` for malformed flags or names, a
+   *   schema `alias` that is not one character, a placeholder that disagrees
+   *   with `type`, `required` with a `default`, `choices` that are empty, of
+   *   another type than the value, non-finite or beyond the safe-integer range,
+   *   or combined with `parse` or a boolean, and a `default` that fails
+   *   coercion or lies outside `choices`.
+   * @throws {Error} `ERR_DEFINITION_CONFLICT` when a name, an alias or the
+   *   camelCase key belongs to another option.
    */
-  option<F extends string, const S extends OptionSchema = Record<never, never>>(
+  option<
+    F extends string,
+    const S extends OptionSchemaInput = Record<never, never>,
+    const T extends OptionSchema["type"] = undefined,
+    const C extends readonly unknown[] = never,
+    R = never,
+  >(
     flags: F,
-    schema?: S & CheckedOptionSchema<S>,
-  ): CommandBuilder<A, AddOption<O, F, S>> {
+    schema?: S & CheckedOptionSchema<F, S, A, O, T, C, R>,
+  ): CommandBuilder<A, AddOption<O, F, S, OptionValue<F, T, C, R>>> {
     this.assertRegistered();
     const { long, aliases, longAliases, takesValue, valueName } = parseOptionFlags(flags);
 
+    // Names come first: every later message names the option by them.
+    if (!long) {
+      throw usageError(
+        "state",
+        "ERR_INVALID_DEFINITION",
+        `Invalid option flags: missing option name in "${flags}"`,
+      );
+    }
+    for (const name of [long, ...aliases, ...longAliases]) {
+      if (!NAME_PATTERN.test(name)) {
+        throw usageError(
+          "state",
+          "ERR_INVALID_DEFINITION",
+          `Invalid option name "${name}" in "${flags}": use letters and digits joined by single dashes`,
+        );
+      }
+    }
+    for (const alias of aliases) {
+      if (alias.length !== 1) {
+        throw usageError(
+          "state",
+          "ERR_INVALID_DEFINITION",
+          `Option alias "-${alias}" must be exactly one character; write a long alias as "--${alias}"`,
+        );
+      }
+    }
+
     // Clone the caller's schema so we never mutate their object.
-    const resolved: OptionSchema = { ...schema };
+    const resolved: OptionSchema = { ...(schema as OptionSchema | undefined) };
+
+    // Merge schema-declared short aliases (e.g. { alias: "p" }) into the alias list.
+    const mergedAliases = [...aliases, ...longAliases];
+    if (resolved.alias !== undefined) {
+      const extra = typeof resolved.alias === "string" ? [resolved.alias] : resolved.alias;
+      for (const a of extra) {
+        if (typeof a !== "string" || !/^-?[A-Za-z0-9]$/.test(a)) {
+          throw usageError(
+            "state",
+            "ERR_INVALID_DEFINITION",
+            `Option "--${long}" alias ${JSON.stringify(a)} must be one character ("p" or "-p"); write a long alias in the flags string, as in "--${long}, --other"`,
+          );
+        }
+        const name = stripOptionPrefix(a);
+        if (!mergedAliases.includes(name)) mergedAliases.push(name);
+      }
+    }
 
     // Infer type from flag format
     if (!resolved.type) {
@@ -168,6 +265,8 @@ export class CommandBuilder<
       );
     }
 
+    if (resolved.choices !== undefined) assertChoices(long, resolved);
+
     // Single source of truth for "does this option take a value": derive it from
     // the resolved type. This keeps the parser, help output, and completion in
     // agreement even when the schema type and the flag placeholder disagree
@@ -184,7 +283,9 @@ export class CommandBuilder<
       resolved.default = false;
     }
 
-    if (resolved.default !== undefined) {
+    // A default on a `parse` option is already a parsed value, so the
+    // built-in coercion that stands in for parsing does not apply to it.
+    if (resolved.default !== undefined && !resolved.parse) {
       if (
         resolved.default === null &&
         (resolved.type === "boolean" || resolved.type === "number")
@@ -206,9 +307,9 @@ export class CommandBuilder<
         );
       }
       if (resolved.choices) {
-        const allowed = resolved.choices.map(String);
+        const allowed = resolved.choices;
         const values = Array.isArray(resolved.default) ? resolved.default : [resolved.default];
-        if (values.some((value) => !allowed.includes(String(value)))) {
+        if (values.some((value) => !allowed.includes(value))) {
           throw usageError(
             "state",
             "ERR_INVALID_DEFINITION",
@@ -218,51 +319,17 @@ export class CommandBuilder<
       }
     }
 
-    // Merge schema-declared aliases (e.g. { alias: "p" }) into the alias list.
-    const mergedAliases = [...aliases, ...longAliases];
-    if (resolved.alias) {
-      const extra = typeof resolved.alias === "string" ? [resolved.alias] : resolved.alias;
-      for (const a of extra) {
-        const name = stripOptionPrefix(a);
-        if (name && !mergedAliases.includes(name)) {
-          mergedAliases.push(name);
-        }
-      }
-    }
-
-    if (!long) {
-      throw usageError(
-        "state",
-        "ERR_INVALID_DEFINITION",
-        `Invalid option flags: missing option name in "${flags}"`,
-      );
-    }
-    if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(long)) {
-      throw usageError("state", "ERR_INVALID_DEFINITION", `Invalid option name "${long}"`);
-    }
-    for (const alias of mergedAliases) {
-      if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(alias)) {
-        throw usageError("state", "ERR_INVALID_DEFINITION", `Invalid option alias "${alias}"`);
-      }
-      if (!longAliases.includes(alias) && alias.length !== 1) {
-        throw usageError(
-          "state",
-          "ERR_INVALID_DEFINITION",
-          `Option alias "-${alias}" must be exactly one character`,
-        );
-      }
-    }
-
     // Redefinition is intentional: plugins can refine a built-in option without
     // first removing it, so the definition being replaced is skipped rather than
     // deleted up front. Deleting first would leave the option gone if the check
     // below then rejected the new definition, and would also move it to the end
-    // of the render order that help and completion follow.
-    const candidateNames = new Set([long, ...mergedAliases]);
+    // of the render order that help and completion follow. Names are compared
+    // by their camelCase key, so `--dry-run` and `--dryRun` collide too.
+    const candidateKeys = new Set([long, ...mergedAliases].map(toCamelKey));
     for (const [existingLong, existing] of this.definition.options) {
       if (existingLong === long) continue;
       for (const existingName of [existing.long, ...existing.aliases]) {
-        if (candidateNames.has(existingName)) {
+        if (candidateKeys.has(toCamelKey(existingName))) {
           throw usageError(
             "state",
             "ERR_DEFINITION_CONFLICT",
@@ -280,7 +347,7 @@ export class CommandBuilder<
       schema: resolved,
     });
 
-    return this as CommandBuilder<A, AddOption<O, F, S>>;
+    return this as CommandBuilder<A, AddOption<O, F, S, OptionValue<F, T, C, R>>>;
   }
 
   /**
@@ -303,16 +370,23 @@ export class CommandBuilder<
   }
 
   /**
-   * Sets a custom tab-completion function for this command's arguments. It
-   * receives a `CompletionContext` and returns candidates for `ctx.current`.
+   * Sets the tab-completion candidates for this command's arguments: a static
+   * list, or a {@link Completer} that receives a `CompletionContext`. Either
+   * way the candidates are filtered to those starting with `ctx.current`, as
+   * for an option's `completer`.
    * Repeated call: replaces the previous completer.
    *
-   * @param fn - The completer function that returns completion candidates.
+   * @example
+   * ```ts
+   * cli.command("deploy <env>").completer(["production", "staging"]);
+   * ```
+   *
+   * @param fnOrList - The candidates, or the function that returns them.
    * @returns This builder instance for chaining.
    */
-  completer(fn: Completer): this {
+  completer(fnOrList: readonly string[] | Completer): this {
     this.assertRegistered();
-    this.definition.completer = fn;
+    this.definition.completer = fnOrList;
     return this;
   }
 
@@ -395,5 +469,33 @@ export class CommandBuilder<
     this.assertRegistered();
     const fullParentPath = [...this.parentPath, this.definition.name];
     return CommandBuilder.create(this.registry, definition, fullParentPath);
+  }
+}
+
+/**
+ * Checks a schema's `choices` against its option: not empty, not combined with
+ * `parse` or a boolean, every element of the value type, and every number one
+ * an input can produce (finite, within the safe-integer range).
+ */
+function assertChoices(long: string, schema: OptionSchema): void {
+  const choices = schema.choices as readonly unknown[];
+  const reject = (reason: string): never => {
+    throw usageError("state", "ERR_INVALID_DEFINITION", `Option "--${long}" ${reason}`);
+  };
+  if (!Array.isArray(choices) || choices.length === 0) reject("declares no choices");
+  if (schema.parse) reject("cannot combine choices with parse");
+  if (schema.type === "boolean") reject("cannot declare choices for a boolean option");
+  const expected = schema.type === "number" || schema.type === "number[]" ? "number" : "string";
+  for (const choice of choices) {
+    const actual = choice === null ? "null" : typeof choice;
+    if (actual !== expected) {
+      reject(`declares a choice of type ${actual} but its type is ${schema.type}`);
+    }
+    if (
+      typeof choice === "number" &&
+      !(Number.isFinite(choice) && Math.abs(choice) <= Number.MAX_SAFE_INTEGER)
+    ) {
+      reject(`declares the choice ${choice}, which no input can produce`);
+    }
   }
 }

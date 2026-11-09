@@ -340,6 +340,33 @@ describe("ShellCompleter", () => {
   });
 
   describe("custom command completer", () => {
+    it("filters a static command completer list by the current word", () => {
+      const reg = new CommandRegistry();
+      CommandBuilder.create(reg, "deploy <env>")
+        .completer(["production", "preview", "staging"])
+        .action(() => {});
+      const comp = new ShellCompleter(reg);
+
+      expect(comp.complete("deploy pr")).toEqual([["production", "preview"], "pr"]);
+      expect(comp.complete("deploy ")).toEqual([["production", "preview", "staging"], ""]);
+    });
+
+    it("hands the completer camelCase keys and raw values typed so far", () => {
+      const reg = new CommandRegistry();
+      let seen: { args: unknown; options: unknown } | undefined;
+      CommandBuilder.create(reg, "copy <source-file> <target-dir>")
+        .option("--dry-run")
+        .option("--max-count <n>", { type: "number" })
+        .completer((ctx) => {
+          seen = { args: { ...ctx.args }, options: { ...ctx.options } };
+          return [];
+        })
+        .action(() => {});
+      new ShellCompleter(reg).complete("copy a --dry-run --max-count 3 ");
+
+      expect(seen).toEqual({ args: { sourceFile: "a" }, options: { dryRun: true, maxCount: "3" } });
+    });
+
     it("calls custom completer when no other completion matches", () => {
       const reg = new CommandRegistry();
       CommandBuilder.create(reg, "connect <host>")

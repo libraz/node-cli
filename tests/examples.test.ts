@@ -3,7 +3,7 @@ import { createCLI } from "../src/index.js";
 import { createMockStdout } from "./helpers.js";
 
 describe("documented example patterns", () => {
-  it("uses hyphenated long option names exactly as parsed", async () => {
+  it("reads a hyphenated long option under its camelCase key", async () => {
     const cli = createCLI({ name: "test" });
     const stream = createMockStdout();
 
@@ -11,7 +11,7 @@ describe("documented example patterns", () => {
       .command("deploy <env>")
       .option("--dry-run", { type: "boolean" })
       .action((ctx) => {
-        ctx.stdout.write(ctx.options["dry-run"] ? "dry\n" : "real\n");
+        ctx.stdout.write(ctx.options.dryRun ? "dry\n" : "real\n");
       });
 
     await cli.execLine("deploy staging --dry-run", { stdout: stream, stderr: stream });

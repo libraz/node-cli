@@ -92,7 +92,7 @@ const serveOptions: Equal<
     since?: Date;
     dates?: readonly Date[];
     cache: boolean;
-    "no-color": boolean;
+    noColor: boolean;
     name?: string;
   }
 > = true;
@@ -102,7 +102,7 @@ serve.action((ctx) => {
   const verbose: boolean = ctx.options.verbose;
   const retries: number = ctx.options.retries;
   const env: string = ctx.options.env;
-  const noColor: boolean = ctx.options["no-color"];
+  const noColor: boolean = ctx.options.noColor;
   // @ts-expect-error an undeclared option is a type error
   void ctx.options.typo;
   // @ts-expect-error --no-color does not create a "color" key
@@ -137,6 +137,112 @@ cli.command("pick-many").option("--modes <m>", {
   choices: ["fast", "safe"],
   default: ["fast"],
 });
+
+// Keys are the camelCase form of the first long name, for options and arguments.
+const keyed = cli
+  .command("copy <source-file> [target-dir] [...extra-files]")
+  .option("--dry-run")
+  .option("--colour, --color <name>")
+  .option("--ipv6-only")
+  .option("--x-1 <v>")
+  .option("--no-cache")
+  .option("--cache <c>");
+const keyedOptions: Equal<
+  OptionsOf<typeof keyed>,
+  {
+    dryRun: boolean;
+    colour?: string;
+    ipv6Only: boolean;
+    x1?: string;
+    noCache: boolean;
+    cache?: string;
+  }
+> = true;
+const keyedArgs: Equal<
+  ArgsOf<typeof keyed>,
+  { sourceFile: string; targetDir: string | undefined; extraFiles: readonly string[] }
+> = true;
+void [keyedOptions, keyedArgs];
+keyed.action((ctx) => {
+  const { dryRun, colour } = ctx.options;
+  // @ts-expect-error the kebab spelling is not a key
+  void ctx.options["dry-run"];
+  // @ts-expect-error a later long name is an alias, not the key
+  void ctx.options.color;
+  // @ts-expect-error the kebab argument spelling is not a key
+  void ctx.args["source-file"];
+  void [dryRun, colour];
+});
+
+// choices are typed by the option's value type.
+const typedChoices = cli
+  .command("choices")
+  .option("--level <n>", { type: "number", choices: [1, 2, 3] })
+  .option("--ids <n>", { type: "number[]", choices: [1, 2] })
+  .option("--env <e>", { type: "string", choices: ["dev", "prod"] })
+  .option("--names <n>", { type: "string[]", choices: ["a", "b"] });
+const typedChoicesOptions: Equal<
+  OptionsOf<typeof typedChoices>,
+  {
+    level?: 1 | 2 | 3;
+    ids?: readonly (1 | 2)[];
+    env?: "dev" | "prod";
+    names?: readonly ("a" | "b")[];
+  }
+> = true;
+void typedChoicesOptions;
+// @ts-expect-error a string choice on a number option
+cli.command("c1").option("--n <n>", { type: "number", choices: ["1", "2"] });
+// @ts-expect-error a number choice on a string option
+cli.command("c2").option("--s <s>", { choices: [1, 2] });
+// @ts-expect-error a number choice on a string[] option
+cli.command("c3").option("--s <s>", { type: "string[]", choices: [1] });
+// @ts-expect-error choices on a boolean option
+cli.command("c4").option("--flag", { choices: ["a"] });
+// @ts-expect-error choices on an explicit boolean option
+cli.command("c5").option("--flag <v>", { type: "boolean", choices: ["a"] });
+// @ts-expect-error choices combined with parse
+cli.command("c6").option("--d <d>", { choices: ["a"], parse: (value) => value });
+// @ts-expect-error empty choices
+cli.command("c7").option("--e <e>", { choices: [] });
+
+// default is typed as the option's value.
+cli.command("d1").option("--port <n>", { type: "number", default: 8080 });
+// @ts-expect-error a string default on a number option
+cli.command("d2").option("--port <n>", { type: "number", default: "8080" });
+cli
+  .command("d3")
+  .option("--since <d>", { parse: (value) => new Date(value), default: new Date(0) });
+cli.command("d4").option("--since <d>", {
+  parse: (value) => new Date(value),
+  // @ts-expect-error a default is not parsed, so it must already be the parsed type
+  default: "2020-01-01",
+});
+// @ts-expect-error a number default on a string option
+cli.command("d5").option("--name <n>", { default: 1 });
+// @ts-expect-error a string default on a flag
+cli.command("d6").option("--flag", { default: "yes" });
+cli.command("d7").option("--tags <t>", { type: "string[]", default: ["a"] });
+// @ts-expect-error a scalar default on an array option
+cli.command("d8").option("--tags <t>", { type: "string[]", default: "a" });
+// @ts-expect-error required with a default
+cli.command("d9").option("--port <n>", { type: "number", required: true, default: 1 });
+// @ts-expect-error a <number> placeholder needs type number
+cli.command("p1").option("--port <number>", { type: "string" });
+// @ts-expect-error a <number> placeholder needs a type
+cli.command("p2").option("--port <number>", { description: "port" });
+cli.command("p3").option("--port <number>", { type: "number" });
+cli.command("p4").option("--ids <number>", { type: "number[]" });
+// @ts-expect-error a <boolean> placeholder needs type boolean
+cli.command("p5").option("--retry <boolean>", { type: "string" });
+
+// Redefining an option replaces its type instead of intersecting it.
+const redefined = cli
+  .command("redefine")
+  .option("--level <l>", { type: "number" })
+  .option("--level <l>", { choices: ["low", "high"], default: "low" });
+const redefinedOptions: Equal<OptionsOf<typeof redefined>, { level: "low" | "high" }> = true;
+void redefinedOptions;
 
 // A non-literal definition or flags string falls back to untyped records.
 declare const definition: string;

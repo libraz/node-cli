@@ -4,7 +4,7 @@ import { CommandRegistry } from "../src/command/registry.js";
 import { resolveOptions } from "../src/option/resolver.js";
 import type { CommandContext } from "../src/types.js";
 
-const dummyCtx = {} as CommandContext;
+const dummyCtx = { signal: new AbortController().signal } as CommandContext;
 
 describe("option definition invariants", () => {
   it("rejects collisions across canonical names and aliases", () => {
@@ -19,8 +19,10 @@ describe("option definition invariants", () => {
     const command = CommandBuilder.create(new CommandRegistry(), "run");
     expect(() => command.option("-port, --listen <n>")).toThrow(/exactly one character/);
     expect(() => command.option("--listen <n>", { alias: "port" })).toThrow(
-      /exactly one character/,
+      'Option "--listen" alias "port" must be one character ("p" or "-p"); write a long alias in the flags string, as in "--listen, --other"',
     );
+    // The alias is quoted as written, without a dash put back in front of it.
+    expect(() => command.option("--listen <n>", { alias: "--prt" })).toThrow(/alias "--prt"/);
   });
 });
 

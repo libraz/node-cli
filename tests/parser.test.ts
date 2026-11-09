@@ -165,10 +165,10 @@ describe("parseOptionFlags", () => {
     });
   });
 
-  it("keeps an additional long flag as an alias", () => {
+  it("keeps the first long flag as the name and later ones as aliases", () => {
     expect(parseOptionFlags("--verbose, --loud")).toMatchObject({
-      long: "loud",
-      longAliases: ["verbose"],
+      long: "verbose",
+      longAliases: ["loud"],
     });
   });
 });
@@ -259,13 +259,13 @@ describe("parse", () => {
 
   it("stores reserved property names without changing record prototypes", () => {
     const registry = new CommandRegistry();
-    CommandBuilder.create(registry, "set <__proto__>")
+    CommandBuilder.create(registry, "set <constructor>")
       .option("--constructor <value>", { required: true })
       .action(() => {});
     const result = parse("set safe --constructor value", registry);
     expect(Object.getPrototypeOf(result.args)).toBeNull();
     expect(Object.getPrototypeOf(result.options)).toBeNull();
-    expect(Reflect.get(result.args, "__proto__")).toBe("safe");
+    expect(result.args.constructor).toBe("safe");
     expect(result.options.constructor).toBe("value");
   });
 
@@ -341,8 +341,8 @@ describe("parse", () => {
 
     it("treats a long alias spelled --no-... as a declared name", () => {
       const reg = negRegistry();
-      expect(parse("paint --no-colour", reg).options).toEqual({ "no-color": true });
-      expect(parse("paint --no-color", reg).options).toEqual({ "no-color": true });
+      expect(parse("paint --no-colour", reg).options).toEqual({ noColour: true });
+      expect(parse("paint --no-color", reg).options).toEqual({ noColour: true });
     });
 
     it("reports an unknown --no-x=value as an unknown option", () => {
@@ -425,6 +425,27 @@ describe("parse", () => {
     expect(() => parse("run -port", registry)).toThrow(InvalidOptionError);
     expect(parse("run -p=80", registry).options.port).toBe("80");
   });
+
+  it("names the flag a cluster's =value attaches to, bound or not", () => {
+    const registry = new CommandRegistry();
+    CommandBuilder.create(registry, "run")
+      .option("-v, --verbose", { type: "boolean" })
+      .option("-q, --quiet", { type: "boolean" })
+      .option("-x, --extra", { type: "boolean" })
+      .action(() => {});
+    const optionNameOf = (line: string) => {
+      try {
+        parse(line, registry);
+      } catch (error) {
+        return (error as InvalidOptionError).optionName;
+      }
+      return "no error";
+    };
+    expect(optionNameOf("run -vq=1")).toBe("quiet");
+    expect(optionNameOf("run -vqx=1")).toBe("extra");
+    // An unbound -h has no definition; the flag itself names it.
+    expect(optionNameOf("run -vh=1")).toBe("h");
+  });
 });
 
 describe("one resolution shared by parsing, help and completion", () => {
@@ -434,18 +455,19 @@ describe("one resolution shared by parsing, help and completion", () => {
       .option("--verbose, --loud", { type: "boolean" })
       .action(() => {});
 
-    // The last long flag is the canonical name; the earlier one is its alias and
+    // The first long flag is the canonical name; the later one is its alias and
     // must resolve to the same option rather than being rejected as unknown.
-    expect(parse("run --loud", registry).options.loud).toBe(true);
-    expect(parse("run --verbose", registry).options.loud).toBe(true);
+    expect(parse("run --verbose", registry).options.verbose).toBe(true);
+    expect(parse("run --loud", registry).options.verbose).toBe(true);
 
-    // Both surfaces spell that alias the way the parser accepts it.
+    // Both surfaces spell that alias the way the parser accepts it, and help
+    // lists the names in the order the flags string declares them.
     const help = new HelpGenerator(registry, { name: "t" }).generateCommand(["run"]);
-    expect(help).toContain("--verbose");
-    expect(help).not.toMatch(/(^|\s)-verbose\b/);
+    expect(help).toContain("--verbose, --loud");
+    expect(help).not.toMatch(/(^|\s)-loud\b/);
     const [candidates] = new ShellCompleter(registry).complete("run --") as [string[], string];
-    expect(candidates).toContain("--verbose");
-    expect(candidates).not.toContain("-verbose");
+    expect(candidates).toContain("--loud");
+    expect(candidates).not.toContain("-loud");
   });
 
   it("stops advertising built-in help once a command binds the flag itself", () => {

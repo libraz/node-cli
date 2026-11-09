@@ -15,6 +15,24 @@ export function stripOptionPrefix(flag: string): string {
 }
 
 /**
+ * The one rule option names (long, short and long aliases) and positional
+ * argument names follow: ASCII letters and digits in parts joined by single dashes.
+ */
+export const NAME_PATTERN = /^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$/;
+
+/**
+ * Converts an option or argument name to its `ctx.options` / `ctx.args` key:
+ * split at `-`, keep the first part, and capitalize the first letter of each
+ * later part (`dry-run` → `dryRun`, `x-1` → `x1`, `Foo` → `Foo`).
+ *
+ * @param name - A name matching {@link NAME_PATTERN}.
+ * @returns The camelCase key.
+ */
+export function toCamelKey(name: string): string {
+  return name.replace(/-([A-Za-z0-9])/g, (_, ch: string) => ch.toUpperCase());
+}
+
+/**
  * Formats an option alias the way the parser accepts it: one dash for a
  * single-character alias, two for a longer one.
  *
@@ -348,17 +366,17 @@ export function parseDefinitionString(definition: string): {
     );
   }
 
-  const argumentNames = new Set<string>();
+  const argumentKeys = new Set<string>();
   let seenOptional = false;
   for (const arg of argDefs) {
-    if (argumentNames.has(arg.name)) {
+    if (argumentKeys.has(toCamelKey(arg.name))) {
       throw usageError(
         "state",
         "ERR_INVALID_DEFINITION",
         `Invalid command definition: duplicate argument name "${arg.name}" in "${definition}"`,
       );
     }
-    argumentNames.add(arg.name);
+    argumentKeys.add(toCamelKey(arg.name));
     if (!arg.required) seenOptional = true;
     if (arg.required && seenOptional) {
       throw usageError(
@@ -409,6 +427,13 @@ function parseArgToken(token: string): ArgDef {
       `Invalid command definition: empty argument name in "${token}"`,
     );
   }
+  if (!NAME_PATTERN.test(name)) {
+    throw usageError(
+      "state",
+      "ERR_INVALID_DEFINITION",
+      `Invalid command definition: argument name "${name}" must be letters and digits joined by single dashes`,
+    );
+  }
 
   return { name, required, variadic };
 }
@@ -416,7 +441,9 @@ function parseArgToken(token: string): ArgDef {
 /**
  * Parses an option flags string into its long name, short aliases, and whether it accepts a value.
  *
- * Supports formats like `"-p, --port <number>"` or `"--verbose"`.
+ * Supports formats like `"-p, --port <number>"` or `"--verbose"`. The first
+ * long flag is the canonical name and later ones are long aliases; without a
+ * long flag the first short flag is the canonical name.
  *
  * @param flags - A comma-separated string of option flags.
  * @returns An object with the long option name, an array of short aliases, and a boolean indicating whether the option takes a value.
@@ -459,8 +486,8 @@ export function parseOptionFlags(flags: string): {
 
     if (part.startsWith("--")) {
       const name = part.slice(2);
-      if (long) longAliases.push(long);
-      long = name;
+      if (long) longAliases.push(name);
+      else long = name;
     } else if (part.startsWith("-")) {
       aliases.push(part.slice(1));
     }
@@ -626,7 +653,7 @@ function scanTokens(
           value: token.slice(negatedEqIndex + 1),
         });
       }
-      options[def.long] = false;
+      options[toCamelKey(def.long)] = false;
       i++;
       continue;
     }
@@ -639,7 +666,7 @@ function scanTokens(
         if (!def) {
           throw new UnknownOptionError(`--${typed}`, { usage });
         }
-        appendOption(options, def.long, token.slice(eqIndex + 1), def);
+        appendOption(options, toCamelKey(def.long), token.slice(eqIndex + 1), def);
         i++;
         continue;
       }
@@ -658,12 +685,12 @@ function scanTokens(
       const isBool = def.schema.type === "boolean";
 
       if (isBool) {
-        options[name] = true;
+        options[toCamelKey(name)] = true;
         i++;
       } else {
         const nextToken = tokens[i + 1];
         if (nextToken !== undefined && !looksLikeOption(nextToken, def)) {
-          appendOption(options, name, nextToken, def);
+          appendOption(options, toCamelKey(name), nextToken, def);
           i += 2;
         } else {
           throw new InvalidOptionError(
@@ -698,7 +725,7 @@ function scanTokens(
         if (!def) {
           throw new UnknownOptionError(`-${alias}`, { usage });
         }
-        appendOption(options, def.long, token.slice(eqIndex + 1), def);
+        appendOption(options, toCamelKey(def.long), token.slice(eqIndex + 1), def);
         i++;
         continue;
       }
@@ -719,12 +746,12 @@ function scanTokens(
         const isBool = def.schema.type === "boolean";
 
         if (isBool) {
-          options[name] = true;
+          options[toCamelKey(name)] = true;
           i++;
         } else {
           const nextToken = tokens[i + 1];
           if (nextToken !== undefined && !looksLikeOption(nextToken, def)) {
-            appendOption(options, name, nextToken, def);
+            appendOption(options, toCamelKey(name), nextToken, def);
             i += 2;
           } else {
             throw new InvalidOptionError(
@@ -748,11 +775,14 @@ function scanTokens(
               { optionName: name, usage },
             );
           }
-          options[name] = true;
+          options[toCamelKey(name)] = true;
         }
         if (eqIndex !== -1) {
+          // The value attaches to the last flag of the cluster; an unbound `h`
+          // has no definition, so the flag itself names it.
+          const last = chars[chars.length - 1];
           throw new InvalidOptionError(`Option -${chars} does not accept a value`, {
-            optionName: resolveOptionName(chars[chars.length - 1], optionDefs, aliasMap)?.long,
+            optionName: resolveOptionName(last, optionDefs, aliasMap)?.long ?? last,
             usage,
             value: token.slice(eqIndex + 1),
           });
@@ -812,7 +842,7 @@ function looksLikeOption(token: string, currentDef: { schema: { type?: string } 
  * For all other types the value is set directly.
  *
  * @param options - The mutable options record to update.
- * @param name - The option name (long form).
+ * @param name - The option's key in the record.
  * @param value - The string value to append or set.
  * @param def - Optional option definition used to determine the expected type.
  */
@@ -843,7 +873,7 @@ function appendOption(
  *
  * @param positional - The ordered array of positional argument strings.
  * @param argDefs - The argument definitions declared by the command.
- * @returns A record mapping argument names to their parsed values.
+ * @returns A record mapping argument keys to their parsed values.
  */
 function mapPositionalArgs(
   positional: string[],
@@ -854,16 +884,17 @@ function mapPositionalArgs(
   for (let i = 0; i < argDefs.length; i++) {
     const def = argDefs[i];
 
+    const key = toCamelKey(def.name);
     if (def.variadic) {
-      args[def.name] = positional.slice(i);
+      args[key] = positional.slice(i);
       return { args, extraArgs: [] };
     }
 
     if (i < positional.length) {
-      args[def.name] = positional[i];
+      args[key] = positional[i];
     } else if (def.required) {
       // Will be caught by validation in router
-      args[def.name] = undefined;
+      args[key] = undefined;
     }
   }
 

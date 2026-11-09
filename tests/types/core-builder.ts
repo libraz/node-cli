@@ -38,7 +38,7 @@ builder.option("--older <o>", { completer: (current: string) => [current] });
 const levels = ["debug", "info"] as const;
 const aliases = ["d", "dep"] as const;
 builder.option("--level <l>", { choices: levels });
-builder.option("-q, --quiet", { alias: ["silent"] as const });
+builder.option("-q, --quiet", { alias: ["s"] as const });
 builder.alias(...aliases);
 const schema: OptionSchema = { choices: levels, alias: aliases, completer: regions };
 void schema;
@@ -66,7 +66,12 @@ const removed: boolean = child.remove();
 void chained;
 void removed;
 
-// The completion context is readonly; args and options stay untyped records.
+// A command completer may also be a static list.
+builder.completer(["production", "staging"]).completer(regions);
+// @ts-expect-error a static list holds strings
+builder.completer([1, 2]);
+
+// The completion context is readonly; args and options are records of raw values.
 declare const ctx: CompletionContext;
 // @ts-expect-error current is readonly
 ctx.current = "x";
@@ -74,7 +79,14 @@ ctx.current = "x";
 ctx.iteration = 2;
 // @ts-expect-error commandPath is a readonly array
 ctx.commandPath.push("x");
-const arg: unknown = ctx.args.anything;
-const option: unknown = ctx.options.anything;
+// @ts-expect-error args is readonly
+ctx.args.anything = "x";
+// @ts-expect-error options is readonly
+ctx.options.anything = true;
+const arg: string | readonly string[] = ctx.args.anything;
+const option: string | boolean | readonly string[] = ctx.options.anything;
+// @ts-expect-error an option value is not a number before coercion
+const coerced: number = ctx.options.anything;
 void arg;
 void option;
+void coerced;

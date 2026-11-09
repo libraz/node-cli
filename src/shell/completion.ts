@@ -229,11 +229,15 @@ export class ShellCompleter {
       }
     }
 
-    // Custom command completer
-    if (command.completer) {
+    // Custom command completer: a static list or a provider, filtered alike.
+    const commandCompleter = command.completer;
+    if (commandCompleter) {
+      if (typeof commandCompleter !== "function") {
+        return [formatCompletionCandidates(commandCompleter, current), rawCurrent];
+      }
       const controller = new AbortController();
       const ctx = this.commandContext(command, tokens, segment, line, current, controller.signal);
-      return this.runCompleter(command.completer, ctx, controller, rawCurrent, (candidates) =>
+      return this.runCompleter(commandCompleter, ctx, controller, rawCurrent, (candidates) =>
         formatCompletionCandidates(candidates, current),
       );
     }
@@ -264,12 +268,15 @@ export class ShellCompleter {
     current: string,
     signal: AbortSignal,
   ): CompletionContext {
-    let args: Record<string, unknown> = {};
-    let options: Record<string, unknown> = {};
+    let args: CompletionContext["args"] = {};
+    let options: CompletionContext["options"] = {};
     try {
       const parsed = parse(tokens, this.registry);
-      args = parsed.args;
-      options = parsed.options;
+      // A required argument not typed yet is parsed as undefined; it is simply absent here.
+      args = Object.fromEntries(
+        Object.entries(parsed.args).filter(([, value]) => value !== undefined),
+      ) as CompletionContext["args"];
+      options = parsed.options as CompletionContext["options"];
     } catch {
       // Ignore parse failures during completion (partial/invalid input).
     }

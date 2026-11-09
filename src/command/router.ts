@@ -1,13 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { PassThrough, type Readable, type Writable } from "node:stream";
 import {
+  CLIError,
   CommandNotFoundError,
   ExtraArgumentError,
+  formatErrorMessage,
   isAbortError,
   isCancellationError,
   MissingArgumentError,
   ParseError,
   toError,
+  ValidationError,
   writeDiagnostic,
 } from "../errors.js";
 import { formatUsage, type HelpGenerator } from "../help/generator.js";
@@ -23,7 +26,7 @@ import type {
   FallbackHandler,
   MutableCommandContext,
 } from "../types.js";
-import { parse, splitPipes, tokenize } from "./parser.js";
+import { parse, splitPipes, toCamelKey, tokenize } from "./parser.js";
 import { type CommandRegistry, visibleSubcommands } from "./registry.js";
 
 /**
@@ -650,7 +653,7 @@ export class CommandRouter {
     try {
       // Validate required arguments
       for (const argDef of command.argDefs) {
-        const provided = result.args[argDef.name];
+        const provided = result.args[toCamelKey(argDef.name)];
         const missing = argDef.variadic
           ? !Array.isArray(provided) || provided.length === 0
           : provided === undefined;
@@ -674,9 +677,15 @@ export class CommandRouter {
       const options = resolveOptions(result.options, command.options, ctx, { usage });
       ctx.options = options instanceof Promise ? await options : options;
 
-      // Run command-level validation
+      // Run command-level validation. Its failures take the shape an option
+      // validator's do: a CLIError and a cancellation pass through unchanged.
       if (command.validate) {
-        await command.validate(ctx);
+        try {
+          await command.validate(ctx);
+        } catch (cause) {
+          if (cause instanceof CLIError || isCancellationError(cause, ctx.signal)) throw cause;
+          throw new ValidationError(formatErrorMessage(cause), { usage, cause });
+        }
       }
 
       // Emit beforeExecute

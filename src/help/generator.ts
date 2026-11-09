@@ -278,15 +278,18 @@ function formatOptionEntries(
   return options.map((opt) => {
     const parts: string[] = [];
 
-    // Aliases
-    if (opt.aliases.length > 0) {
-      parts.push(`${opt.aliases.map(formatOptionFlag).join(", ")},`);
+    // Short aliases first, then the long names in the order the flags string
+    // declared them: the canonical name before its long aliases.
+    const shortAliases = opt.aliases.filter((alias) => alias.length === 1);
+    const longAliases = opt.aliases.filter((alias) => alias.length > 1);
+    if (shortAliases.length > 0) {
+      parts.push(`${shortAliases.map(formatOptionFlag).join(", ")},`);
     } else {
       parts.push("   ");
     }
 
-    // Long name
-    let longPart = `--${opt.long}`;
+    // Long names
+    let longPart = [opt.long, ...longAliases].map((name) => `--${name}`).join(", ");
     if (opt.takesValue) {
       longPart += ` <${opt.valueName ?? opt.long}>`;
     }

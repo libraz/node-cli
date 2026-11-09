@@ -1,4 +1,13 @@
-import { InvalidOptionError, MissingOptionError, ValidationError } from "../errors.js";
+import { toCamelKey } from "../command/parser.js";
+import {
+  CLIError,
+  formatErrorMessage,
+  InvalidOptionError,
+  isCancellationError,
+  MissingOptionError,
+  quoteValue,
+  ValidationError,
+} from "../errors.js";
 import type { MutableCommandContext, OptionDef } from "../types.js";
 
 /**
@@ -11,15 +20,17 @@ import type { MutableCommandContext, OptionDef } from "../types.js";
  * returned synchronously. Unknown options (not present in `defs`) are passed
  * through unchanged.
  *
- * @param raw - The raw key/value pairs obtained from the argument parser.
+ * @param raw - The raw values obtained from the argument parser, keyed by camelCase option key.
  * @param defs - A map of canonical option names to their definitions.
  * @param ctx - The current command execution context.
  * @param options.usage - Usage line of the command, carried by every error raised.
- * @returns The fully resolved option values keyed by their long names, or a
- *   promise of them once a custom callback returned a Promise.
+ * @returns The fully resolved option values keyed by their camelCase keys, or
+ *   a promise of them once a custom callback returned a Promise.
  * @throws {MissingOptionError} If a required option is not provided.
  * @throws {InvalidOptionError} If a value fails type coercion or choice validation.
- * @throws {ValidationError} If a custom `parse` or `validate` function rejects the value.
+ * @throws {ValidationError} If a custom `parse` or `validate` function rejects
+ *   the value with anything but a `CLIError` or a cancellation of `ctx.signal`,
+ *   which propagate unchanged.
  */
 export function resolveOptions(
   raw: Record<string, unknown>,
@@ -61,23 +72,31 @@ function runInOrder<T>(
   return result;
 }
 
-/** Wraps a custom `parse` or `validate` failure in a {@link ValidationError}. */
-function validationFailure(long: string, err: unknown, usage: string | undefined): ValidationError {
-  const message = err instanceof Error ? err.message : String(err);
-  return new ValidationError(`Invalid value for --${long}: ${message}`, {
-    optionName: long,
-    usage,
-    cause: err,
-  });
+/**
+ * Maps a custom `parse` or `validate` failure: a `CLIError` and a cancellation
+ * of the command's signal propagate unchanged, anything else becomes a
+ * {@link ValidationError} carrying the rejected value.
+ */
+function validationFailure(
+  long: string,
+  value: unknown,
+  err: unknown,
+  ctx: MutableCommandContext,
+  usage: string | undefined,
+): unknown {
+  if (err instanceof CLIError || isCancellationError(err, ctx.signal)) return err;
+  return new ValidationError(
+    `Invalid value ${quoteValue(value)} for --${long}: ${formatErrorMessage(err)}`,
+    { optionName: long, value, usage, cause: err },
+  );
 }
 
 /**
- * Calls a custom callback, turning a throw or a rejection into a
- * {@link ValidationError} and handing the (possibly awaited) result to `then`.
+ * Calls a custom callback, mapping a throw or a rejection through
+ * {@link validationFailure} and handing the (possibly awaited) result to `then`.
  */
 function guardCustom<T>(
-  long: string,
-  usage: string | undefined,
+  fail: (err: unknown) => unknown,
   call: () => T | Promise<T>,
   then: (value: T) => void,
 ): void | Promise<void> {
@@ -85,14 +104,14 @@ function guardCustom<T>(
   try {
     result = call();
   } catch (err) {
-    throw validationFailure(long, err, usage);
+    throw fail(err);
   }
   if (!(result instanceof Promise)) {
     then(result);
     return;
   }
   return result.then(then, (err: unknown) => {
-    throw validationFailure(long, err, usage);
+    throw fail(err);
   });
 }
 
@@ -105,7 +124,8 @@ function resolveValue(
   usage: string | undefined,
 ): void | Promise<void> {
   const { long, schema } = def;
-  const rawValue = raw[long];
+  const key = toCamelKey(long);
+  const rawValue = raw[key];
   // Presence is tracked from the raw (pre-parse) value so it is decoupled from
   // the resolved value: a flag the user explicitly passed whose custom `parse`
   // returns `undefined` is still present. Default application and the required
@@ -117,24 +137,37 @@ function resolveValue(
   // value is `undefined` — so an explicit parse-to-undefined is preserved
   // rather than being dropped and re-triggering defaults downstream.
   const store = (value: unknown) => {
-    if (present || value !== undefined) resolved[long] = value;
-    else delete resolved[long];
+    if (present || value !== undefined) resolved[key] = value;
+    else delete resolved[key];
   };
 
   if (present && schema.parse) {
     // A custom parser is the user's escape hatch: it receives the raw
-    // string(s) and fully owns coercion. Built-in coercion is skipped.
+    // string(s) and fully owns coercion. Built-in coercion is skipped. Each
+    // element is guarded on its own so a failure reports the string it got.
     const parse = schema.parse;
-    return guardCustom(
-      long,
-      usage,
-      () => {
-        if (!Array.isArray(rawValue)) return parse(String(rawValue), ctx);
-        const parsed = rawValue.map((element) => parse(String(element), ctx));
-        return parsed.some((element) => element instanceof Promise) ? Promise.all(parsed) : parsed;
-      },
-      store,
-    );
+    const parseOne = (element: unknown): unknown => {
+      const text = String(element);
+      const fail = (err: unknown) => validationFailure(long, text, err, ctx, usage);
+      let result: unknown;
+      try {
+        result = parse(text, ctx);
+      } catch (err) {
+        throw fail(err);
+      }
+      return result instanceof Promise
+        ? result.catch((err: unknown) => {
+            throw fail(err);
+          })
+        : result;
+    };
+    const parsed = Array.isArray(rawValue) ? rawValue.map(parseOne) : parseOne(rawValue);
+    if (Array.isArray(parsed) && parsed.some((element) => element instanceof Promise)) {
+      return Promise.all(parsed).then(store);
+    }
+    if (parsed instanceof Promise) return parsed.then(store);
+    store(parsed);
+    return;
   }
 
   if (present) {
@@ -147,9 +180,12 @@ function resolveValue(
     // matches (e.g. a string default on a `number` option becomes a number).
     // The builder coerces a declared default too, but only to reject a bad one
     // at definition time; this call is what makes resolveOptions correct for a
-    // definition it did not build. Custom `parse` is not re-applied: a default
-    // is an already-resolved value, not raw input.
-    store(coerceOptionValue(schema.default, schema.type, long, usage));
+    // definition it did not build. Neither `parse` nor the coercion standing
+    // in for it applies to the default of a `parse` option: that default is
+    // already a parsed value.
+    store(
+      schema.parse ? schema.default : coerceOptionValue(schema.default, schema.type, long, usage),
+    );
   } else {
     store(undefined);
   }
@@ -163,21 +199,19 @@ function checkValue(
   usage: string | undefined,
 ): void | Promise<void> {
   const { long, schema } = def;
-  if (!Object.hasOwn(resolved, long)) return;
-  const value = resolved[long];
+  const key = toCamelKey(long);
+  if (!Object.hasOwn(resolved, key)) return;
+  const value = resolved[key];
 
-  // Choices check (compare leniently so declared string choices match
-  // coerced numeric values and vice versa). For array-typed options each
-  // element is validated individually rather than the joined array.
+  // Choices are compared with `===` after coercion, so they are of the
+  // value's type. For array-typed options each element is checked on its own.
   if (schema.choices) {
     const allowed = schema.choices;
-    const allowedStrings = allowed.map(String);
-    const isAllowed = (v: unknown) => allowed.includes(v) || allowedStrings.includes(String(v));
     const candidates = Array.isArray(value) ? value : [value];
     for (const candidate of candidates) {
-      if (!isAllowed(candidate)) {
+      if (!allowed.includes(candidate)) {
         throw new InvalidOptionError(
-          `Invalid value "${candidate}" for --${long}. Allowed: ${allowed.join(", ")}`,
+          `Invalid value ${quoteValue(candidate)} for --${long}. Allowed: ${allowed.join(", ")}`,
           { optionName: long, value: candidate, usage },
         );
       }
@@ -187,8 +221,7 @@ function checkValue(
   const validate = schema.validate;
   if (validate) {
     return guardCustom(
-      long,
-      usage,
+      (err) => validationFailure(long, value, err, ctx, usage),
       () => validate(value, ctx),
       () => {},
     );

@@ -20,45 +20,74 @@ export interface ArgDef {
 
 /**
  * Schema that describes the constraints and behavior of a command option.
+ *
+ * Passed inline to `CommandBuilder.option()`, every member is checked against
+ * the flags and typed from the option's value type. A schema shared between
+ * commands keeps that typing only when written with `satisfies OptionSchema`;
+ * annotating it as `OptionSchema` widens the option's value to `unknown`.
+ *
+ * @example
+ * ```ts
+ * const port = { type: "number", default: 8080 } satisfies OptionSchema;
+ * cli.command("serve").option("-p, --port <n>", port);
+ * ```
  */
 export interface OptionSchema {
-  /** Human-readable description of the option. */
-  description?: string;
-  /** The expected value type of the option. */
-  type?: "string" | "number" | "boolean" | "string[]" | "number[]";
-  /** Short alias or list of aliases for the option (e.g. "-v"). */
-  alias?: string | readonly string[];
-  /** Whether the option must be provided. */
-  required?: boolean;
+  /** Human-readable description of the option. Defaults to none. */
+  description?: string | undefined;
   /**
-   * Default value used when the option is not specified. It is run through the
-   * same built-in type coercion as an explicit value (so a string `"8080"` on a
-   * `type: "number"` option resolves to the number `8080`), but a custom `parse`
-   * is not applied to it — a default is treated as an already-resolved value, not
-   * raw input. A default already in the option's final type is left unchanged.
+   * The expected value type of the option. Defaults to `"string"` when the
+   * flags carry a value placeholder and `"boolean"` when they do not.
+   */
+  type?: "string" | "number" | "boolean" | "string[]" | "number[]" | undefined;
+  /**
+   * Extra one-character short names (`"p"` or `"-p"`). A long alias is written
+   * in the flags string instead (`"--colour, --color"`). Defaults to none.
+   */
+  alias?: string | readonly string[] | undefined;
+  /** Whether the option must be provided. Cannot be combined with `default`. Defaults to false. */
+  required?: boolean | undefined;
+  /**
+   * Value used when the option is not specified, typed as the option's value.
+   * A custom `parse` is not applied to it: a default is an already-resolved
+   * value, not raw input. Without `parse` it still goes through the built-in
+   * coercion of `type`, so an untyped JavaScript caller's `"8080"` on a number
+   * option becomes `8080`. Defaults to `false` for a boolean option and to
+   * none otherwise.
    */
   default?: unknown;
-  /** Restricts the option value to one of the given choices. */
-  choices?: readonly unknown[];
   /**
-   * Custom parser that converts the raw string value into the desired type. A
-   * returned Promise is awaited before the action runs; a throw or rejection
-   * becomes a `ValidationError`.
+   * Restricts the option value to one of the given choices, typed as the
+   * option's value (per element for an array type). The input is converted
+   * first and then compared with `===`. Cannot be empty, and cannot be combined
+   * with `parse` or with a boolean option. Defaults to none.
    */
-  parse?: (value: string, ctx: CommandContext) => unknown;
+  choices?: readonly unknown[] | undefined;
   /**
-   * Custom validator that throws (or rejects) on invalid values. It is awaited
-   * before the action runs; a failure becomes a `ValidationError`.
+   * Custom parser that converts the raw string value into the option's value;
+   * built-in coercion is skipped. Other options may still be unresolved, so
+   * `ctx.options` is partial. A returned Promise is awaited before the action
+   * runs. A thrown `CLIError` propagates unchanged, a cancellation of
+   * `ctx.signal` stays a cancellation, and any other throw or rejection becomes
+   * a `ValidationError` whose `value` is the raw string. Defaults to none.
    */
-  validate?: (value: unknown, ctx: CommandContext) => void | Promise<void>;
-  /** If true, the option is hidden from help output. */
-  hidden?: boolean;
+  parse?: ((value: string, ctx: CommandContext) => unknown) | undefined;
+  /**
+   * Custom validator called with the resolved value once every option is
+   * resolved. It is awaited before the action runs. A thrown `CLIError`
+   * propagates unchanged, a cancellation of `ctx.signal` stays a cancellation,
+   * and any other throw or rejection becomes a `ValidationError`. Defaults to none.
+   */
+  validate?: ((value: unknown, ctx: CommandContext) => void | Promise<void>) | undefined;
+  /** If true, the option is hidden from help output. Defaults to false. */
+  hidden?: boolean | undefined;
   /**
    * Completion candidates for this option's value: a static list, or a
-   * {@link Completer} called with the completion context. Takes precedence over
-   * `choices` for completion.
+   * {@link Completer} called with the completion context. Either is filtered
+   * by the word under the cursor. Takes precedence over `choices` for
+   * completion. Defaults to the `choices`.
    */
-  completer?: readonly string[] | Completer;
+  completer?: readonly string[] | Completer | undefined;
 }
 
 /**
@@ -66,7 +95,7 @@ export interface OptionSchema {
  * aliases, and associated schema.
  */
 export interface OptionDef {
-  /** The long flag name (without the "--" prefix). */
+  /** The canonical name: the first long flag, else the first short one, without dashes. */
   long: string;
   /** All short and long aliases for this option. */
   aliases: string[];
@@ -147,8 +176,8 @@ export interface CommandDefinition {
   description?: string;
   /** Excludes the command from generated help and completion. */
   hidden?: boolean;
-  /** Completion provider for this command. */
-  completer?: Completer;
+  /** Completion candidates for this command: a static list or a provider. */
+  completer?: readonly string[] | Completer;
   /** Reference to the parent command definition, if any. */
   parent?: CommandDefinition;
   /** Alternative names that can be used to invoke this command. */
@@ -168,13 +197,27 @@ type Trim<S extends string> = S extends ` ${infer R}`
     ? Trim<R>
     : S;
 
+/** The camelCase tail of a dash-separated name: every part capitalized. */
+type CamelTail<S extends string> = S extends `${infer Head}-${infer Rest}`
+  ? `${Capitalize<Head>}${CamelTail<Rest>}`
+  : Capitalize<S>;
+
+/**
+ * The `ctx.options` or `ctx.args` key of an option or argument name: split at
+ * `-`, keep the first part, and capitalize the first letter of each later part
+ * (`dry-run` → `dryRun`, `x-1` → `x1`, `Foo` → `Foo`).
+ */
+export type CamelCaseKey<S extends string> = S extends `${infer Head}-${infer Rest}`
+  ? `${Head}${CamelTail<Rest>}`
+  : S;
+
 /** The positional-argument entry one definition-string token contributes. */
 type ArgEntry<T extends string> = T extends `<...${infer N}>` | `[...${infer N}]`
-  ? { [K in N]: readonly string[] }
+  ? { [K in CamelCaseKey<N>]: readonly string[] }
   : T extends `<${infer N}>`
-    ? { [K in N]: string }
+    ? { [K in CamelCaseKey<N>]: string }
     : T extends `[${infer N}]`
-      ? { [K in N]: string | undefined }
+      ? { [K in CamelCaseKey<N>]: string | undefined }
       : Record<never, never>;
 
 /** Accumulates the argument entries of a space-separated definition string. */
@@ -185,8 +228,8 @@ type ParseArgs<D extends string, Acc> = D extends `${infer T} ${infer Rest}`
 /**
  * The `ctx.args` type of a command definition string: each `<x>` is a
  * `string`, `[x]` is `string | undefined`, and `<...x>` or `[...x]` is a
- * `readonly string[]`. Leading path words add nothing. A non-literal string
- * gives an untyped record.
+ * `readonly string[]`, keyed by the camelCase name. Leading path words add
+ * nothing. A non-literal string gives an untyped record.
  */
 export type DefinitionArgs<D extends string> = string extends D
   ? Record<string, unknown>
@@ -195,46 +238,30 @@ export type DefinitionArgs<D extends string> = string extends D
 /** The flag word of one comma-separated flags part, without its placeholder. */
 type FlagWord<P extends string> = Trim<P> extends `${infer W} ${string}` ? W : Trim<P>;
 
-/** Walks the flags parts, keeping the last `--name` and the first short name. */
-type ScanFlags<
-  F extends string,
-  Long extends string,
-  Short extends string,
-> = F extends `${infer Part},${infer Rest}`
-  ? ScanPart<FlagWord<Part>, Rest, Long, Short>
-  : FinishFlags<FlagWord<F>, Long, Short>;
+/** Walks the flags parts, stopping at the first `--name` and keeping the first short name. */
+type ScanFlags<F extends string, Short extends string> = F extends `${infer Part},${infer Rest}`
+  ? ScanPart<FlagWord<Part>, Rest, Short>
+  : ScanPart<FlagWord<F>, "", Short>;
 
 type ScanPart<
   W extends string,
   Rest extends string,
-  Long extends string,
-  Short extends string,
-> = W extends `--${infer L}`
-  ? ScanFlags<Rest, L, Short>
-  : W extends `-${infer S}`
-    ? ScanFlags<Rest, Long, [Short] extends [never] ? S : Short>
-    : ScanFlags<Rest, Long, Short>;
-
-type FinishFlags<
-  W extends string,
-  Long extends string,
   Short extends string,
 > = W extends `--${infer L}`
   ? L
-  : [Long] extends [never]
-    ? W extends `-${infer S}`
-      ? [Short] extends [never]
-        ? S
-        : Short
-      : Short
-    : Long;
+  : W extends `-${infer S}`
+    ? ScanFlags<Rest, [Short] extends [never] ? S : Short>
+    : Rest extends ""
+      ? Short
+      : ScanFlags<Rest, Short>;
 
 /**
- * The `ctx.options` key an option's flags produce: the last `--name`, or the
- * first short name when there is none. A comma inside a placeholder only
- * splits the placeholder, whose pieces never start with a dash.
+ * The `ctx.options` key an option's flags produce: the camelCase form of the
+ * first `--name`, or the first short name when there is none. A comma inside
+ * a placeholder only splits the placeholder, whose pieces never start with a
+ * dash.
  */
-export type OptionKey<F extends string> = ScanFlags<F, never, never>;
+export type OptionKey<F extends string> = CamelCaseKey<ScanFlags<F, never>>;
 
 /** Value types of the built-in `OptionSchema.type` names. */
 interface OptionTypeMap {
@@ -245,27 +272,32 @@ interface OptionTypeMap {
   "number[]": readonly number[];
 }
 
-/** Wraps `V` in a readonly array when the schema declares an array type. */
-type ArrayOf<S, V> = S extends { readonly type: "string[]" | "number[]" } ? readonly V[] : V;
+/** Wraps `V` in a readonly array when `T` is an array type name. */
+type ArrayOf<T, V> = T extends "string[]" | "number[]" ? readonly V[] : V;
+
+/** Whether the flags carry a value placeholder (`<x>` or `[x]`). */
+type HasPlaceholder<F extends string> = F extends
+  | `${string} <${string}>${string}`
+  | `${string} [${string}]${string}`
+  ? true
+  : false;
 
 /**
- * The value type of an option, by precedence: the awaited return of `parse`
+ * The value type of an option with flags `F` whose schema has `type` `T`,
+ * `choices` `C` and a `parse` returning `R` (`never` for an absent member).
+ * By precedence: the elements of `choices`, the awaited return of `parse`
  * (per element for an array type), then `type`, then `string` when the flags
- * carry a placeholder and `boolean` when they do not. `choices` narrows the
- * result to the union of its elements.
+ * carry a placeholder and `boolean` when they do not.
  */
-type OptionValue<F extends string, S> = "choices" extends keyof S
-  ? ArrayOf<S, NonNullable<S["choices" & keyof S]> extends readonly (infer C)[] ? C : unknown>
-  : "parse" extends keyof S
-    ? ArrayOf<
-        S,
-        Awaited<NonNullable<S["parse" & keyof S]> extends (...args: never) => infer R ? R : unknown>
-      >
-    : S extends { readonly type: infer T extends keyof OptionTypeMap }
+export type OptionValue<F extends string, T, C, R> = [C] extends [never]
+  ? [R] extends [never]
+    ? T extends keyof OptionTypeMap
       ? OptionTypeMap[T]
-      : F extends `${string} <${string}>${string}` | `${string} [${string}]${string}`
+      : HasPlaceholder<F> extends true
         ? string
-        : boolean;
+        : boolean
+    : ArrayOf<T, Awaited<R>>
+  : ArrayOf<T, C extends readonly (infer E)[] ? E : unknown>;
 
 /** Whether an option is always present in `ctx.options`. */
 type OptionPresent<S, V> = S extends { readonly required: true }
@@ -278,33 +310,116 @@ type OptionPresent<S, V> = S extends { readonly required: true }
       ? true
       : false;
 
-type OptionEntry<F extends string, S, V = OptionValue<F, S>> =
+type OptionEntry<F extends string, S, V> =
   OptionPresent<S, V> extends true ? { [K in OptionKey<F>]: V } : { [K in OptionKey<F>]?: V };
 
 /**
- * The `ctx.options` type after adding an option. A non-literal flags string
- * widens the options to an untyped record.
+ * The `ctx.options` type after adding an option with flags `F`, schema `S`
+ * and value type `V`. Defining the same key again replaces its entry, as it
+ * replaces the option at run time. A non-literal flags string widens the
+ * options to an untyped record.
  */
-export type AddOption<O extends object, F extends string, S> = string extends F
+export type AddOption<O extends object, F extends string, S, V> = string extends F
   ? O & Record<string, unknown>
-  : O & OptionEntry<F, S>;
+  : (OptionKey<F> extends keyof O ? Omit<O, OptionKey<F>> : O) & OptionEntry<F, S, V>;
 
 /**
- * The schema `.option()` accepts for an inferred schema `S`. It rejects a
- * `default` outside the declared `choices` at compile time, the check
- * `.option()` makes at run time, and keeps callbacks such as `parse`
- * contextually typed.
+ * The widest schema `.option()` infers from. Its callbacks accept any
+ * parameters so a contextually typed callback still satisfies it;
+ * {@link CheckedOptionSchema} gives them their real types.
  */
-export type CheckedOptionSchema<S> = "choices" extends keyof S
-  ? "default" extends keyof S
-    ? OptionSchema & {
-        readonly default?: ArrayOf<
-          S,
-          NonNullable<S["choices" & keyof S]> extends readonly (infer C)[] ? C : unknown
-        >;
-      }
-    : OptionSchema
-  : OptionSchema;
+export type OptionSchemaInput = Omit<OptionSchema, "parse" | "validate"> & {
+  readonly parse?: ((value: string, ctx: never) => unknown) | undefined;
+  readonly validate?: ((value: never, ctx: never) => void | Promise<void>) | undefined;
+};
+
+/** The {@link OptionSchema} members {@link CheckedOptionSchema} takes unchanged. */
+type CheckedSchemaMembers = Pick<
+  OptionSchema,
+  "description" | "alias" | "required" | "hidden" | "completer"
+>;
+
+/** The `type` a typed placeholder (`<number>`, `<boolean>`) requires. */
+type PlaceholderType<F extends string> = F extends
+  | `${string}<number>${string}`
+  | `${string}[number]${string}`
+  ? "number" | "number[]"
+  : F extends `${string}<boolean>${string}` | `${string}[boolean]${string}`
+    ? "boolean"
+    : never;
+
+/**
+ * The type each element of `choices` must have: the option's value type, never
+ * for a boolean, unknown when `T` is not one known type name.
+ */
+type ChoiceElement<F extends string, T> = [T] extends ["number" | "number[]"]
+  ? number
+  : [T] extends ["string" | "string[]"]
+    ? string
+    : [T] extends ["boolean"]
+      ? never
+      : [T] extends [undefined]
+        ? HasPlaceholder<F> extends true
+          ? string
+          : never
+        : unknown;
+
+/**
+ * The rules that depend on the whole inferred schema `S`, for an option with
+ * flags `F` and value type `V`: `default` against `V` and `required`, `choices`
+ * against `parse` and emptiness, and a typed placeholder requiring `type`. They
+ * are a separate conditional so that checking a `default` does not fix the
+ * parameters `parse` is still being inferred into.
+ */
+type SchemaRules<F extends string, S, V> = (S extends { readonly default: infer D }
+  ? S extends { readonly required: true }
+    ? { readonly default: never }
+    : [D] extends [V | undefined]
+      ? unknown
+      : { readonly default: V }
+  : unknown) &
+  (S extends { readonly choices: unknown }
+    ? S extends { readonly parse: unknown } | { readonly choices: readonly [] }
+      ? { readonly choices: never }
+      : unknown
+    : unknown) &
+  ([PlaceholderType<F>] extends [never]
+    ? unknown
+    : S extends { readonly type: unknown }
+      ? unknown
+      : { readonly type: PlaceholderType<F> });
+
+/**
+ * The schema `.option()` accepts for flags `F` and an inferred schema `S`, on
+ * a builder whose arguments and options are `A` and `O`. `T`, `C` and `R` are
+ * inferred from the schema's `type`, `choices` and `parse` return, so the
+ * callbacks are typed before `S` is known. It rejects at compile time what
+ * `.option()` rejects at run time: `choices` of another type than the value,
+ * empty, or combined with `parse` or a boolean; a `default` of another type
+ * than the value; `required` with a `default`; and a typed placeholder without
+ * its type. A schema typed as the wide {@link OptionSchema} passes, with an
+ * `unknown` value. No member is a conditional on the inferred parameters as a
+ * whole: resolving one for a contextual type would fix them before `parse`
+ * has been inferred.
+ */
+export type CheckedOptionSchema<
+  F extends string,
+  S,
+  A extends object,
+  O extends object,
+  T,
+  C,
+  R,
+> = CheckedSchemaMembers & {
+  readonly type?: T & ([PlaceholderType<F>] extends [never] ? unknown : PlaceholderType<F>);
+  readonly default?: unknown;
+  readonly choices?: C & readonly ChoiceElement<F, T>[];
+  readonly parse?: (value: string, ctx: CommandContext<A, Partial<O>>) => R;
+  readonly validate?: (
+    value: NoInfer<OptionValue<F, T, C, R>>,
+    ctx: CommandContext<A, O>,
+  ) => void | Promise<void>;
+} & SchemaRules<F, S, NoInfer<OptionValue<F, T, C, R>>>;
 
 // ── Events ──
 
@@ -378,9 +493,16 @@ export interface CommandContext<
   A extends object = Record<string, unknown>,
   O extends object = Record<string, unknown>,
 > extends CommandStreams {
-  /** Parsed positional arguments keyed by argument name. This is a null-prototype record. */
+  /**
+   * Parsed positional arguments keyed by the camelCase argument name
+   * (`<file-name>` → `fileName`). This is a null-prototype record.
+   */
   readonly args: A;
-  /** Parsed options keyed by option long-name. This is a null-prototype record. */
+  /**
+   * Parsed options keyed by the camelCase form of the first long name
+   * (`--dry-run` → `dryRun`), or the first short name when there is none.
+   * This is a null-prototype record.
+   */
   readonly options: O;
   /** The original raw input string. */
   readonly rawInput: string;
@@ -461,10 +583,18 @@ export interface CompletionContext {
   readonly current: string;
   /** The resolved command path up to the current input. */
   readonly commandPath: readonly string[];
-  /** Positional arguments parsed so far, as raw strings. */
-  readonly args: Record<string, unknown>;
-  /** Raw option values parsed so far; coercion, defaults, and validation are not applied during completion. */
-  readonly options: Record<string, unknown>;
+  /**
+   * Positional arguments typed so far, keyed by their camelCase name: a raw
+   * string, or an array of raw strings for a variadic argument.
+   */
+  readonly args: Readonly<Record<string, string | readonly string[]>>;
+  /**
+   * Option values typed so far, keyed like `ctx.options`, before coercion,
+   * defaults and validation: a raw string for a value option, `true` or
+   * `false` for a flag (or its `--no-` form), and an array of raw strings for
+   * an array option.
+   */
+  readonly options: Readonly<Record<string, string | boolean | readonly string[]>>;
   /** Number of consecutive Tab presses (1-based). Resets on any other input. */
   readonly iteration: number;
   /** Aborted when the completion deadline expires. */
@@ -523,9 +653,9 @@ export interface CLIOptions {
 export interface ParseResult {
   /** The resolved command path (e.g. ["git", "commit"]). */
   commandPath: string[];
-  /** Parsed positional arguments keyed by argument name. */
+  /** Parsed positional arguments keyed by the camelCase argument name. */
   args: Record<string, unknown>;
-  /** Parsed options keyed by option long-name. */
+  /** Raw option values keyed by the camelCase option key. */
   options: Record<string, unknown>;
   /** Positional arguments that were not consumed by the command definition. */
   extraArgs?: string[];
