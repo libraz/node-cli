@@ -49,9 +49,20 @@ try {
 
   await mkdir(consumer);
   run(npm, ["init", "--yes"], { cwd: consumer });
-  run(npm, ["install", `git+${pathToFileURL(repository).href}`, "--no-audit", "--no-fund"], {
-    cwd: consumer,
-  });
+  // npm 12 refuses git dependencies unless allowed explicitly.
+  run(
+    npm,
+    [
+      "install",
+      `git+${pathToFileURL(repository).href}`,
+      "--allow-git=all",
+      "--no-audit",
+      "--no-fund",
+    ],
+    {
+      cwd: consumer,
+    },
+  );
   await writeFile(
     resolve(consumer, "smoke.mjs"),
     'import { createCLI } from "@libraz/node-cli";\nif (typeof createCLI !== "function") throw new Error("createCLI export missing");\n',

@@ -55,6 +55,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      # The npm the publish workflow uses, so its git-install smoke runs here first.
+      - if: matrix.node == 26
+        run: npm install -g npm@12.2.2
       - run: corepack enable
       - run: corepack prepare yarn@4.18.1 --activate
 
