@@ -722,11 +722,15 @@ describe("table colour follows the stream", () => {
   });
 
   it("colours the header when the stream is a TTY", () => {
-    expect(table(rows, { stream: { isTTY: true } as unknown as Writable })).toContain(bold);
+    expect(
+      table(rows, { stream: { isTTY: true, write: () => true } as unknown as Writable }),
+    ).toContain(bold);
   });
 
   it("does not colour when the stream is not a TTY", () => {
-    expect(table(rows, { stream: { isTTY: false } as unknown as Writable })).not.toContain("\x1b[");
+    expect(
+      table(rows, { stream: { isTTY: false, write: () => true } as unknown as Writable }),
+    ).not.toContain("\x1b[");
   });
 
   it("defaults to process.stdout", () => {
@@ -745,7 +749,7 @@ describe("table colour follows the stream", () => {
       border: "single",
       headerStyle: "red.underline",
       borderStyle: "cyan",
-      stream: { isTTY: true } as unknown as Writable,
+      stream: { isTTY: true, write: () => true } as unknown as Writable,
     });
     expect(out).toContain("\x1b[31m\x1b[4m");
     expect(out).toContain("\x1b[36m");
@@ -754,7 +758,7 @@ describe("table colour follows the stream", () => {
   it("leaves the header plain with headerStyle: none", () => {
     const out = table(rows, {
       headerStyle: "none",
-      stream: { isTTY: true } as unknown as Writable,
+      stream: { isTTY: true, write: () => true } as unknown as Writable,
     });
     expect(out).not.toContain("\x1b[");
   });

@@ -59,7 +59,8 @@ interface ColumnSettings {
   align?: "left" | "right" | "center" | undefined;
   /**
    * Fixed width of the column content, padding excluded, as a positive integer.
-   * Padding is added around it. When set, it wins over `maxWidth`.
+   * Padding is added around it. When set, it wins over `maxWidth`. Defaults to
+   * the widest cell of the column, capped by `maxWidth`.
    */
   width?: number | undefined;
   /**
@@ -95,12 +96,16 @@ export type ColumnSpec<T extends object = Record<string, unknown>> = ColumnSetti
 export interface TableOptions<T extends object = Record<string, unknown>> {
   /**
    * Columns to render, in order. For object rows these select the properties; for
-   * array rows they are matched by position and supplying them means row 0 is
-   * data rather than the header. Defaults to every property of the objects, or
+   * array rows they are matched by position, a string entry is the header text of
+   * its column, and supplying them means row 0 is data rather than the header.
+   * With no data rows the header alone is drawn. Defaults to every property of the objects, or
    * every position of the arrays.
    */
   columns?: readonly (ColumnName<T> | ColumnSpec<T>)[] | undefined;
-  /** Whether to display a header row. Defaults to true. */
+  /**
+   * Whether to display a header row. For array rows without `columns`, `false`
+   * also means row 0 is data rather than the header. Defaults to true.
+   */
   header?: boolean | undefined;
   /**
    * Border style preset. Use "custom" with `chars` for full control. Defaults to
@@ -112,10 +117,11 @@ export interface TableOptions<T extends object = Record<string, unknown>> {
    * Custom border characters. Implicitly sets border to "custom" if provided
    * without a border option. Every glyph must be one cell wide; the edge fills
    * `top`, `bottom` and `horizontal` may also be `""` to omit that line. With
-   * `border: "simple"`, `vertical` and `cross` may be any string.
+   * `border: "simple"`, `vertical` and `cross` may be any string. Defaults to the
+   * glyphs of the `border` preset.
    */
   chars?: TableChars | undefined;
-  /** Style of the border glyphs, for example `"dim"` or `"cyan.bold"`. */
+  /** Style of the border glyphs, for example `"dim"` or `"cyan.bold"`. Defaults to unstyled. */
   borderStyle?: StyleSpec | undefined;
   /** Style of the header text, or `"none"` for plain text. Defaults to `"bold"`. */
   headerStyle?: StyleSpec | "none" | undefined;
@@ -431,8 +437,19 @@ function resolveColumns(columns: unknown): ResolvedColumn[] | undefined {
   });
 }
 
+/** Checks that `stream` is undefined or an object with a `write` function. */
+function checkStream(stream: unknown): void {
+  if (stream === undefined) return;
+  const writable =
+    typeof stream === "object" &&
+    stream !== null &&
+    typeof (stream as { write?: unknown }).write === "function";
+  if (!writable) throw typeError("stream", "an object with a write function", stream);
+}
+
 /** Validates every option that has a closed or numeric domain, before any rendering. */
 function validateOptions(options: TableOptions<object>): void {
+  checkStream(options.stream);
   if (options.border !== undefined) {
     if (typeof options.border !== "string") throw typeError("border", "a string", options.border);
     if (!BORDER_NAMES.has(options.border)) {
@@ -632,7 +649,15 @@ function normalizeData(
   headerProvided: boolean,
   columnSpecs: ResolvedColumn[] | undefined,
 ): { rows: string[][]; columns: string[]; specs: ResolvedColumn[] } {
-  if (data.length === 0) return { rows: [], columns: [], specs: [] };
+  if (data.length === 0) {
+    // Declared columns still draw their header; headings need no row to read keys from.
+    if (columnSpecs === undefined || !headerProvided) return { rows: [], columns: [], specs: [] };
+    return {
+      rows: [],
+      columns: columnSpecs.map((spec) => cellToString(spec.label ?? spec.key ?? "")),
+      specs: columnSpecs,
+    };
+  }
 
   // Array of arrays
   const firstDefinedIndex = data.findIndex((row) => row != null);
