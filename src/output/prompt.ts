@@ -24,7 +24,7 @@ import { writeThrough } from "./region.js";
 export type PromptOptions<T = unknown> = Pick<StdioOptions, "stdin" | "stderr" | "signal"> & {
   /**
    * Validation function; throw (or reject) to refuse the value and ask again.
-   * The thrown error's message is shown below the question.
+   * The thrown error's message is shown below the question. Defaults to no validation.
    */
   validate?: ((value: T) => void | Promise<void>) | undefined;
   /** Symbol displayed before the question, rendered on one line. Defaults to "?". */
@@ -35,7 +35,11 @@ export type PromptOptions<T = unknown> = Pick<StdioOptions, "stdin" | "stderr" |
  * Options for a text input prompt.
  */
 export interface TextOptions extends PromptOptions<string> {
-  /** Default text value. */
+  /**
+   * Text used when the answer is empty; it also satisfies `required`, and an
+   * empty string counts. Defaults to none: an empty answer is then refused while
+   * `required` is true.
+   */
   default?: string | undefined;
   /** Example text shown after the question as `(e.g. …)`; ignored when `default` is set. */
   placeholder?: string | undefined;
@@ -61,7 +65,7 @@ export interface SelectChoice<T> {
   label: string;
   /** Value returned when this choice is selected. */
   value: T;
-  /** Optional hint text displayed alongside the label. */
+  /** Hint text displayed alongside the label. Defaults to none. */
   hint?: string | undefined;
 }
 
@@ -71,7 +75,8 @@ export interface SelectChoice<T> {
 export interface SelectOptions<T> extends PromptOptions<T> {
   /**
    * Default selected value, returned when the user presses Enter with no input.
-   * It must equal the value of one of the choices.
+   * It must equal the value of one of the choices. Defaults to none: an empty
+   * answer is then asked again.
    */
   default?: T | undefined;
 }
@@ -80,11 +85,21 @@ export interface SelectOptions<T> extends PromptOptions<T> {
  * Options for a multiselect prompt.
  */
 export interface MultiselectOptions<T> extends PromptOptions<readonly T[]> {
-  /** Pre-selected default values. Each must equal the value of one of the choices. */
+  /**
+   * Pre-selected values, returned in choice order on an empty answer. Each must
+   * equal the value of one of the choices, and the number of distinct values must
+   * fall within `min` and `max`. Defaults to none: an empty answer returns `[]`.
+   */
   default?: readonly T[] | undefined;
-  /** Minimum number of items that must be selected. */
+  /**
+   * Minimum number of distinct items that must be selected. Defaults to no
+   * minimum: an empty answer (with no `default`) returns `[]`.
+   */
   min?: number | undefined;
-  /** Maximum number of items that may be selected. */
+  /**
+   * Maximum number of distinct items that may be selected. Defaults to no
+   * maximum.
+   */
   max?: number | undefined;
 }
 
@@ -129,6 +144,74 @@ function checkValidate(fn: string, validate: unknown): void {
   }
 }
 
+/** Rejects an option that is neither omitted nor of the expected primitive type. */
+function checkOptionType(
+  fn: string,
+  name: string,
+  value: unknown,
+  type: "string" | "boolean",
+): void {
+  if (value !== undefined && typeof value !== type) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" option of prompt.${fn}() must be a ${type}. Received ${describeReceived(value)}`,
+    );
+  }
+}
+
+/** Rejects a stream-like option that is not an object with the given method. */
+function checkStream(fn: string, name: string, value: unknown, method: string, nullable: boolean) {
+  if (value === undefined || (nullable && value === null)) return;
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as Record<string, unknown>)[method] !== "function"
+  ) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" option of prompt.${fn}() must be a ${nullable ? "readable stream or null" : "writable stream"}. Received ${describeReceived(value)}`,
+    );
+  }
+}
+
+/**
+ * Validates the options shared by every prompt kind (and the per-kind members
+ * named in `booleans` and `strings`) before anything is written.
+ *
+ * @param fn - Name of the calling prompt, for error messages.
+ * @param options - The options object as passed.
+ * @param members - Per-kind members to check by primitive type.
+ */
+function checkOptions(
+  fn: string,
+  options: unknown,
+  members: { booleans?: string[]; strings?: string[] } = {},
+): void {
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "options" argument of prompt.${fn}() must be an object. Received ${describeReceived(options)}`,
+    );
+  }
+  const o = options as Record<string, unknown>;
+  checkValidate(fn, o.validate);
+  checkOptionType(fn, "marker", o.marker, "string");
+  for (const name of members.strings ?? []) checkOptionType(fn, name, o[name], "string");
+  for (const name of members.booleans ?? []) checkOptionType(fn, name, o[name], "boolean");
+  checkStream(fn, "stdin", o.stdin, "on", true);
+  checkStream(fn, "stderr", o.stderr, "write", false);
+  if (o.signal !== undefined && !(o.signal instanceof AbortSignal)) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "signal" option of prompt.${fn}() must be an AbortSignal. Received ${describeReceived(o.signal)}`,
+    );
+  }
+}
+
 /** Rejects `choices` that is not an array. */
 function checkChoices(fn: string, choices: unknown): void {
   if (!Array.isArray(choices)) {
@@ -158,6 +241,13 @@ function normalizeChoices<T>(fn: string, choices: readonly Choice<T>[]): SelectC
         );
       }
       const choice = ch as SelectChoice<T>;
+      if (choice.hint !== undefined && typeof choice.hint !== "string") {
+        throw usageError(
+          "type",
+          "ERR_INVALID_ARG_TYPE",
+          `The "hint" member of a choice of prompt.${fn}() must be a string. Received ${describeReceived(choice.hint)}`,
+        );
+      }
       return {
         ...choice,
         label: renderSafe(choice.label),
@@ -343,7 +433,10 @@ async function ask(session: CancelableReader, query: string, message: string): P
 /** Implements {@link PromptNamespace.text}. */
 async function text(message: string, options: TextOptions = {}): Promise<string> {
   checkMessage("text", message);
-  checkValidate("text", options.validate);
+  checkOptions("text", options, {
+    booleans: ["trim", "required"],
+    strings: ["default", "placeholder"],
+  });
   const { default: defaultValue, validate, required = true, marker = "?", trim = true } = options;
   const stderr = options.stderr ?? process.stderr;
   const input = resolveInput(options.stdin, message);
@@ -395,7 +488,7 @@ async function text(message: string, options: TextOptions = {}): Promise<string>
 /** Implements {@link PromptNamespace.confirm}. */
 async function confirm(message: string, options: ConfirmOptions = {}): Promise<boolean> {
   checkMessage("confirm", message);
-  checkValidate("confirm", options.validate);
+  checkOptions("confirm", options);
   if (options.default !== undefined && typeof options.default !== "boolean") {
     throw usageError(
       "type",
@@ -445,10 +538,9 @@ async function select<const T = string>(
 ): Promise<T> {
   checkMessage("select", message);
   checkChoices("select", choices);
-  checkValidate("select", options.validate);
+  checkOptions("select", options);
   const { marker = "?", default: defaultValue, validate } = options;
   const stderr = options.stderr ?? process.stderr;
-  const col = createColorizer(stderr);
 
   const normalized = normalizeChoices("select", choices);
   if (normalized.length === 0) {
@@ -462,6 +554,7 @@ async function select<const T = string>(
   const defaultIndex = findDefaultIndex(normalized, defaultValue);
 
   const input = resolveInput(options.stdin, message);
+  const col = createColorizer(stderr);
   const session = createCancelableReader(input, stderr, undefined, options.signal);
 
   try {
@@ -504,7 +597,7 @@ async function select<const T = string>(
       if (!chosen) {
         writeThrough(
           stderr,
-          `${col.red("✖")} Please enter a number between 1 and ${normalized.length}\n`,
+          `${col.red("✖")} Please enter a number between 1 and ${normalized.length}, or a choice label\n`,
         );
         continue;
       }
@@ -535,10 +628,16 @@ async function multiselect<const T = string>(
 ): Promise<readonly T[]> {
   checkMessage("multiselect", message);
   checkChoices("multiselect", choices);
-  checkValidate("multiselect", options.validate);
+  checkOptions("multiselect", options);
   const { marker = "?", min, max, default: defaults, validate } = options;
+  if (defaults !== undefined && !Array.isArray(defaults)) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "default" option of prompt.multiselect() must be an array. Received ${describeReceived(defaults)}`,
+    );
+  }
   const stderr = options.stderr ?? process.stderr;
-  const col = createColorizer(stderr);
 
   const normalized = normalizeChoices("multiselect", choices);
   if (normalized.length === 0) {
@@ -552,6 +651,13 @@ async function multiselect<const T = string>(
     ["min", min],
     ["max", max],
   ] as const) {
+    if (value !== undefined && typeof value !== "number") {
+      throw usageError(
+        "type",
+        "ERR_INVALID_ARG_TYPE",
+        `The "${name}" option of prompt.multiselect() must be a number. Received ${describeReceived(value)}`,
+      );
+    }
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
       throw usageError(
         "range",
@@ -576,8 +682,20 @@ async function multiselect<const T = string>(
   }
   for (const d of defaults ?? []) checkDefaultMatches("multiselect", normalized, d);
   const defaultIndexes = new Set((defaults ?? []).map((d) => findDefaultIndex(normalized, d)));
+  const defaultCount = defaultIndexes.size;
+  if (
+    defaultCount > 0 &&
+    ((min !== undefined && defaultCount < min) || (max !== undefined && defaultCount > max))
+  ) {
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      `The "default" option of prompt.multiselect() selects ${defaultCount} distinct ${defaultCount === 1 ? "item" : "items"}, outside the min/max range. Received ${describeReceived(defaults, "range")}`,
+    );
+  }
 
   const input = resolveInput(options.stdin, message);
+  const col = createColorizer(stderr);
   const session = createCancelableReader(input, stderr, undefined, options.signal);
 
   try {
@@ -601,7 +719,7 @@ async function multiselect<const T = string>(
       let indices: number[];
       let numericInputValid = true;
       if (trimmed === "") {
-        indices = [...defaultIndexes];
+        indices = [...defaultIndexes].sort((x, y) => x - y);
       } else {
         const tokens = trimmed.split(",").map((s) => s.trim());
         numericInputValid = tokens.every((token) => /^\d+$/.test(token));
@@ -619,12 +737,18 @@ async function multiselect<const T = string>(
       }
 
       if (min !== undefined && indices.length < min) {
-        writeThrough(stderr, `${col.red("✖")} Select at least ${min} items\n`);
+        writeThrough(
+          stderr,
+          `${col.red("✖")} Select at least ${min} ${min === 1 ? "item" : "items"}\n`,
+        );
         continue;
       }
 
       if (max !== undefined && indices.length > max) {
-        writeThrough(stderr, `${col.red("✖")} Select at most ${max} items\n`);
+        writeThrough(
+          stderr,
+          `${col.red("✖")} Select at most ${max} ${max === 1 ? "item" : "items"}\n`,
+        );
         continue;
       }
 
@@ -696,7 +820,7 @@ export function maskInput(chunk: string): string {
 /** Implements {@link PromptNamespace.password}. */
 async function password(message: string, options: PasswordOptions = {}): Promise<string> {
   checkMessage("password", message);
-  checkValidate("password", options.validate);
+  checkOptions("password", options, { booleans: ["trim", "required"] });
   const { validate, required = true, marker = "?", trim = false } = options;
   const stdin = resolveInput(options.stdin, message);
   const stdinIsTTY = isTTY(stdin);
