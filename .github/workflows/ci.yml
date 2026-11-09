@@ -72,6 +72,7 @@ jobs:
       - run: yarn lint
       - run: yarn build
       - run: yarn typecheck:types
+      - run: yarn typecheck:min-ts
       - run: yarn typecheck:min-types
       - run: node scripts/check-usage-errors.mjs
       - run: node scripts/check-removed-names.mjs

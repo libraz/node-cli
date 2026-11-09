@@ -38,6 +38,7 @@
     "test:git-install": "node scripts/git-install-smoke.mjs",
     "test:pack": "node scripts/pack-smoke.mjs",
     "typecheck:examples": "tsc -p tsconfig.examples.json",
+    "typecheck:min-ts": "node scripts/typecheck-min-ts.mjs",
     "typecheck:min-types": "node scripts/typecheck-min-types.mjs",
     "typecheck:types": "node scripts/typecheck-types.mjs",
     "lint": "biome check src tests examples scripts",

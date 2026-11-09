@@ -2,8 +2,8 @@
 // claims to support, so a newer typing that the repository happens to develop
 // against cannot hide an API that does not exist on the minimum runtime.
 //
-// Manual utility; run it with `yarn typecheck:min-types`. It is not part of any
-// pipeline because it downloads a package on every run.
+// Run it with `yarn typecheck:min-types`; CI runs it. It downloads a package on
+// every run.
 //
 // The naive form of this check — installing an older @types/node next to a
 // throwaway compiler and running it — resolves the project's own newer
