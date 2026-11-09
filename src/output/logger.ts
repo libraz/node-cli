@@ -47,12 +47,17 @@ export interface Logger {
   warn(message: unknown, ...args: unknown[]): void;
   /** Logs an error message (highest priority). */
   error(message: unknown, ...args: unknown[]): void;
-  /** Changes the minimum log level at runtime. Returns this logger for chaining. */
+  /**
+   * Changes the minimum log level at runtime. Returns this logger for chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `level` is not a string.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `level` is not a known level.
+   */
   setLevel(level: LogLevel): this;
   /**
    * Creates a child logger with an additional prefix segment (`parent:child`).
    * The child shares the parent's stream, timestamp setting and buffer limit, and
    * follows the parent's current level until its own `setLevel` is called.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `prefix` is not a string.
    */
   child(prefix: string): Logger;
   /**
@@ -432,6 +437,13 @@ function buildLogger(options: LoggerOptions = {}, inheritLevel?: () => LogLevel)
       return this;
     },
     child(childPrefix: string) {
+      if (typeof childPrefix !== "string") {
+        throw usageError(
+          "type",
+          "ERR_INVALID_ARG_TYPE",
+          `The "prefix" argument of Logger.child() must be a string. Received ${describeReceived(childPrefix, "type")}`,
+        );
+      }
       const fullPrefix = prefix ? `${prefix}:${childPrefix}` : childPrefix;
       // No explicit level → the child inherits this logger's effective level
       // dynamically (so later parent.setLevel calls still reach it).
