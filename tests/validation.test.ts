@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CommandBuilder } from "../src/command/builder.js";
 import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
+import { CancelledError, CLIError, createCLI, ValidationError } from "../src/index.js";
 import { createMockStdout } from "./helpers.js";
 
 describe("command validation", () => {
@@ -90,5 +91,63 @@ describe("command validation", () => {
 
     await router.execute("test", { stdout: stream, stderr: stream });
     expect(order).toEqual(["validate", "beforeExecute", "action"]);
+  });
+});
+
+describe("command validate failure shape", () => {
+  it("wraps a plain throw in ValidationError with usage and exit code 64", async () => {
+    const cli = createCLI({ name: "test" });
+    const cause = new Error("bad env");
+    cli
+      .command("deploy <env>")
+      .validate(() => {
+        throw cause;
+      })
+      .action(() => {});
+    const error = await cli.exec(["deploy", "dev"]).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ValidationError);
+    expect(error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      exitCode: 64,
+      cause,
+      usage: "deploy <env> [options]",
+    });
+  });
+
+  it("passes a CLIError through unchanged", async () => {
+    const cli = createCLI({ name: "test" });
+    const own = new CLIError("custom", { code: "MINE", exitCode: 3 });
+    cli
+      .command("deploy")
+      .validate(() => {
+        throw own;
+      })
+      .action(() => {});
+    await expect(cli.exec(["deploy"])).rejects.toBe(own);
+  });
+
+  it("keeps a cancellation inside validate a cancellation, exit code 130", async () => {
+    const cli = createCLI({ name: "test" });
+    const controller = new AbortController();
+    const commandError = vi.fn();
+    cli.on("commandError", commandError);
+    cli
+      .command("deploy")
+      .validate(
+        (ctx) =>
+          new Promise<void>((_resolve, reject) => {
+            ctx.signal.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+            controller.abort();
+          }),
+      )
+      .action(() => {});
+    const error = await cli
+      .exec(["deploy"], { signal: controller.signal })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CancelledError);
+    expect(error).toMatchObject({ exitCode: 130 });
+    expect(commandError).not.toHaveBeenCalled();
   });
 });

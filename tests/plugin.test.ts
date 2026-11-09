@@ -237,13 +237,15 @@ describe("plugin system", () => {
 
   it("keeps plugin initialization failures sticky", async () => {
     const cli = createCLI({ name: "test" });
-    const failure = new Error("plugin failed");
+    const cause = new Error("plugin failed");
     cli.use(async () => {
-      throw failure;
+      throw cause;
     });
-    await expect(cli.execLine("missing")).rejects.toBe(failure);
-    await expect(cli.execLine("missing")).rejects.toBe(failure);
-    expect(() => cli.use(() => {})).toThrow(failure);
+    const first = await cli.execLine("missing").catch((error: unknown) => error);
+    expect(first).toBeInstanceOf(Error);
+    expect(first).toMatchObject({ code: "ERR_PLUGIN_FAILED", cause });
+    await expect(cli.execLine("missing")).rejects.toBe(first);
+    expect(() => cli.use(() => {})).toThrow(first as Error);
   });
 
   it("reports start initialization failures through stderr and exitCode", async () => {
@@ -253,7 +255,9 @@ describe("plugin system", () => {
       throw new Error("startup plugin failed");
     });
     await expect(cli.start(["help"])).resolves.toBe(1);
-    expect(write).toHaveBeenCalledWith("Error: startup plugin failed\n");
+    expect(write).toHaveBeenCalledWith(
+      "Error: Plugin initialization failed: startup plugin failed\n",
+    );
     expect(process.exitCode).toBe(1);
   });
 });
@@ -283,15 +287,13 @@ describe("plugin initialization barrier under concurrency", () => {
 
     const outcomes = await Promise.allSettled([cli.execLine("ready"), cli.execLine("ready")]);
     expect(outcomes.map((outcome) => outcome.status)).toEqual(["rejected", "rejected"]);
-    for (const outcome of outcomes) {
-      expect((outcome as PromiseRejectedResult).reason).toHaveProperty(
-        "message",
-        "plugin exploded",
-      );
-    }
+    const [first, second] = outcomes.map((outcome) => (outcome as PromiseRejectedResult).reason);
+    expect(first).toMatchObject({ code: "ERR_PLUGIN_FAILED" });
+    expect((first as Error).cause).toHaveProperty("message", "plugin exploded");
+    expect(second).toBe(first);
 
     // The failure sticks for a later call rather than degrading into success.
-    await expect(cli.execLine("ready")).rejects.toThrow("plugin exploded");
+    await expect(cli.execLine("ready")).rejects.toBe(first);
   });
 
   it("keeps registration order when an earlier plugin awaits", async () => {

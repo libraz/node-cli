@@ -4,6 +4,7 @@ import { CommandRegistry } from "../src/command/registry.js";
 import { CommandRouter } from "../src/command/router.js";
 import { CommandNotFoundError, ExtraArgumentError, MissingArgumentError } from "../src/errors.js";
 import { HelpGenerator } from "../src/help/generator.js";
+import { createCLI } from "../src/index.js";
 import { progress, restoreCursor } from "../src/output/progress.js";
 import type { Shell } from "../src/shell/repl.js";
 import { createMockStdout, createMockTTY } from "./helpers.js";
@@ -319,5 +320,103 @@ describe("router diagnostics", () => {
     } finally {
       restoreCursor();
     }
+  });
+});
+
+describe("top-level flags", () => {
+  async function run(argv: string[], version?: string) {
+    const cli = createCLI({ name: "app", version });
+    cli
+      .command("deploy <env>")
+      .description("Deploy")
+      .action(() => {});
+    cli.command("db migrate").action(() => {});
+    const stdout = createMockStdout();
+    const errors: Error[] = [];
+    cli.on("error", (error) => {
+      errors.push(error);
+    });
+    const failure = await cli
+      .exec(argv, { stdout })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+    return { output: stdout.getOutput(), failure, errors };
+  }
+
+  it.each([["--help"], ["-h"]])(
+    "%s <cmd> prints the command's help like help <cmd>",
+    async (flag) => {
+      const viaFlag = await run([flag, "deploy"]);
+      const viaHelp = await run(["help", "deploy"]);
+      expect(viaFlag.failure).toBeUndefined();
+      expect(viaFlag.output).toContain("Usage: deploy <env> [options]");
+      expect(viaFlag.output).toBe(viaHelp.output);
+    },
+  );
+
+  it("follows the help command for --help with several words", async () => {
+    expect((await run(["--help", "db", "migrate"])).output).toContain("Usage: db migrate");
+    const missing = await run(["--help", "db", "nope"]);
+    expect(missing.failure).toMatchObject({ code: "COMMAND_NOT_FOUND" });
+  });
+
+  it.each([
+    [["--version"], "--version"],
+    [["-V"], "-V"],
+    [["-v"], "-v"],
+    [["--xyz=3", "deploy"], "--xyz"],
+    [["-vx"], "-v"],
+  ])("reports %j without a version as an unknown option %s", async (argv, flag) => {
+    const { failure, errors } = await run(argv);
+    expect(failure).toMatchObject({ code: "UNKNOWN_OPTION", exitCode: 64, flag });
+    expect((failure as { usage?: string }).usage).toBeUndefined();
+    expect(errors).toEqual([failure]);
+  });
+
+  it("still prints a configured version", async () => {
+    expect((await run(["--version"], "1.2.3")).output).toBe("1.2.3\n");
+    expect((await run(["-V"], "1.2.3")).output).toBe("1.2.3\n");
+  });
+
+  it("lists the top-level commands on a top-level miss", async () => {
+    const { failure } = await run(["deplyo"]);
+    expect(failure).toMatchObject({
+      code: "COMMAND_NOT_FOUND",
+      available: ["db", "deploy", "help"],
+    });
+    expect((failure as Error).message).toContain("Available commands: db, deploy, help");
+  });
+});
+
+describe("help index surface", () => {
+  it("leaves the shell commands out of the direct index and in the shell's", async () => {
+    const cli = createCLI({ name: "app" });
+    cli.command("deploy").action(() => {});
+    const direct = createMockStdout();
+    await cli.exec(["--help"], { stdout: direct });
+    const viaHelp = createMockStdout();
+    await cli.exec(["help"], { stdout: viaHelp });
+    expect(direct.getOutput()).not.toContain("Shell commands");
+    expect(viaHelp.getOutput()).not.toContain("Shell commands");
+
+    const { registry, router } = setup();
+    CommandBuilder.create(registry, "deploy").action(() => {});
+    const shell = {} as Shell;
+    const flag = createMockStdout();
+    await router.execute("--help", { shell, stdout: flag });
+    expect(flag.getOutput()).toContain("Shell commands: exit, quit");
+  });
+
+  it("advertises -h, --help always and -V, --version with a version", async () => {
+    const plain = createMockStdout();
+    await createCLI({ name: "app" }).exec(["--help"], { stdout: plain });
+    expect(plain.getOutput()).toContain("Options:\n  -h, --help    Show help\n");
+    expect(plain.getOutput()).not.toContain("--version");
+
+    const versioned = createMockStdout();
+    await createCLI({ name: "app", version: "1.0.0" }).exec(["--help"], { stdout: versioned });
+    expect(versioned.getOutput()).toContain(
+      "Options:\n  -h, --help       Show help\n  -V, --version    Show the CLI version\n",
+    );
   });
 });

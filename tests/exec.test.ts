@@ -1,6 +1,12 @@
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { createCLI, ExtraArgumentError, progress, UnknownOptionError } from "../src/index.js";
+import {
+  CancelledError,
+  createCLI,
+  ExtraArgumentError,
+  progress,
+  UnknownOptionError,
+} from "../src/index.js";
 import { createMockStdout, createMockTTY } from "./helpers.js";
 
 describe("programmatic exec", () => {
@@ -154,16 +160,16 @@ describe("programmatic exec", () => {
     expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
-  it("passes an already-aborted signal to the action", async () => {
+  it("rejects an already-aborted signal without running the action", async () => {
     const cli = createCLI({ name: "test" });
     const controller = new AbortController();
     controller.abort();
-    let aborted = false;
-    cli.command("check").action((ctx) => {
-      aborted = ctx.signal.aborted;
-    });
-    await cli.execLine("check", { signal: controller.signal });
-    expect(aborted).toBe(true);
+    const action = vi.fn();
+    cli.command("check").action(action);
+    await expect(cli.execLine("check", { signal: controller.signal })).rejects.toBeInstanceOf(
+      CancelledError,
+    );
+    expect(action).not.toHaveBeenCalled();
   });
 
   it("restores the outer diagnostic stream after a nested execution", async () => {

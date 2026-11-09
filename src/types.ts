@@ -112,7 +112,10 @@ export interface OptionDef {
 /**
  * An action handler executed when a command is invoked.
  * May be synchronous or asynchronous. `A` and `O` type `ctx.args` and
- * `ctx.options`; the builder infers them from the command definition.
+ * `ctx.options`; the builder infers them from the command definition. A throw
+ * or rejection fires `commandError` and `error` and fails the execution with
+ * the value (a non-`Error` wrapped in one); a cancellation of `ctx.signal`
+ * fails it with `CancelledError` instead, without the events.
  */
 export type Action<
   A extends object = Record<string, unknown>,
@@ -128,7 +131,9 @@ export type Completer = (ctx: CompletionContext) => readonly string[] | Promise<
 
 /**
  * A command-level validator run after option resolution and before the action.
- * Throw (or reject) to stop execution.
+ * Throw (or reject) to stop execution: a `CLIError` propagates unchanged, a
+ * cancellation of `ctx.signal` stays a cancellation, and any other value
+ * becomes a `ValidationError` with the value as `cause`.
  */
 export type CommandValidator<
   A extends object = Record<string, unknown>,
@@ -146,14 +151,18 @@ export type CancelHandler<
 > = (ctx: CommandContext<A, O>) => void;
 
 /**
- * A fallback handler invoked with the raw input when no command matches it.
+ * A fallback handler invoked with the raw input when no command matches it. A
+ * throw or rejection is reported through the `error` event and rejects the
+ * execution; a cancellation of `ctx.signal` rejects with `CancelledError`
+ * instead.
  */
 export type FallbackHandler = (input: string, ctx: FallbackContext) => void | Promise<void>;
 
 /**
  * Redacts or rejects a line before it is persisted to shell history. Return
  * `null` to omit the line entirely. It stays synchronous because history is
- * written with synchronous I/O.
+ * written with synchronous I/O. If it throws, a warning is written to
+ * `process.stderr` and the line is not recorded.
  */
 export type HistoryFilter = (line: string) => string | null;
 
@@ -427,27 +436,33 @@ export type CheckedOptionSchema<
  * Map of CLI lifecycle event names to their handler signatures.
  */
 export interface CLIEventMap {
-  /** Fired before a command action is executed. */
+  /**
+   * Fired before a command action is executed. A throw is reported through
+   * `error` and the action still runs, unless it is a cancellation of
+   * `ctx.signal`, which cancels the command.
+   */
   beforeExecute: (ctx: CommandContext) => void | Promise<void>;
   /** Fired after a command action completes successfully. */
   afterExecute: (ctx: CommandContext) => void | Promise<void>;
   /**
    * Fired when a resolved command fails during argument validation, option
-   * resolution, custom validation, or its action handler.
+   * resolution, custom validation, or its action handler. A cancellation is
+   * not a failure and does not fire it.
    */
   commandError: (error: Error, ctx: CommandContext) => void | Promise<void>;
   /**
    * Fired for any error raised while handling input, including failures that
    * occur before a command is resolved (e.g. command-not-found). Always fires
-   * for command failures in addition to {@link CLIEventMap.commandError}.
+   * for command failures in addition to {@link CLIEventMap.commandError}, and
+   * once for a failed asynchronous plugin initialization (`ERR_PLUGIN_FAILED`).
+   * A cancellation does not fire it.
    */
   error: (error: Error) => void | Promise<void>;
   /**
    * Fired at most once per CLI: after a direct-mode command completes, throws,
    * or is force-quit; after a help index is printed for an empty argv or a
    * non-TTY start; when plugin initialization fails; when the interactive shell
-   * ends or receives SIGTERM; and when a force-quit ends a `CLI.exec()` call.
-   * The normal `exec()` path never fires it. A process ended by a signal the
+   * ends or receives SIGTERM. `CLI.exec()` and `CLI.execLine()` never fire it. A process ended by a signal the
    * CLI does not handle (SIGTERM or SIGHUP in direct mode, SIGHUP in the shell)
    * runs neither this event nor cancel handlers.
    */
@@ -467,7 +482,11 @@ export type CLIEventHandler<K extends keyof CLIEventMap> = CLIEventMap[K];
  * signal that cancels it.
  */
 export interface CommandStreams {
-  /** Readable stream supplied by the current execution surface, or null when none is available. */
+  /**
+   * Readable stream supplied by the current execution surface, or null when
+   * none is available. In the interactive shell it is the terminal the line
+   * editor shares: read it through `prompt.*`, never to EOF.
+   */
   readonly stdin: Readable | null;
   /** Writable stream for standard output. */
   readonly stdout: Writable;
@@ -537,7 +556,14 @@ export type MutableCommandContext = { -readonly [K in keyof CommandContext]: Com
  * input. It carries the execution's streams and signal; no command was
  * resolved, so there are no arguments or options.
  */
-export interface FallbackContext extends CommandStreams {}
+export interface FallbackContext extends CommandStreams {
+  /**
+   * The whole argv the execution was given when it was an array (`start()`,
+   * `exec()`), even when only a nested child was unknown; `null` for a command
+   * line string. Unlike the `input` string, this is reversible.
+   */
+  readonly rawArgv: readonly string[] | null;
+}
 
 /**
  * Context passed to a shell mode's action: the shell's streams, including
@@ -551,11 +577,17 @@ export interface ModeContext extends CommandStreams {}
  */
 export interface PluginContext {
   /**
-   * Registers a new command and returns its builder, typed from a literal
-   * definition the same way as `cli.command()`.
+   * Registers a command and returns its builder, typed from a literal
+   * definition the same way as `cli.command()`. The same path merges into the
+   * existing command; the returned builder types only what is declared
+   * through it.
    */
   command<D extends string>(definition: D): CommandBuilderFor<D>;
-  /** Registers an event listener. A repeated call adds another listener. */
+  /**
+   * Registers an event listener. A repeated call adds another listener. An
+   * unknown event name throws a `RangeError` (`ERR_INVALID_ARG_VALUE`), a
+   * non-function handler a `TypeError` (`ERR_INVALID_ARG_TYPE`).
+   */
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
   /** Removes a previously registered event listener. */
   off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
@@ -616,18 +648,25 @@ export interface CLIOptions {
    * non-matching string a `RangeError` (`ERR_INVALID_ARG_VALUE`).
    */
   name: string;
-  /** The version string displayed by --version. */
+  /**
+   * The version string printed by `--version` and `-V`. Defaults to none, in
+   * which case both flags are unknown options.
+   */
   version?: string | undefined;
-  /** The interactive prompt string (e.g. "> "). */
+  /** The interactive prompt string. Defaults to `"> "`. */
   prompt?: string | undefined;
-  /** A short description shown in the help header. */
+  /** A short description shown in the help header. Defaults to none. */
   description?: string | undefined;
-  /** Banner text displayed when the interactive shell starts. Set to "" to suppress. */
+  /**
+   * Banner text displayed when the interactive shell starts. Defaults to
+   * `"<name> v<version>"`, or `"<name>"` without a version. Set to "" to suppress.
+   */
   banner?: string | undefined;
   /**
    * File path used to persist command history. A lone `~` and a leading `~/`
-   * expand to the home directory. Defaults to `~/.<name>_history`. An empty
-   * string or a non-string throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
+   * or `~\` expand to the home directory. Defaults to `~/.<name>_history`. An
+   * empty string or a non-string throws a `TypeError` with code
+   * `ERR_INVALID_ARG_TYPE`.
    */
   historyFile?: string | undefined;
   /**
@@ -639,8 +678,8 @@ export interface CLIOptions {
   historySize?: number | undefined;
   /**
    * Redacts or rejects a line before it is persisted to shell history. Return
-   * `null` to omit sensitive commands entirely. A non-function throws a
-   * `TypeError` with code `ERR_INVALID_ARG_TYPE`.
+   * `null` to omit sensitive commands entirely. Defaults to keeping every line.
+   * A non-function throws a `TypeError` with code `ERR_INVALID_ARG_TYPE`.
    */
   historyFilter?: HistoryFilter | undefined;
 }

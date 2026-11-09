@@ -53,9 +53,14 @@ const fallback: FallbackHandler = (input, fallbackCtx: FallbackContext) => {
   const text: string = input;
   const stdin: Readable | null = fallbackCtx.stdin;
   const signal: AbortSignal = fallbackCtx.signal;
+  const fallbackArgv: readonly string[] | null = fallbackCtx.rawArgv;
+  // @ts-expect-error rawArgv is null for a command line string
+  const strictFallbackArgv: readonly string[] = fallbackCtx.rawArgv;
   void text;
   void stdin;
   void signal;
+  void fallbackArgv;
+  void strictFallbackArgv;
 };
 
 const historyFilter: HistoryFilter = (line) => (line.includes("secret") ? null : line);
@@ -128,8 +133,11 @@ void validator;
 void onCancel;
 
 // tokenize stays on the root; CLI and CommandBuilder are type-only.
-const tokens: string[] = tokenize("a b");
+const tokens: readonly string[] = tokenize("a b");
+// @ts-expect-error tokenize returns a readonly array
+const mutableTokens: string[] = tokenize("a b");
 void tokens;
+void mutableTokens;
 // @ts-expect-error CLI is exported as a type only
 void root.CLI;
 // @ts-expect-error CommandBuilder is exported as a type only
@@ -146,3 +154,8 @@ export type RemovedExecOptions = root.ExecOptions;
 export type RemovedCatchContext = root.CatchContext;
 // @ts-expect-error CompletionResult left the root
 export type RemovedCompletionResult = root.CompletionResult;
+
+// Event names are checked against CLIEventMap.
+createCLI({ name: "x" }).on("error", (error: Error) => void error);
+// @ts-expect-error unknown event name
+createCLI({ name: "x" }).on("bogus", () => {});

@@ -18,16 +18,16 @@ describe("HelpGenerator", () => {
   describe("shell commands footer", () => {
     it("lists only the shell commands no application command has taken", () => {
       CommandBuilder.create(registry, "exit").description("Leave the app");
-      expect(help.generateIndex()).toContain("Shell commands: quit");
-      expect(help.generateIndex()).not.toContain("exit,");
+      expect(help.generateIndex({ interactive: true })).toContain("Shell commands: quit");
+      expect(help.generateIndex({ interactive: true })).not.toContain("exit,");
     });
 
     it("omits the footer when every shell command is taken, including with no visible commands", () => {
       CommandBuilder.create(registry, "exit").hidden();
       CommandBuilder.create(registry, "quit").hidden();
-      expect(help.generateIndex()).toBe("No commands available.");
+      expect(help.generateIndex({ interactive: true })).toBe("No commands available.");
       CommandBuilder.create(registry, "deploy");
-      expect(help.generateIndex()).not.toContain("Shell commands");
+      expect(help.generateIndex({ interactive: true })).not.toContain("Shell commands");
     });
   });
 
@@ -279,7 +279,7 @@ describe("shell commands", () => {
   it("documents and completes built-in exit commands without shadowing user commands", () => {
     const registry = new CommandRegistry();
     const help = new HelpGenerator(registry);
-    expect(help.generateIndex()).toContain("Shell commands: exit, quit");
+    expect(help.generateIndex({ interactive: true })).toContain("Shell commands: exit, quit");
     expect(help.generateCommand(["exit"])).toContain("Exit the interactive shell");
 
     const completer = new ShellCompleter(registry);

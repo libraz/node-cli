@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { PassThrough, type Readable, type Writable } from "node:stream";
 import {
+  CancelledError,
   CLIError,
   CommandNotFoundError,
+  describeReceived,
   ExtraArgumentError,
   formatErrorMessage,
   isAbortError,
@@ -10,12 +12,14 @@ import {
   MissingArgumentError,
   ParseError,
   toError,
+  UnknownOptionError,
+  usageError,
   ValidationError,
   writeDiagnostic,
 } from "../errors.js";
 import { formatUsage, type HelpGenerator } from "../help/generator.js";
 import { resolveOptions } from "../option/resolver.js";
-import { releaseAll, restoreCursor } from "../output/progress.js";
+import { restoreCursor, runWithProgressScope } from "../output/progress.js";
 import { writeThrough } from "../output/region.js";
 import type { Shell } from "../shell/repl.js";
 import type {
@@ -52,6 +56,53 @@ function isPipelineStop(value: unknown): boolean {
 type EventListeners = {
   [K in keyof CLIEventMap]: CLIEventMap[K][];
 };
+
+const EVENT_NAMES: readonly (keyof CLIEventMap)[] = [
+  "beforeExecute",
+  "afterExecute",
+  "commandError",
+  "error",
+  "exit",
+];
+
+/** Rejects an unknown event name or a non-function handler passed to `on()`/`off()`. */
+function checkListener(method: "on" | "off", event: unknown, handler: unknown): void {
+  if (!(EVENT_NAMES as readonly unknown[]).includes(event)) {
+    throw usageError(
+      typeof event === "string" ? "range" : "type",
+      typeof event === "string" ? "ERR_INVALID_ARG_VALUE" : "ERR_INVALID_ARG_TYPE",
+      `The "event" argument of cli.${method}() must be one of: ${EVENT_NAMES.join(", ")}. Received ${describeReceived(event, typeof event === "string" ? "range" : "type")}`,
+    );
+  }
+  if (typeof handler !== "function") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "handler" argument of cli.${method}() must be a function. Received ${describeReceived(handler)}`,
+    );
+  }
+}
+
+/** True for a token written as a flag: a leading dash, other than a lone `-` or `--`. */
+function isFlagToken(token: string): boolean {
+  return token.length > 1 && token.startsWith("-") && token !== "--";
+}
+
+/** The one flag an unknown top-level token names: `--x=1` is `--x`, the cluster `-vx` is `-v`. */
+function normalizeFlag(token: string): string {
+  if (token.startsWith("--")) return token.split("=", 1)[0];
+  return token.slice(0, 2);
+}
+
+/** A cancellation as the one class callers see: unchanged, or wrapped once with the signal's reason. */
+function asCancelled(err: unknown, signal: AbortSignal): CancelledError {
+  return err instanceof CancelledError ? err : new CancelledError({ cause: signal.reason });
+}
+
+/** True for a stage rejection that only reports the stage was aborted. */
+function isAbortRejection(error: unknown): boolean {
+  return isAbortError(error) || error instanceof CancelledError;
+}
 
 type CancellationEntry = {
   command: CommandDefinition;
@@ -127,6 +178,7 @@ export class CommandRouter {
    * @param handler - The handler function.
    */
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void {
+    checkListener("on", event, handler);
     (this.listeners[event] as CLIEventMap[K][]).push(handler);
   }
 
@@ -137,6 +189,7 @@ export class CommandRouter {
    * @param handler - The handler function to remove.
    */
   off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): void {
+    checkListener("off", event, handler);
     const list = this.listeners[event] as CLIEventMap[K][];
     const idx = list.indexOf(handler);
     if (idx !== -1) list.splice(idx, 1);
@@ -147,7 +200,8 @@ export class CommandRouter {
    *
    * A handler that throws does not prevent the remaining handlers from running;
    * its error is reported through the `error` event (best-effort) and otherwise
-   * swallowed so that listener bugs cannot abort command flow.
+   * swallowed so that listener bugs cannot abort command flow. The exception is a
+   * `beforeExecute` listener cancelled with its command, which rejects the emit.
    *
    * @param event - The event name.
    * @param args - Arguments to pass to the handlers.
@@ -160,6 +214,12 @@ export class CommandRouter {
       try {
         await (handler as (...a: Parameters<CLIEventMap[K]>) => void | Promise<void>)(...args);
       } catch (err) {
+        if (
+          event === "beforeExecute" &&
+          isCancellationError(err, (args[0] as CommandContext).signal)
+        ) {
+          throw err;
+        }
         // A listener should never break command flow. Surface error-event
         // failures to stderr; route others to the error event when possible.
         if (event === "error") {
@@ -282,6 +342,7 @@ export class CommandRouter {
     try {
       await handler(input, ctx);
     } catch (err) {
+      if (isCancellationError(err, ctx.signal)) throw asCancelled(err, ctx.signal);
       const error = toError(err);
       await this.emit("error", error);
       throw error;
@@ -426,12 +487,15 @@ export class CommandRouter {
    *
    * If the input is empty or unrecognized, a {@link CommandNotFoundError} is thrown.
    * When `--help` is present or the command has no action, help text is printed instead.
-   * Required arguments are validated before the action is invoked.
+   * Required arguments are validated before the action is invoked. Progress
+   * indicators the execution creates are released when it settles.
    *
    * @param input - The raw input string or pre-tokenized argument array.
    * @param options - Optional execution context including shell, stdout, and stderr streams.
    * @throws {CommandNotFoundError} If no matching command is found.
    * @throws {MissingArgumentError} If a required argument is not provided.
+   * @throws {CancelledError} When `signal` is already aborted (nothing runs), or
+   *   the command is cancelled while it runs.
    */
   async execute(
     input: string | readonly string[],
@@ -443,12 +507,11 @@ export class CommandRouter {
       signal?: AbortSignal;
     } = {},
   ): Promise<void> {
+    if (options.signal?.aborted) throw new CancelledError({ cause: options.signal.reason });
     const stderr = options.stderr ?? process.stderr;
-    try {
-      await this.stderrContext.run(stderr, () => this.executeInternal(input, options));
-    } finally {
-      releaseAll();
-    }
+    await runWithProgressScope(() =>
+      this.stderrContext.run(stderr, () => this.executeInternal(input, options)),
+    );
   }
 
   private async executeInternal(
@@ -478,6 +541,7 @@ export class CommandRouter {
       stdout,
       stderr,
       signal: signal ?? new AbortController().signal,
+      rawArgv: typeof input === "string" ? null : [...input],
     });
     // Check for pipe chains (only for string input)
     if (typeof input === "string") {
@@ -502,7 +566,7 @@ export class CommandRouter {
     // Built-in --version / -V interception (before command resolution).
     let tokens: string[];
     try {
-      tokens = typeof input === "string" ? tokenize(input) : [...input];
+      tokens = typeof input === "string" ? [...tokenize(input)] : [...input];
     } catch (err) {
       const error = toError(err);
       if (error instanceof ParseError && this.catchHandler) {
@@ -522,13 +586,13 @@ export class CommandRouter {
         return;
       }
     }
-    // Bare top-level --help / -h shows the index.
-    if (
-      this.helpGenerator &&
-      tokens.length === 1 &&
-      (tokens[0] === "--help" || tokens[0] === "-h")
-    ) {
-      stdout.write(`${this.helpGenerator.generateIndex()}\n`);
+    // Top-level --help / -h: bare, the index; followed by words, `help <words>`.
+    if (this.helpGenerator && (tokens[0] === "--help" || tokens[0] === "-h")) {
+      if (tokens.length === 1) {
+        stdout.write(`${this.helpGenerator.generateIndex({ interactive: shell != null })}\n`);
+        return;
+      }
+      await this.executeInternal(["help", ...tokens.slice(1)], options);
       return;
     }
 
@@ -575,7 +639,20 @@ export class CommandRouter {
           await this.runCatchHandler(this.catchHandler, rawInput, fallbackContext());
           return;
         }
-        const err = new CommandNotFoundError(tokens[0] ?? rawInput.trim().split(/\s+/)[0]);
+        const first = tokens[0] ?? rawInput.trim().split(/\s+/)[0];
+        let err: Error;
+        if (this.version !== undefined && (first === "--version" || first === "-V")) {
+          err = new ExtraArgumentError(tokens.slice(1));
+        } else if (isFlagToken(first)) {
+          err = new UnknownOptionError(normalizeFlag(first));
+        } else {
+          err = new CommandNotFoundError(first, {
+            available: this.registry
+              .visibleTopLevel()
+              .map((command) => command.name)
+              .sort(),
+          });
+        }
         await this.emit("error", err);
         throw err;
       }
@@ -585,8 +662,8 @@ export class CommandRouter {
     const command = result.command as CommandDefinition;
 
     // An actionless command is a command group, not a command accepting
-    // arbitrary positional input. Report an unknown child uniformly so nested
-    // `catch()` fallbacks get the same opportunity as top-level ones. The
+    // arbitrary positional input. Report an unknown child uniformly so the
+    // `fallback()` handler gets the same opportunity as at the top level. The
     // current child count does not change that: a group registered before its
     // children, or a placeholder that has none yet, is still a group.
     if (!command.action && result.extraArgs?.length) {
@@ -639,16 +716,15 @@ export class CommandRouter {
       signal: controller.signal,
     });
 
+    // A command whose signal is already aborted never starts, so it has nothing to cancel.
+    if (signal?.aborted) throw new CancelledError({ cause: signal.reason });
+
     const activeEntry = { command, ctx, controller };
     this.active.add(activeEntry);
     cancellationScope?.add(activeEntry);
 
     const abortFromExternalSignal = () => this.cancelEntries([activeEntry], signal?.reason);
-    if (signal?.aborted) {
-      abortFromExternalSignal();
-    } else {
-      signal?.addEventListener("abort", abortFromExternalSignal, { once: true });
-    }
+    signal?.addEventListener("abort", abortFromExternalSignal, { once: true });
 
     try {
       // Validate required arguments
@@ -688,7 +764,6 @@ export class CommandRouter {
         }
       }
 
-      // Emit beforeExecute
       await this.emit("beforeExecute", ctx);
 
       await command.action(ctx);
@@ -699,10 +774,11 @@ export class CommandRouter {
       const isExpectedCancellation =
         expected !== undefined &&
         (error === expected || isPipelineStop(error) || isCancellationError(error, ctx.signal));
-      if (!isExpectedCancellation) {
-        await this.emit("commandError", error, ctx);
-        await this.emit("error", error);
-      }
+      if (isExpectedCancellation) throw error;
+      // A cancellation is not a failure: no events, and one class for the caller.
+      if (isCancellationError(error, ctx.signal)) throw asCancelled(error, ctx.signal);
+      await this.emit("commandError", error, ctx);
+      await this.emit("error", error);
       throw error;
     } finally {
       signal?.removeEventListener("abort", abortFromExternalSignal);
@@ -806,10 +882,10 @@ export class CommandRouter {
           // the producer's SIGPIPE/abort is expected, not an error).
           if (
             isPipelineStop(error) ||
-            (gracefullyStopped[i] && isAbortError(error)) ||
+            (gracefullyStopped[i] && isAbortRejection(error)) ||
             (pipelineFailed &&
               i !== primaryFailureIndex &&
-              (error === primaryFailure || isAbortError(error)))
+              (error === primaryFailure || isAbortRejection(error)))
           ) {
             if (i > 0 && !pipes[i - 1].destroyed) destroyPipe(pipes[i - 1]);
             if (!isLast && !pipes[i].destroyed) destroyPipe(pipes[i]);

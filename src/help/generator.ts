@@ -37,16 +37,18 @@ export class HelpGenerator {
   /**
    * Generates the top-level help index listing all available commands.
    *
+   * @param options.interactive - Whether the index is shown inside the
+   *   interactive shell, which adds the shell's own commands. Defaults to false.
    * @returns A formatted multi-line string with command names and descriptions.
    */
-  generateIndex(): string {
+  generateIndex(options: { interactive?: boolean } = {}): string {
     const commands = this.registry
       .visibleTopLevel()
       // The framework's own help command is registered before application
       // commands. Keep application registration order while listing that helper
       // last, so it does not occupy the first, most prominent command slot.
       .sort((left, right) => (left.name === "help" ? 1 : right.name === "help" ? -1 : 0));
-    const shellLabel = shellCommandsLabel(this.registry);
+    const shellLabel = options.interactive ? shellCommandsLabel(this.registry) : undefined;
     if (commands.length === 0) {
       return shellLabel ? `No commands available.\n\n${shellLabel}` : "No commands available.";
     }
@@ -78,9 +80,10 @@ export class HelpGenerator {
 
     appendAlignedEntries(lines, entries);
 
-    if (version) {
-      lines.push("", "Options:", "  -V, --version    Show the CLI version");
-    }
+    const optionEntries: [string, string][] = [["-h, --help", "Show help"]];
+    if (version) optionEntries.push(["-V, --version", "Show the CLI version"]);
+    lines.push("", "Options:");
+    appendAlignedEntries(lines, optionEntries);
     lines.push("");
     if (shellLabel) lines.push(shellLabel);
     lines.push('Type "help <command>" for more information.');

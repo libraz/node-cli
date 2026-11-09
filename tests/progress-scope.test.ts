@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { progress } from "../src/index.js";
+import { createCLI, progress } from "../src/index.js";
 import { setColorEnabled, stripAnsi } from "../src/output/color.js";
 import { runWithProgressScope } from "../src/output/progress.js";
 import { createMockTTY } from "./helpers.js";
@@ -140,5 +140,80 @@ describe("runWithProgressScope", () => {
     progress.spinner({ stderr: stream });
     progress.releaseAll();
     expect(stream.getOutput()).toContain(SHOW_CURSOR);
+  });
+});
+
+describe("command execution scope", () => {
+  beforeEach(() => setColorEnabled(false));
+  afterEach(() => {
+    progress.releaseAll();
+    setColorEnabled("auto");
+  });
+
+  it("keeps a concurrent command's spinner running when another command ends", async () => {
+    const cli = createCLI({ name: "test" });
+    const slow = createMockTTY();
+    let finish: () => void = () => {};
+    let spinnerStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      spinnerStarted = resolve;
+    });
+    cli.command("slow").action(async () => {
+      const spinner = progress.spinner({ label: "slow", stderr: slow });
+      spinnerStarted();
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      spinner.succeed("slow done");
+    });
+    cli.command("quick").action(() => {
+      progress.spinner({ label: "quick", stderr: createMockTTY() });
+    });
+
+    const running = cli.exec(["slow"]);
+    await started;
+    await cli.exec(["quick"]);
+    finish();
+    await running;
+    expect(stripAnsi(slow.getOutput())).toContain("slow done");
+  });
+
+  it("releases a spinner the command left running when it ends", async () => {
+    const cli = createCLI({ name: "test" });
+    const tty = createMockTTY();
+    cli.command("leak").action(() => {
+      progress.spinner({ label: "leak", stderr: tty });
+    });
+    await cli.exec(["leak"]);
+    expect(tty.getOutput()).toContain(SHOW_CURSOR);
+  });
+
+  it("gives a nested exec its own scope", async () => {
+    const cli = createCLI({ name: "test" });
+    const outer = createMockTTY();
+    const inner = createMockTTY();
+    let outerAfterInner = "";
+    cli.command("inner").action(() => {
+      progress.spinner({ label: "inner", stderr: inner });
+    });
+    cli.command("outer").action(async (ctx) => {
+      const spinner = progress.spinner({ label: "outer", stderr: outer });
+      await cli.exec(["inner"], ctx);
+      spinner.succeed("outer still running");
+      outerAfterInner = stripAnsi(outer.getOutput());
+    });
+    await cli.execLine("outer");
+    expect(inner.getOutput()).toContain(SHOW_CURSOR);
+    expect(outerAfterInner).toContain("outer still running");
+  });
+
+  it("does not release an indicator created outside any command", async () => {
+    const cli = createCLI({ name: "test" });
+    const tty = createMockTTY();
+    const spinner = progress.spinner({ label: "outside", stderr: tty });
+    cli.command("noop").action(() => {});
+    await cli.exec(["noop"]);
+    spinner.succeed("outside done");
+    expect(stripAnsi(tty.getOutput())).toContain("outside done");
   });
 });

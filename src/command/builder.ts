@@ -1,4 +1,4 @@
-import { usageError } from "../errors.js";
+import { describeReceived, usageError } from "../errors.js";
 import { coerceOptionValue } from "../option/resolver.js";
 import type {
   Action,
@@ -22,6 +22,20 @@ import {
 } from "./parser.js";
 import type { CommandRegistry } from "./registry.js";
 
+/** Throws the `TypeError` for a builder argument of the wrong type, in Node's message form. */
+function rejectArgument(name: string, method: string, expectation: string, value: unknown): never {
+  throw usageError(
+    "type",
+    "ERR_INVALID_ARG_TYPE",
+    `The "${name}" argument of CommandBuilder.${method}() must be ${expectation}. Received ${describeReceived(value)}`,
+  );
+}
+
+/** Rejects a handler argument that is not a function. */
+function checkHandler(value: unknown, method: string): void {
+  if (typeof value !== "function") rejectArgument("fn", method, "a function", value);
+}
+
 /**
  * The builder `command()` returns for a definition string: typed arguments and
  * no options yet for a literal, untyped records otherwise.
@@ -37,6 +51,12 @@ export type CommandBuilderFor<D extends string> = string extends D
  * and are chained to configure the command incrementally. `A` and `O` are the
  * types of `ctx.args` and `ctx.options` the handlers receive; each `.option()`
  * adds its key to `O`.
+ *
+ * Setters are named by the part of the definition they supply (`action`,
+ * `completer`, `validate`); only a reaction to an event that reaches a running
+ * command from outside is named `on*` (`onCancel`). A setter given an argument
+ * of the wrong type throws a `TypeError` (`ERR_INVALID_ARG_TYPE`), and any
+ * setter on a removed command throws `ERR_COMMAND_REMOVED`.
  *
  * @example
  * ```ts
@@ -71,6 +91,13 @@ export class CommandBuilder<
     definitionStr: D,
     parentPath: string[] = [],
   ): CommandBuilderFor<D> {
+    if (typeof definitionStr !== "string") {
+      throw usageError(
+        "type",
+        "ERR_INVALID_ARG_TYPE",
+        `The "definition" argument of command() must be a string. Received ${describeReceived(definitionStr)}`,
+      );
+    }
     return new CommandBuilder(registry, definitionStr, parentPath) as CommandBuilderFor<D>;
   }
 
@@ -109,6 +136,7 @@ export class CommandBuilder<
    * @returns This builder instance for chaining.
    */
   description(text: string): this {
+    if (typeof text !== "string") rejectArgument("text", "description", "a string", text);
     this.assertRegistered();
     this.definition.description = text;
     return this;
@@ -122,6 +150,7 @@ export class CommandBuilder<
    * @returns This builder instance for chaining.
    */
   hidden(hidden = true): this {
+    if (typeof hidden !== "boolean") rejectArgument("hidden", "hidden", "a boolean", hidden);
     this.assertRegistered();
     this.definition.hidden = hidden;
     return this;
@@ -356,8 +385,10 @@ export class CommandBuilder<
    *
    * @param fn - The async (or sync) function to run when the command matches.
    * @returns This builder instance for chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `fn` is not a function.
    */
   action(fn: Action<A, O>): this {
+    checkHandler(fn, "action");
     this.assertRegistered();
     if (this.definition.argDefs.length > 0 && this.definition.subcommands.size > 0) {
       process.emitWarning(
@@ -383,8 +414,16 @@ export class CommandBuilder<
    *
    * @param fnOrList - The candidates, or the function that returns them.
    * @returns This builder instance for chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `fnOrList` is neither a
+   *   function nor an array of strings.
    */
   completer(fnOrList: readonly string[] | Completer): this {
+    if (
+      typeof fnOrList !== "function" &&
+      !(Array.isArray(fnOrList) && fnOrList.every((item) => typeof item === "string"))
+    ) {
+      rejectArgument("fnOrList", "completer", "a function or an array of strings", fnOrList);
+    }
     this.assertRegistered();
     this.definition.completer = fnOrList;
     return this;
@@ -394,17 +433,31 @@ export class CommandBuilder<
    * Adds one or more aliases for this command.
    * Repeated call: adds to the existing aliases; duplicates are ignored.
    *
-   * @param names - Alias names that can be used to invoke this command.
+   * @param names - Alias names that can be used to invoke this command. Each
+   *   follows the command name rule: ASCII letters and digits in parts joined
+   *   by single dashes.
    * @returns This builder instance for chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when a name is not a string.
+   * @throws {Error} `ERR_INVALID_DEFINITION` when a name breaks the name rule.
    * @throws {Error} `ERR_DEFINITION_CONFLICT` when an alias names another command
    *   or another command's alias at the same level.
    */
   alias(...names: readonly string[]): this {
+    for (const name of names) {
+      if (typeof name !== "string") rejectArgument("names", "alias", "strings", name);
+      if (!NAME_PATTERN.test(name)) {
+        throw usageError(
+          "state",
+          "ERR_INVALID_DEFINITION",
+          `Invalid command alias ${JSON.stringify(name)}: use letters and digits joined by single dashes`,
+        );
+      }
+    }
     this.assertRegistered();
     const aliases = [...(this.definition.aliases ?? [])];
     // Deduplicate against existing aliases and the command's own name.
     for (const name of names) {
-      if (name && name !== this.definition.name && !aliases.includes(name)) {
+      if (name !== this.definition.name && !aliases.includes(name)) {
         aliases.push(name);
       }
     }
@@ -421,8 +474,10 @@ export class CommandBuilder<
    *
    * @param fn - The validation function.
    * @returns This builder instance for chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `fn` is not a function.
    */
   validate(fn: CommandValidator<A, O>): this {
+    checkHandler(fn, "validate");
     this.assertRegistered();
     this.definition.validate = fn as CommandValidator;
     return this;
@@ -436,8 +491,10 @@ export class CommandBuilder<
    *
    * @param fn - The cancel handler function.
    * @returns This builder instance for chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `fn` is not a function.
    */
   onCancel(fn: CancelHandler<A, O>): this {
+    checkHandler(fn, "onCancel");
     this.assertRegistered();
     this.definition.cancelHandler = fn as CancelHandler;
     return this;
@@ -463,7 +520,9 @@ export class CommandBuilder<
    *
    * @param definition - The definition string for the subcommand (e.g., `"list [filter]"`).
    * @returns A new {@link CommandBuilder} for configuring the subcommand.
-   * @throws {Error} `ERR_INVALID_DEFINITION` for a malformed definition string.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `definition` is not a string.
+   * @throws {Error} `ERR_INVALID_DEFINITION` for a malformed definition string
+   *   or a name outside the name rule.
    */
   command<D extends string>(definition: D): CommandBuilderFor<D> {
     this.assertRegistered();

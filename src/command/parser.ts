@@ -1,4 +1,10 @@
-import { InvalidOptionError, ParseError, UnknownOptionError, usageError } from "../errors.js";
+import {
+  describeReceived,
+  InvalidOptionError,
+  ParseError,
+  UnknownOptionError,
+  usageError,
+} from "../errors.js";
 import type { ArgDef, CommandDefinition, OptionDef, ParseResult } from "../types.js";
 import type { CommandRegistry } from "./registry.js";
 
@@ -303,15 +309,29 @@ function splitAtPipes(input: string): string[] {
 }
 
 /**
- * Tokenizes a raw input string into an array of tokens.
- *
- * Handles single quotes, double quotes, and backslash escaping.
- * Whitespace outside of quotes is used as the delimiter.
+ * Splits one command, without a pipeline, into argv tokens: single quotes,
+ * double quotes and backslash escapes, delimited by unquoted whitespace. A `|`
+ * is an ordinary character here, while `CLI.execLine()` splits a line at an
+ * unquoted `|` first, so `exec(tokenize(line))` differs from `execLine(line)`
+ * when the line contains one.
  *
  * @param input - The raw input string to tokenize.
- * @returns An array of parsed tokens.
+ * @returns The tokens.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `input` is not a string.
+ * @throws {ParseError} `PARSE_FAILED` for an unclosed quote.
+ * @example
+ * ```ts
+ * tokenize(`deploy "my app" --force`); // ["deploy", "my app", "--force"]
+ * ```
  */
-export function tokenize(input: string): string[] {
+export function tokenize(input: string): readonly string[] {
+  if (typeof input !== "string") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "input" argument of tokenize() must be a string. Received ${describeReceived(input)}`,
+    );
+  }
   const { words, openQuote } = scanWords(input);
   if (openQuote) {
     throw new ParseError(`Unclosed ${openQuote} quote in input`, { quote: openQuote });
@@ -351,6 +371,13 @@ export function parseDefinitionString(definition: string): {
           "state",
           "ERR_INVALID_DEFINITION",
           `Invalid command definition: command name "${token}" cannot follow an argument in "${definition}"`,
+        );
+      }
+      if (!NAME_PATTERN.test(token)) {
+        throw usageError(
+          "state",
+          "ERR_INVALID_DEFINITION",
+          `Invalid command definition: command name ${JSON.stringify(token)} must be letters and digits joined by single dashes`,
         );
       }
       names.push(token);
@@ -519,7 +546,7 @@ export function parse(
 ): ParseResult {
   if (typeof input === "string") assertNoRedirection(input);
   const rawInput = typeof input === "string" ? input : input.join(" ");
-  const tokens = typeof input === "string" ? tokenize(input) : [...input];
+  const tokens = typeof input === "string" ? [...tokenize(input)] : [...input];
   const rawArgv = typeof input === "string" ? null : [...input];
 
   if (tokens.length === 0) {

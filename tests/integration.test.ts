@@ -266,6 +266,7 @@ describe("createCLI option validation", () => {
   it.each([
     ["~", homedir()],
     ["~/history", join(homedir(), "history")],
+    ["~\\history", join(homedir(), "history")],
     ["~other/history", "~other/history"],
     ["/var/tmp/~/history", "/var/tmp/~/history"],
   ])("resolves historyFile %s to %s", (historyFile, expected) => {

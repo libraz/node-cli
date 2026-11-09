@@ -3,7 +3,14 @@ import { join } from "node:path";
 import { CommandBuilder, type CommandBuilderFor } from "./command/builder.js";
 import { CommandRegistry, visibleSubcommands } from "./command/registry.js";
 import { CommandRouter } from "./command/router.js";
-import { CommandNotFoundError, presentError, usageError } from "./errors.js";
+import {
+  CancelledError,
+  CommandNotFoundError,
+  describeReceived,
+  formatErrorMessage,
+  presentError,
+  usageError,
+} from "./errors.js";
 import { HelpGenerator } from "./help/generator.js";
 import { isTTY } from "./output/color.js";
 import { isShellCommand, SHELL_COMMANDS } from "./shell/builtins.js";
@@ -18,22 +25,35 @@ import type {
   StdioOptions,
 } from "./types.js";
 
+/** Throws the usage error for one rejected argument or option, in Node's message form. */
+function reject(
+  kind: "type" | "range",
+  name: string,
+  noun: "argument" | "option",
+  subject: string,
+  expectation: string,
+  value: unknown,
+): never {
+  throw usageError(
+    kind,
+    kind === "type" ? "ERR_INVALID_ARG_TYPE" : "ERR_INVALID_ARG_VALUE",
+    `The "${name}" ${noun} of ${subject} must be ${expectation}. Received ${describeReceived(value, kind)}`,
+  );
+}
+
+/** Rejects a callback argument that is not a function. */
+function checkFunction(value: unknown, name: string, subject: string): void {
+  if (typeof value !== "function") reject("type", name, "argument", subject, "a function", value);
+}
+
 /** Validates `historySize`, returning the default when it is omitted. */
 function checkHistorySize(value: unknown): number {
   if (value === undefined) return 1000;
   if (typeof value !== "number") {
-    throw usageError(
-      "type",
-      "ERR_INVALID_ARG_TYPE",
-      `The "historySize" option must be a number. Received ${describeValue(value)}`,
-    );
+    reject("type", "historySize", "option", "createCLI()", "a number", value);
   }
   if (!Number.isSafeInteger(value) || value < 0) {
-    throw usageError(
-      "range",
-      "ERR_INVALID_ARG_VALUE",
-      `The "historySize" option must be a non-negative safe integer. Received ${value}`,
-    );
+    reject("range", "historySize", "option", "createCLI()", "a non-negative safe integer", value);
   }
   return value;
 }
@@ -41,77 +61,75 @@ function checkHistorySize(value: unknown): number {
 /** Validates `historyFilter`. */
 function checkHistoryFilter(value: unknown): HistoryFilter | undefined {
   if (value === undefined || typeof value === "function") return value as HistoryFilter | undefined;
-  throw usageError(
-    "type",
-    "ERR_INVALID_ARG_TYPE",
-    `The "historyFilter" option must be a function. Received ${describeValue(value)}`,
-  );
+  return reject("type", "historyFilter", "option", "createCLI()", "a function", value);
 }
 
-/** Validates `historyFile` and expands a lone `~` or a leading `~/` to the home directory. */
+/** Validates `historyFile` and expands a lone `~` or a leading `~/` or `~\` to the home directory. */
 function resolveHistoryFile(value: unknown, name: string): string {
   if (value === undefined) return join(homedir(), `.${name}_history`);
   if (typeof value !== "string" || value === "") {
-    throw usageError(
-      "type",
-      "ERR_INVALID_ARG_TYPE",
-      `The "historyFile" option must be a non-empty string. Received ${describeValue(value)}`,
-    );
+    reject("type", "historyFile", "option", "createCLI()", "a non-empty string", value);
   }
   if (value === "~") return homedir();
-  if (value.startsWith("~/")) return join(homedir(), value.slice(2));
+  if (value.startsWith("~/") || value.startsWith("~\\")) return join(homedir(), value.slice(2));
   return value;
 }
 
 /** Rejects argv that is not a string array, before any of it is executed. */
-function checkArgv(name: string, value: unknown): void {
+function checkArgv(value: unknown, subject: string): void {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
-    throw usageError(
-      "type",
-      "ERR_INVALID_ARG_TYPE",
-      `The "${name}" argument must be an array of strings. Received ${describeValue(value)}`,
-    );
+    reject("type", "argv", "argument", subject, "an array of strings", value);
   }
 }
 
 /** Rejects a command line that is not a string, before any of it is executed. */
 function checkLine(value: unknown): void {
   if (typeof value !== "string") {
-    throw usageError(
-      "type",
-      "ERR_INVALID_ARG_TYPE",
-      `The "line" argument must be a string. Received ${describeValue(value)}`,
-    );
+    reject("type", "line", "argument", "cli.execLine()", "a string", value);
   }
+}
+
+/** Rejects stream and signal options of the wrong shape, before anything is executed. */
+function checkStdioOptions(options: unknown, subject: string): void {
+  if (options === undefined) return;
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    reject("type", "options", "argument", subject, "an object", options);
+  }
+  const { stdin, stdout, stderr, signal } = options as Record<string, unknown>;
+  if (stdin !== undefined && stdin !== null && !hasMethod(stdin, "on")) {
+    reject("type", "stdin", "option", subject, "a readable stream or null", stdin);
+  }
+  for (const [name, value] of [
+    ["stdout", stdout],
+    ["stderr", stderr],
+  ] as const) {
+    if (value !== undefined && !hasMethod(value, "write")) {
+      reject("type", name, "option", subject, "a writable stream", value);
+    }
+  }
+  if (signal !== undefined && !(signal instanceof AbortSignal)) {
+    reject("type", "signal", "option", subject, "an AbortSignal", signal);
+  }
+}
+
+/** True when `value` is an object with a method of that name. */
+function hasMethod(value: unknown, name: string): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>)[name] === "function"
+  );
 }
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Validates the application `name`, which names the help header and the history file. */
 function checkName(value: unknown): string {
-  if (typeof value !== "string") {
-    throw usageError(
-      "type",
-      "ERR_INVALID_ARG_TYPE",
-      `The "name" option must be a string. Received ${describeValue(value)}`,
-    );
-  }
+  if (typeof value !== "string") reject("type", "name", "option", "createCLI()", "a string", value);
   if (!NAME_PATTERN.test(value)) {
-    throw usageError(
-      "range",
-      "ERR_INVALID_ARG_VALUE",
-      `The "name" option must match ${NAME_PATTERN}. Received ${JSON.stringify(value)}`,
-    );
+    reject("range", "name", "option", "createCLI()", `a string matching ${NAME_PATTERN}`, value);
   }
   return value;
-}
-
-/** Renders a rejected value for an error message. */
-function describeValue(value: unknown): string {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "an array with a non-string element";
-  if (typeof value === "string") return value === "" ? "an empty string" : "type string";
-  return `type ${typeof value}`;
 }
 
 /** The exit code the process would end with now. */
@@ -151,15 +169,18 @@ export class CLI {
    * Creates a new CLI instance. Use {@link createCLI}; the class is exported as
    * a type only.
    * @param options - Configuration options for the CLI application.
-   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a non-string `name`, a
-   *   non-number `historySize`, a non-function `historyFilter`, or an empty or
-   *   non-string `historyFile`.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a non-object `options`, a
+   *   non-string `name`, a non-number `historySize`, a non-function
+   *   `historyFilter`, or an empty or non-string `historyFile`.
    * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `name` is empty or does
    *   not match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`, or `historySize` is not a
    *   non-negative safe integer.
    */
   constructor(options: CLIOptions) {
-    this.name = checkName(options?.name);
+    if (typeof options !== "object" || options === null) {
+      reject("type", "options", "argument", "createCLI()", "an object", options);
+    }
+    this.name = checkName(options.name);
     this.version = options.version;
     this.promptStr = options.prompt ?? "> ";
     this.bannerStr = options.banner;
@@ -182,20 +203,38 @@ export class CLI {
   }
 
   /**
-   * Registers a new command with the given definition string. A literal
-   * definition types `ctx.args` from its argument tokens.
-   * @param definition - The command definition (e.g., "greet <name> [title]").
+   * Registers a command with the given definition string and returns its
+   * builder. A literal definition types `ctx.args` from its argument tokens.
+   * The same path merges into the existing command: later declarations add to
+   * or replace earlier ones, and the returned builder types only what is
+   * declared through it.
+   * @param definition - The command definition: the command path, then its
+   *   arguments (`<x>` required, `[x]` optional, `<...x>` variadic). Each name
+   *   is ASCII letters and digits in parts joined by single dashes.
    * @returns A CommandBuilder instance for further configuration.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `definition` is not a string.
+   * @throws {Error} `ERR_INVALID_DEFINITION` for a malformed definition or a
+   *   command or argument name outside the name rule.
+   * @example
+   * ```ts
+   * cli.command("greet <name> [title]").action((ctx) => {
+   *   ctx.stdout.write(`Hello, ${ctx.args.title ?? ""} ${ctx.args.name}\n`);
+   * });
+   * ```
    */
   command<D extends string>(definition: D): CommandBuilderFor<D> {
     return CommandBuilder.create(this.registry, definition);
   }
 
   /**
-   * Registers an event listener for a lifecycle event.
-   * @param event - The event name (e.g., "beforeExecute", "afterExecute", "commandError", "exit").
+   * Registers an event listener for a lifecycle event. A repeated call adds
+   * another listener.
+   * @param event - One of `beforeExecute`, `afterExecute`, `commandError`,
+   *   `error` or `exit`.
    * @param handler - The handler function.
    * @returns The CLI instance for method chaining.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown event name.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `handler` is not a function.
    */
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this {
     this.router.on(event, handler);
@@ -204,9 +243,11 @@ export class CLI {
 
   /**
    * Removes an event listener for a lifecycle event.
-   * @param event - The event name.
+   * @param event - One of the event names {@link CLI.on} accepts.
    * @param handler - The handler function to remove.
    * @returns The CLI instance for method chaining.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown event name.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `handler` is not a function.
    */
   off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this {
     this.router.off(event, handler);
@@ -218,8 +259,10 @@ export class CLI {
    * repeated call replaces the previous handler.
    * @param handler - The fallback handler function.
    * @returns The CLI instance for method chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `handler` is not a function.
    */
   fallback(handler: FallbackHandler): this {
+    checkFunction(handler, "handler", "cli.fallback()");
     this.router.setCatchHandler(handler);
     return this;
   }
@@ -231,12 +274,18 @@ export class CLI {
    * inside this call, and a synchronous throw propagates to the caller as is.
    * Registrations made before the throw stay in place, and the instance remains
    * usable. A body that returns a promise, or one registered behind a pending
-   * plugin, is queued and awaited before the first command runs; an
-   * asynchronous failure makes every later `start()`, `exec()` and `use()` fail.
+   * plugin, is queued and awaited before the first command runs. An
+   * asynchronous failure is wrapped once in an `Error` with code
+   * `ERR_PLUGIN_FAILED` and the original value as `cause`, fires `error` once,
+   * and every later `start()`, `exec()`, `execLine()` and `use()` fails with
+   * that same error.
    * @param plugin - A function that receives a PluginContext and may register commands, events, etc.
    * @returns The CLI instance for method chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `plugin` is not a function.
+   * @throws {Error} `ERR_PLUGIN_FAILED` after an asynchronous plugin has failed.
    */
   use(plugin: Plugin): this {
+    checkFunction(plugin, "plugin", "cli.use()");
     if (this.pluginInitializationFailed) throw this.pluginInitializationError;
     const context: PluginContext = {
       command: (definition) => this.command(definition),
@@ -292,10 +341,17 @@ export class CLI {
           if (failure) throw (failure as PromiseRejectedResult).reason;
         }
       })()
-        .catch((error) => {
-          this.pluginInitializationError = error;
+        .catch(async (cause: unknown) => {
+          const failure = usageError(
+            "state",
+            "ERR_PLUGIN_FAILED",
+            `Plugin initialization failed: ${formatErrorMessage(cause)}`,
+            { cause },
+          );
+          this.pluginInitializationError = failure;
           this.pluginInitializationFailed = true;
-          throw error;
+          await this.router.emit("error", failure);
+          throw failure;
         })
         .finally(() => {
           // Keep the (rejected) promise cached on failure so the sticky error is
@@ -313,17 +369,26 @@ export class CLI {
    * character, so untrusted data belongs here rather than in a command line
    * for {@link CLI.execLine}. `[]` resolves without doing anything. A failure
    * rejects the returned promise.
+   *
+   * Cancellation goes through `options.signal` only; the process's SIGINT is
+   * left to the host. An already-aborted signal rejects before anything runs,
+   * including pending plugins. A command cancelled while it runs rejects with
+   * `CancelledError` and fires neither `commandError` nor `error`; one that
+   * ignores the abort and finishes resolves.
    * @param argv - The argv elements: the command path, then its arguments.
    * @param options - Optional input/output streams and cancellation signal.
    * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `argv` is not an array of
-   *   strings (a command line string goes to `execLine`).
+   *   strings (a command line string goes to `execLine`), or a stream or the
+   *   signal in `options` has the wrong type.
+   * @throws {CancelledError} `CANCELLED` when the signal aborts the execution.
    * @example
    * ```ts
    * await cli.exec(["deploy", userInput, "--force"]);
    * ```
    */
   async exec(argv: readonly string[], options: StdioOptions = {}): Promise<void> {
-    checkArgv("argv", argv);
+    checkArgv(argv, "cli.exec()");
+    checkStdioOptions(options, "cli.exec()");
     await this.run(argv, options);
   }
 
@@ -333,10 +398,15 @@ export class CLI {
    * backslashes) and split at `|` into a pipeline. `""` resolves without doing
    * anything. A failure rejects the returned promise. Untrusted data must not
    * be interpolated into the line (a `|` in it starts another command); pass
-   * it through `exec([...])` instead.
+   * it through `exec([...])` instead. Cancellation behaves as for
+   * {@link CLI.exec}; every stage of a pipeline shares the signal.
    * @param line - The command line.
    * @param options - Optional input/output streams and cancellation signal.
-   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `line` is not a string.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `line` is not a string, or
+   *   a stream or the signal in `options` has the wrong type.
+   * @throws {ParseError} `PARSE_FAILED` for an unclosed quote, unless a
+   *   fallback handler takes the line.
+   * @throws {CancelledError} `CANCELLED` when the signal aborts the execution.
    * @example
    * ```ts
    * await cli.execLine('greet "Ada Lovelace" | upper');
@@ -344,15 +414,15 @@ export class CLI {
    */
   async execLine(line: string, options: StdioOptions = {}): Promise<void> {
     checkLine(line);
+    checkStdioOptions(options, "cli.execLine()");
     await this.run(line, options);
   }
 
   private async run(input: string | readonly string[], options: StdioOptions): Promise<void> {
-    await this.drainPendingPlugins();
     const { stdin = null, stdout = process.stdout, stderr = process.stderr, signal } = options;
-    await this.router.runWithSigintCancel(async () => {
-      await this.router.execute(input, { stdin, stdout, stderr, signal });
-    });
+    if (signal?.aborted) throw new CancelledError({ cause: signal.reason });
+    await this.drainPendingPlugins();
+    await this.router.execute(input, { stdin, stdout, stderr, signal });
   }
 
   /**
@@ -365,9 +435,13 @@ export class CLI {
    *   interactive session, the value `process.exitCode` holds then (0 if unset).
    * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `argv` is not an array of strings.
    * @throws {Error} `ERR_ALREADY_STARTED` when called a second time.
+   * @example
+   * ```ts
+   * await createCLI({ name: "mytool" }).start();
+   * ```
    */
   async start(argv?: readonly string[]): Promise<number> {
-    if (argv !== undefined) checkArgv("argv", argv);
+    if (argv !== undefined) checkArgv(argv, "cli.start()");
     if (this.started) {
       throw usageError(
         "state",
@@ -428,14 +502,7 @@ export class CLI {
       }
     } else if (isTTY(process.stdin) && isTTY(process.stdout)) {
       // Interactive shell mode
-      let banner: string;
-      if (this.bannerStr !== undefined) {
-        banner = this.bannerStr;
-      } else if (this.name) {
-        banner = this.version ? `${this.name} v${this.version}` : this.name;
-      } else {
-        banner = "";
-      }
+      const banner = this.bannerStr ?? (this.version ? `${this.name} v${this.version}` : this.name);
 
       const shell = new InteractiveShell({
         router: this.router,
@@ -498,7 +565,7 @@ export class CLI {
         const commandParts = ctx.args.command as string[] | undefined;
 
         if (!commandParts || commandParts.length === 0) {
-          ctx.stdout.write(`${helpGenerator.generateIndex()}\n`);
+          ctx.stdout.write(`${helpGenerator.generateIndex({ interactive: ctx.shell != null })}\n`);
           return;
         }
 

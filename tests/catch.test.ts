@@ -98,7 +98,7 @@ describe("catch/fallback command", () => {
     });
 
     await cli.execLine("unknowncmd", { stdin, stdout, stderr, signal: controller.signal });
-    expect(received).toEqual({ stdin, stdout, stderr, signal: controller.signal });
+    expect(received).toEqual({ stdin, stdout, stderr, signal: controller.signal, rawArgv: null });
   });
 
   it("gives the fallback a live signal when exec supplies none", async () => {
@@ -112,5 +112,25 @@ describe("catch/fallback command", () => {
     expect(received?.stdin).toBeNull();
     expect(received?.signal).toBeInstanceOf(AbortSignal);
     expect(received?.signal.aborted).toBe(false);
+  });
+});
+
+describe("fallback rawArgv", () => {
+  it("hands the whole argv to the fallback, also for an unknown nested child", async () => {
+    const cli = createCLI({ name: "test" });
+    cli.command("db migrate").action(() => {});
+    const seen: { input: string; rawArgv: readonly string[] | null }[] = [];
+    cli.fallback((input, ctx) => {
+      seen.push({ input, rawArgv: ctx.rawArgv });
+    });
+
+    await cli.exec(["say", "two words", "--x"]);
+    await cli.exec(["db", "nope", "a b"]);
+    await cli.execLine("say 'two words'");
+    expect(seen).toEqual([
+      { input: "say two words --x", rawArgv: ["say", "two words", "--x"] },
+      { input: "db nope a b", rawArgv: ["db", "nope", "a b"] },
+      { input: "say 'two words'", rawArgv: null },
+    ]);
   });
 });
