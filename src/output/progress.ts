@@ -61,7 +61,7 @@ export interface BarState {
    * been made, and 0 once complete. Guard it with `Number.isFinite` before formatting.
    */
   readonly etaMs: number;
-  /** Current rate of progress (units per second). */
+  /** Average units per second since the bar was created; 0 before any time has elapsed. */
   readonly ratePerSecond: number;
 }
 
@@ -69,7 +69,7 @@ export interface BarState {
  * Interface for controlling a progress bar instance.
  *
  * The bar starts drawing when it is created. Every terminal verb ends it, and
- * calling any method afterwards does nothing.
+ * calling any method afterwards does nothing; arguments are still validated.
  */
 export interface Bar {
   /**
@@ -92,11 +92,23 @@ export interface Bar {
    * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `label` is not a string.
    */
   setLabel(label: string): void;
-  /** Completes the bar, replacing it with a success line of `message ?? label` (`✔`, or `[OK]` where symbols cannot be drawn). */
+  /**
+   * Completes the bar, replacing it with a success line of `message ?? label` (`✔`, or `[OK]` where symbols cannot be drawn).
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   succeed(message?: string): void;
-  /** Stops the bar at its current position and replaces it with a failure line of `message ?? label` (`✖`, or `[ERROR]`). */
+  /**
+   * Stops the bar at its current position and replaces it with a failure line of `message ?? label` (`✖`, or `[ERROR]`).
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   fail(message?: string): void;
-  /** Stops the bar at its current position and replaces it with a warning line of `message ?? label` (`⚠`, or `[WARN]`). */
+  /**
+   * Stops the bar at its current position and replaces it with a warning line of `message ?? label` (`⚠`, or `[WARN]`).
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   warn(message?: string): void;
   /**
    * Leaves the last frame in place and ends the line. Writes nothing on a stream
@@ -105,7 +117,7 @@ export interface Bar {
    * skip the row, and the group keeps drawing the others.
    */
   stop(): void;
-  /** Releases the bar when leaving a `using` scope. */
+  /** Same as `stop()`: called when a `using` scope is left; leaves the last frame and writes nothing on a stream that cannot animate. Call succeed/fail/warn first for a result line. */
   [Symbol.dispose](): void;
 }
 
@@ -131,24 +143,36 @@ export interface SpinnerOptions {
  * Interface for controlling a spinner instance.
  *
  * The spinner starts animating when it is created. Every terminal verb ends it,
- * and calling any method afterwards does nothing.
+ * and calling any method afterwards does nothing; arguments are still validated.
  */
 export interface Spinner {
   /**
-   * Replaces the label text shown next to the spinner.
+   * Replaces the label text shown next to the spinner; it also becomes the default result message.
    *
    * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `label` is not a string.
    */
   setLabel(label: string): void;
-  /** Replaces the spinner with a success line of `message ?? label` (`✔`, or `[OK]` where symbols cannot be drawn). */
+  /**
+   * Replaces the spinner with a success line of `message ?? label` (`✔`, or `[OK]` where symbols cannot be drawn).
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   succeed(message?: string): void;
-  /** Replaces the spinner with a failure line of `message ?? label` (`✖`, or `[ERROR]`). */
+  /**
+   * Replaces the spinner with a failure line of `message ?? label` (`✖`, or `[ERROR]`).
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   fail(message?: string): void;
-  /** Replaces the spinner with a warning line of `message ?? label` (`⚠`, or `[WARN]`). */
+  /**
+   * Replaces the spinner with a warning line of `message ?? label` (`⚠`, or `[WARN]`).
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   warn(message?: string): void;
   /** Leaves the last frame in place and ends the line. Writes nothing on a stream that cannot animate. */
   stop(): void;
-  /** Releases the spinner when leaving a `using` scope. */
+  /** Same as `stop()`: called when a `using` scope is left; leaves the last frame and writes nothing on a stream that cannot animate. Call succeed/fail/warn first for a result line. */
   [Symbol.dispose](): void;
 }
 
@@ -177,15 +201,27 @@ export interface MultiBar {
    * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an out-of-range option.
    */
   add(options: Omit<BarOptions, "stderr">): Bar;
-  /** Completes every unfinished bar with a success mark and closes the group. */
+  /**
+   * Completes every unfinished bar with a success mark and closes the group.
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   succeed(message?: string): void;
-  /** Ends every unfinished bar with a failure mark and closes the group. */
+  /**
+   * Ends every unfinished bar with a failure mark and closes the group.
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   fail(message?: string): void;
-  /** Ends every unfinished bar with a warning mark and closes the group. */
+  /**
+   * Ends every unfinished bar with a warning mark and closes the group.
+   *
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` if `message` is neither undefined nor a string.
+   */
   warn(message?: string): void;
   /** Leaves the last frame in place and ends the line. Writes nothing on a stream that cannot animate. */
   stop(): void;
-  /** Releases the multi-bar when leaving a `using` scope. */
+  /** Same as `stop()`: called when a `using` scope is left; leaves the last frame and writes nothing on a stream that cannot animate. Call succeed/fail/warn first for a result line. */
   [Symbol.dispose](): void;
 }
 
@@ -632,6 +668,14 @@ function checkLabelArg(value: unknown, subject: string): string {
   return value;
 }
 
+/** Checks the optional message passed to a terminal verb, before any state changes. */
+function checkMessageArg(value: unknown, subject: string): string | undefined {
+  if (value !== undefined && typeof value !== "string") {
+    reject("type", subject, "message", "argument", "a string", value);
+  }
+  return value;
+}
+
 /** Checks a number passed to a handle's `update` or `tick`; `NaN` is accepted and ignored later. */
 function checkNumberArg(value: unknown, name: string, subject: string): number {
   if (typeof value !== "number") reject("type", subject, name, "argument", "a number", value);
@@ -812,9 +856,9 @@ function createBar(options: BarOptions): Bar {
       resolved.label = next;
       if (tty) render();
     },
-    succeed: (message) => end("succeed", message),
-    fail: (message) => end("fail", message),
-    warn: (message) => end("warn", message),
+    succeed: (message) => end("succeed", checkMessageArg(message, "Bar.succeed()")),
+    fail: (message) => end("fail", checkMessageArg(message, "Bar.fail()")),
+    warn: (message) => end("warn", checkMessageArg(message, "Bar.warn()")),
     stop,
     [Symbol.dispose]: stop,
   };
@@ -902,9 +946,9 @@ function createSpinner(options: SpinnerOptions = {}): Spinner {
     setLabel(newLabel: string) {
       label = checkLabelArg(newLabel, "Spinner.setLabel()");
     },
-    succeed: (message) => end("succeed", message),
-    fail: (message) => end("fail", message),
-    warn: (message) => end("warn", message),
+    succeed: (message) => end("succeed", checkMessageArg(message, "Spinner.succeed()")),
+    fail: (message) => end("fail", checkMessageArg(message, "Spinner.fail()")),
+    warn: (message) => end("warn", checkMessageArg(message, "Spinner.warn()")),
     stop,
     [Symbol.dispose]: stop,
   };
@@ -1052,18 +1096,21 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
           if (tty) renderAll();
         },
         succeed(message) {
+          const note = checkMessageArg(message, "Bar.succeed()");
           if (closed || entry.finished) return;
-          endEntry(entry, "succeed", message);
+          endEntry(entry, "succeed", note);
           if (tty) renderAll();
         },
         fail(message) {
+          const note = checkMessageArg(message, "Bar.fail()");
           if (closed || entry.finished) return;
-          endEntry(entry, "fail", message);
+          endEntry(entry, "fail", note);
           if (tty) renderAll();
         },
         warn(message) {
+          const note = checkMessageArg(message, "Bar.warn()");
           if (closed || entry.finished) return;
-          endEntry(entry, "warn", message);
+          endEntry(entry, "warn", note);
           if (tty) renderAll();
         },
         stop() {
@@ -1076,9 +1123,9 @@ function createMultiBar(options: MultiBarOptions = {}): MultiBar {
       return handle;
     },
 
-    succeed: (message) => endGroup("succeed", message),
-    fail: (message) => endGroup("fail", message),
-    warn: (message) => endGroup("warn", message),
+    succeed: (message) => endGroup("succeed", checkMessageArg(message, "MultiBar.succeed()")),
+    fail: (message) => endGroup("fail", checkMessageArg(message, "MultiBar.fail()")),
+    warn: (message) => endGroup("warn", checkMessageArg(message, "MultiBar.warn()")),
     stop,
     [Symbol.dispose]: stop,
   };
