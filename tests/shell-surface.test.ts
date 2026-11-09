@@ -66,6 +66,28 @@ describe("Shell methods", () => {
   });
 });
 
+describe("commands in the shell", () => {
+  restoreProcessStateAfterEach();
+
+  it("hands a command the shell's stdin, readable through prompt.text", async () => {
+    await withTerminal(async (io, historyFile) => {
+      const answers: string[] = [];
+      const cli = createCLI({ name: "app", historyFile });
+      cli.command("ask").action(async (ctx) => {
+        expect(ctx.stdin).toBe(process.stdin);
+        answers.push(await prompt.text("name?", ctx));
+      });
+      const running = cli.start([]);
+      io.stdin.write("ask\n");
+      await tick(60);
+      io.stdin.write("ada\n");
+      await vi.waitFor(() => expect(answers).toEqual(["ada"]));
+      io.stdin.end();
+      await running;
+    });
+  });
+});
+
 describe("mode in the shell", () => {
   restoreProcessStateAfterEach();
 

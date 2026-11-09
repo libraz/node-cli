@@ -48,7 +48,7 @@ export interface Shell {
   /** Changes the prompt; inside a mode the change applies after leaving it. */
   setPrompt(text: string): this;
   /** Enters a mode sub-REPL that routes every line to the mode's action. */
-  enterMode(config: ModeOptions): this;
+  enterMode(options: ModeOptions): this;
   /** Leaves the current mode and returns to the command prompt. */
   exitMode(): this;
   /** Ends the shell session after the current input. Terminal, so it returns nothing. */
@@ -359,6 +359,7 @@ export class InteractiveShell implements Shell {
             async () => {
               await this.router.execute(trimmed, {
                 shell: this,
+                stdin: process.stdin,
                 stdout: process.stdout,
                 stderr: process.stderr,
               });
@@ -468,16 +469,16 @@ export class InteractiveShell implements Shell {
    * While in a mode, all input is routed to the mode's action handler
    * instead of the command router.
    *
-   * @param config - The mode configuration.
+   * @param options - The mode options.
    * @returns The shell, so calls chain.
    */
-  enterMode(config: ModeOptions): this {
-    this.mode = config;
+  enterMode(options: ModeOptions): this {
+    this.mode = options;
     this.modeHistory = [];
-    if (config.banner) {
-      process.stdout.write(`${config.banner}\n`);
+    if (options.banner) {
+      process.stdout.write(`${options.banner}\n`);
     }
-    this.reader?.rl.setPrompt(config.prompt);
+    this.reader?.rl.setPrompt(options.prompt);
     return this;
   }
 
