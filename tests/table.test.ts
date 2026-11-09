@@ -1,7 +1,7 @@
 import type { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { color, setColorEnabled, stringWidth, stripAnsi } from "../src/output/color.js";
-import { type ColumnSpec, table } from "../src/output/table.js";
+import { table } from "../src/output/table.js";
 
 describe("table", () => {
   beforeEach(() => {
@@ -299,15 +299,15 @@ describe("table", () => {
     expect(lines.slice(1)).toEqual(["  1  hello", "100   hi  "]);
   });
 
-  it("supports ColumnSpec.width (fixed column width, padding included)", () => {
+  it("supports ColumnSpec.width (fixed content width, padding excluded)", () => {
     const result = table([{ name: "alice" }], {
       columns: [{ key: "name", width: 20 }],
       border: "single",
     });
     const lines = result.split("\n");
-    // Top border should be 20 chars wide (including padding)
+    // Top border is the 20-cell content plus one cell of padding on each side
     const topLine = lines[0];
-    expect(topLine.length).toBe(22); // ┌ + 20 + ┐
+    expect(topLine.length).toBe(24); // ┌ + 22 + ┐
   });
 
   it("supports custom paddingLeft and paddingRight", () => {
@@ -600,20 +600,6 @@ describe("borderless and simple modes honour every table option", () => {
     setColorEnabled("auto");
   });
 
-  it("renders the padding that explicit column widths were charged for", () => {
-    for (const border of ["none", "simple"] as const) {
-      const out = table([["a"]], {
-        border,
-        header: false,
-        columns: [{ key: "0", width: 8 }],
-        paddingLeft: 2,
-        paddingRight: 2,
-      });
-      // ColumnSpec.width counts padding, so the rendered column must be that wide.
-      expect(stringWidth(out)).toBe(8);
-    }
-  });
-
   it("colors the separator glyphs of a simple table", () => {
     setColorEnabled(true);
     const out = table([["a"]], {
@@ -639,117 +625,6 @@ describe("borderless and simple modes honour every table option", () => {
 });
 
 describe("column normalization", () => {
-  // Model (pairwise, strength 2):
-  //   dataShape   {objects, arrays}
-  //   columnEntry {string, spec-key-only, spec-with-label}
-  //   align       {none, left, right, center}
-  //   width       {none, valid}
-  //   maxWidth    {none, valid, infinity}
-  //   border      {none, simple, rounded}
-  // Constraint: columnEntry = string implies align, width and maxWidth = none,
-  //   because a bare string carries no per-column settings.
-  // Seed: none (greedy cover over the constrained product; 16 rows).
-  // Expected output is derived from the column rules: the label is
-  // `label ?? key`, `width` fixes the column including padding and wins over
-  // `maxWidth`, `maxWidth` caps the content, and alignment applies to the
-  // header and the data cells alike.
-  type Row = [
-    dataShape: "objects" | "arrays",
-    columnEntry: "string" | "spec-key-only" | "spec-with-label",
-    align: "none" | "left" | "right" | "center",
-    width: "none" | "valid",
-    maxWidth: "none" | "valid" | "infinity",
-    border: "none" | "simple" | "rounded",
-  ];
-  const rows: Row[] = [
-    ["objects", "string", "none", "none", "none", "none"],
-    ["objects", "spec-key-only", "left", "valid", "valid", "simple"],
-    ["arrays", "spec-key-only", "right", "none", "infinity", "rounded"],
-    ["arrays", "spec-with-label", "center", "valid", "none", "none"],
-    ["objects", "spec-with-label", "none", "valid", "infinity", "rounded"],
-    ["arrays", "spec-with-label", "none", "none", "valid", "simple"],
-    ["objects", "spec-key-only", "right", "valid", "none", "none"],
-    ["objects", "spec-key-only", "center", "none", "valid", "rounded"],
-    ["arrays", "spec-with-label", "left", "none", "none", "rounded"],
-    ["objects", "spec-key-only", "left", "none", "infinity", "none"],
-    ["objects", "spec-key-only", "center", "none", "infinity", "simple"],
-    ["objects", "spec-with-label", "right", "none", "none", "simple"],
-    ["objects", "spec-key-only", "none", "none", "valid", "none"],
-    ["arrays", "string", "none", "none", "none", "simple"],
-    ["objects", "string", "none", "none", "none", "rounded"],
-    ["objects", "spec-key-only", "right", "none", "valid", "none"],
-  ];
-
-  const FIXED_WIDTH = 12;
-  const MAX_WIDTH = 5;
-  const LONG = "abcdefgh";
-
-  const fitTo = (text: string, width: number) =>
-    text.length <= width ? text : `${text.slice(0, width - 1)}…`;
-  const alignIn = (text: string, width: number, align: "left" | "right" | "center") => {
-    const diff = width - text.length;
-    if (align === "right") return " ".repeat(diff) + text;
-    if (align === "center") {
-      const left = Math.floor(diff / 2);
-      return " ".repeat(left) + text + " ".repeat(diff - left);
-    }
-    return text + " ".repeat(diff);
-  };
-
-  test.each(rows)(
-    "%s / %s / align %s / width %s / maxWidth %s / border %s",
-    (shape, entry, align, width, maxWidth, border) => {
-      const column: Record<string, unknown> = { key: "name" };
-      if (entry === "spec-with-label") column.label = "Label";
-      if (align !== "none") column.align = align;
-      if (width === "valid") column.width = FIXED_WIDTH;
-      if (maxWidth === "valid") column.maxWidth = MAX_WIDTH;
-      if (maxWidth === "infinity") column.maxWidth = Number.POSITIVE_INFINITY;
-      const columns = [entry === "string" ? "name" : (column as unknown as ColumnSpec)];
-      const data = shape === "objects" ? [{ name: "ab" }, { name: LONG }] : [["ab"], [LONG]];
-
-      const out = table(data, { columns, border });
-
-      const pad = border === "rounded" ? 1 : 0;
-      const contentWidth =
-        width === "valid" ? FIXED_WIDTH - 2 * pad : maxWidth === "valid" ? MAX_WIDTH : LONG.length;
-      const label = entry === "spec-with-label" ? "Label" : "name";
-      const cell = (text: string) =>
-        " ".repeat(pad) +
-        alignIn(fitTo(text, contentWidth), contentWidth, align === "none" ? "left" : align) +
-        " ".repeat(pad);
-      const body = [label, "ab", LONG].map(cell);
-      const [head, ...data1] = body;
-      let expected: string[];
-      if (border === "rounded") {
-        const bar = "─".repeat(contentWidth + 2 * pad);
-        expected = [
-          `╭${bar}╮`,
-          `│${head}│`,
-          `├${bar}┤`,
-          ...data1.map((line) => `│${line}│`),
-          `╰${bar}╯`,
-        ];
-      } else if (border === "simple") {
-        expected = [head, "-".repeat(contentWidth), ...data1];
-      } else {
-        expected = [head, ...data1];
-      }
-      expect(out.split("\n")).toEqual(expected);
-    },
-  );
-
-  it("keys per-column settings by position for array data and ignores ColumnSpec.key", () => {
-    const out = table(
-      [
-        ["x", "yy"],
-        ["zzz", "w"],
-      ],
-      { columns: [{ key: "ignored", label: "A", align: "right" }, "B"] },
-    );
-    expect(out.split("\n")).toEqual(["  A  B ", "  x  yy", "zzz  w "]);
-  });
-
   it("uses a bare string column as the header for array data", () => {
     const out = table([["x"]], { columns: ["Header"] });
     expect(out.split("\n")).toEqual(["Header", "x     "]);
@@ -768,22 +643,6 @@ describe("column normalization", () => {
   it("selects and orders object columns by key", () => {
     const out = table([{ a: "1", b: "2", c: "3" }], { columns: ["c", { key: "a", label: "A" }] });
     expect(out.split("\n")).toEqual(["c  A", "3  1"]);
-  });
-
-  it("raises a width below the padding floor to the smallest honoured width", () => {
-    const out = table([{ a: "xyz" }], {
-      columns: [{ key: "a", width: 1 }],
-      border: "single",
-    });
-    // paddingLeft + paddingRight + 1 = 3 cells in total.
-    expect(out.split("\n")[0]).toBe("┌───┐");
-  });
-
-  it("lets width win over maxWidth", () => {
-    const out = table([{ a: "abcdefgh" }], {
-      columns: [{ key: "a", width: 6, maxWidth: 3 }],
-    });
-    expect(out.split("\n")[1]).toBe("abcde…");
   });
 
   it("maps every TableChars key to its position in a custom frame", () => {

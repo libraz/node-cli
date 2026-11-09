@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { usageError } from "../errors.js";
+import { describeReceived, usageError } from "../errors.js";
 import { guardCall, MAX_RENDER_WIDTH, ownValue } from "../guard.js";
 import {
   type ColorFn,
@@ -20,92 +20,127 @@ import {
  */
 export interface TableChars {
   /** Horizontal fill of the top edge. */
-  top?: string;
+  top?: string | undefined;
   /** Junction on the top edge between two columns. */
-  topMid?: string;
+  topMid?: string | undefined;
   /** Top-left corner. */
-  topLeft?: string;
+  topLeft?: string | undefined;
   /** Top-right corner. */
-  topRight?: string;
+  topRight?: string | undefined;
   /** Horizontal fill of the bottom edge. */
-  bottom?: string;
+  bottom?: string | undefined;
   /** Junction on the bottom edge between two columns. */
-  bottomMid?: string;
+  bottomMid?: string | undefined;
   /** Bottom-left corner. */
-  bottomLeft?: string;
+  bottomLeft?: string | undefined;
   /** Bottom-right corner. */
-  bottomRight?: string;
+  bottomRight?: string | undefined;
   /** Left edge of every row. */
-  left?: string;
+  left?: string | undefined;
   /** Left end of a separator line between rows. */
-  leftMid?: string;
+  leftMid?: string | undefined;
   /** Right edge of every row. */
-  right?: string;
+  right?: string | undefined;
   /** Right end of a separator line between rows. */
-  rightMid?: string;
+  rightMid?: string | undefined;
   /** Horizontal fill of a separator line between rows. */
-  horizontal?: string;
+  horizontal?: string | undefined;
   /** Crossing of a separator line and a column divider. */
-  cross?: string;
+  cross?: string | undefined;
   /** Divider between two columns within a row. */
-  vertical?: string;
+  vertical?: string | undefined;
 }
+
+/** Column settings shared by object rows and array rows. */
+interface ColumnSettings {
+  /** Header text. Defaults to the column's `key`, or an empty string when there is none. */
+  label?: string | undefined;
+  /** Text alignment of the header and the cells. Defaults to `"left"`. */
+  align?: "left" | "right" | "center" | undefined;
+  /**
+   * Fixed width of the column content, padding excluded, as a positive integer.
+   * Padding is added around it. When set, it wins over `maxWidth`.
+   */
+  width?: number | undefined;
+  /**
+   * Upper bound on the content width, padding excluded: a positive integer or
+   * `Infinity`. Defaults to no limit.
+   */
+  maxWidth?: number | undefined;
+}
+
+/** Names a column of rows of type `T`: any string for array rows, a property name for objects. */
+type ColumnName<T> = [T] extends [never]
+  ? string
+  : [T] extends [readonly unknown[]]
+    ? string
+    : keyof T & string;
 
 /**
  * Settings for one column, passed in {@link TableOptions.columns}.
+ *
+ * For object rows `key` names the property to read. Array rows are matched by
+ * position and have no key.
+ *
+ * @typeParam T - The row type; chosen by the `data` argument of {@link table}.
  */
-export interface ColumnSpec {
-  /** Object property to read for object data. Array data is matched by position and ignores it. */
-  key: string;
-  /** Header text. Defaults to `key`. */
-  label?: string;
-  /** Text alignment of the header and the cells. Defaults to `"left"`. */
-  align?: "left" | "right" | "center";
-  /**
-   * Fixed total width of the column, padding included, as a positive integer.
-   * Values below `paddingLeft + paddingRight + 1` render at that minimum. When
-   * set, it wins over `maxWidth`.
-   */
-  width?: number;
-  /** Upper bound on the content width, padding excluded: a positive integer or `Infinity`. */
-  maxWidth?: number;
-}
+export type ColumnSpec<T extends object = Record<string, unknown>> = ColumnSettings &
+  ([T] extends [readonly unknown[]] ? { key?: undefined } : { key: ColumnName<T> });
 
 /**
  * Options for configuring table rendering.
+ *
+ * @typeParam T - The row type; chosen by the `data` argument of {@link table}.
  */
-export interface TableOptions {
+export interface TableOptions<T extends object = Record<string, unknown>> {
   /**
-   * Columns to render, in order. For object data these select the properties; for
-   * array data they are matched by position and supplying them means row 0 is
-   * data rather than the header.
+   * Columns to render, in order. For object rows these select the properties; for
+   * array rows they are matched by position and supplying them means row 0 is
+   * data rather than the header. Defaults to every property of the objects, or
+   * every position of the arrays.
    */
-  columns?: readonly (string | ColumnSpec)[];
+  columns?: readonly (ColumnName<T> | ColumnSpec<T>)[] | undefined;
   /** Whether to display a header row. Defaults to true. */
-  header?: boolean;
-  /** Border style preset. Use "custom" with `chars` for full control. */
-  border?: "none" | "simple" | "rounded" | "single" | "double" | "custom";
-  /** Custom border characters. Implicitly sets border to "custom" if provided without border option. */
-  chars?: TableChars;
-  /** Style of the border glyphs, for example `"dim"` or `"cyan.bold"`. */
-  borderStyle?: StyleSpec;
-  /** Style of the header text, or `"none"` for plain text. Defaults to `"bold"`. */
-  headerStyle?: StyleSpec | "none";
-  /** Spaces inside each cell on the left. Defaults to 1 with a frame and 0 with `border: "none"`. */
-  paddingLeft?: number;
-  /** Spaces inside each cell on the right. Defaults to 1 with a frame and 0 with `border: "none"`. */
-  paddingRight?: number;
-  /** Spaces between columns of a borderless table. Defaults to 2. */
-  gap?: number;
-  /** Draw a separator line between data rows. Defaults to false. */
-  rowSeparators?: boolean;
-  /** Marker appended to a truncated cell. Defaults to "…". */
-  ellipsis?: string;
+  header?: boolean | undefined;
   /**
-   * Stream the result is meant for. It only decides whether colour is emitted
-   * (a TTY gets colour); nothing is written to it. Defaults to `process.stdout`.
+   * Border style preset. Use "custom" with `chars` for full control. Defaults to
+   * `"none"`, or `"custom"` when `chars` is given. `chars` and `rowSeparators`
+   * are ignored with `"none"`; `gap` applies only with `"none"`.
    */
-  stream?: Writable;
+  border?: "none" | "simple" | "rounded" | "single" | "double" | "custom" | undefined;
+  /**
+   * Custom border characters. Implicitly sets border to "custom" if provided
+   * without a border option. Every glyph must be one cell wide; the edge fills
+   * `top`, `bottom` and `horizontal` may also be `""` to omit that line. With
+   * `border: "simple"`, `vertical` and `cross` may be any string.
+   */
+  chars?: TableChars | undefined;
+  /** Style of the border glyphs, for example `"dim"` or `"cyan.bold"`. */
+  borderStyle?: StyleSpec | undefined;
+  /** Style of the header text, or `"none"` for plain text. Defaults to `"bold"`. */
+  headerStyle?: StyleSpec | "none" | undefined;
+  /**
+   * Spaces inside each cell on the left. Defaults to 1 with a frame and 0 with
+   * `border: "none"` or `"simple"`.
+   */
+  paddingLeft?: number | undefined;
+  /**
+   * Spaces inside each cell on the right. Defaults to 1 with a frame and 0 with
+   * `border: "none"` or `"simple"`.
+   */
+  paddingRight?: number | undefined;
+  /** Spaces between columns of a borderless table (`border: "none"`). Defaults to 2. */
+  gap?: number | undefined;
+  /** Draw a separator line between data rows. Defaults to false. */
+  rowSeparators?: boolean | undefined;
+  /** Marker appended to a truncated cell. Defaults to "…". */
+  ellipsis?: string | undefined;
+  /**
+   * Decides colour for the returned string only: a TTY gets colour. It is not a
+   * write target, because `table()` returns the text and never writes it. Pass the
+   * stream you will print to. Defaults to `process.stdout`.
+   */
+  stream?: Writable | undefined;
 }
 
 // ── Border Presets ──
@@ -210,7 +245,7 @@ const BORDER_NAMES: ReadonlySet<string> = new Set([
   "custom",
 ]);
 
-function resolveChars(options: TableOptions): Required<TableChars> {
+function resolveChars(options: TableOptions<object>): Required<TableChars> {
   const border = options.chars ? (options.border ?? "custom") : (options.border ?? "none");
   let base: Required<TableChars>;
   switch (border) {
@@ -248,7 +283,7 @@ function resolveChars(options: TableOptions): Required<TableChars> {
 }
 
 type TableLayout = {
-  border: NonNullable<TableOptions["border"]>;
+  border: NonNullable<TableOptions<object>["border"]>;
   chars: Required<TableChars>;
   padLeft: number;
   padRight: number;
@@ -256,7 +291,7 @@ type TableLayout = {
 };
 
 /** Resolves border characters and every padding value shared by sizing and rendering. */
-function resolveLayout(options: TableOptions): TableLayout {
+function resolveLayout(options: TableOptions<object>): TableLayout {
   const border = options.chars ? (options.border ?? "custom") : (options.border ?? "none");
   const isBordered = border !== "none" && border !== "simple";
   return {
@@ -270,6 +305,33 @@ function resolveLayout(options: TableOptions): TableLayout {
 
 // ── Validation ──
 
+const ALIGNS: readonly string[] = ["left", "right", "center"];
+const EDGE_FILLS: ReadonlySet<string> = new Set(["top", "bottom", "horizontal"]);
+
+/** A column after validation: bare strings are expanded to `{ key }`. */
+type ResolvedColumn = ColumnSettings & { key?: string | undefined };
+
+function typeError(subject: string, expected: string, value: unknown): Error {
+  return usageError(
+    "type",
+    "ERR_INVALID_ARG_TYPE",
+    `The "${subject}" option of table() must be ${expected}. Received ${describeReceived(value)}`,
+  );
+}
+
+function valueError(subject: string, expected: string, received: string): Error {
+  return usageError(
+    "range",
+    "ERR_INVALID_ARG_VALUE",
+    `The "${subject}" option of table() must be ${expected}. Received ${received}`,
+  );
+}
+
+/** Checks an optional boolean option. */
+function checkBoolean(name: string, value: unknown): void {
+  if (value !== undefined && typeof value !== "boolean") throw typeError(name, "a boolean", value);
+}
+
 /**
  * Checks a numeric option: a number is required, and it must be an integer of at
  * least `min`. `Infinity` passes only when `allowInfinity` is set.
@@ -282,17 +344,15 @@ function checkInteger(
   safe = false,
 ): void {
   if (value === undefined) return;
-  if (typeof value !== "number") {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", `${name} must be a number`);
-  }
+  if (typeof value !== "number") throw typeError(name, "a number", value);
   if (allowInfinity && value === Number.POSITIVE_INFINITY) return;
   const valid = safe ? Number.isSafeInteger(value) : Number.isInteger(value);
   if (!valid || value < min) {
     const shape = safe ? "a safe integer" : "an integer";
-    throw usageError(
-      "range",
-      "ERR_INVALID_ARG_VALUE",
-      `${name} must be ${shape} of at least ${min}${allowInfinity ? " or Infinity" : ""}, received ${value}`,
+    throw valueError(
+      name,
+      `${shape} of at least ${min}${allowInfinity ? " or Infinity" : ""}`,
+      String(value),
     );
   }
 }
@@ -300,54 +360,86 @@ function checkInteger(
 /** Checks a style name or dot-separated chain; every segment must be a built-in style. */
 function checkStyle(name: string, value: unknown, allowNone = false): void {
   if (value === undefined) return;
-  if (typeof value !== "string") {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", `${name} must be a string`);
-  }
+  if (typeof value !== "string") throw typeError(name, "a string", value);
   if (allowNone && value === "none") return;
   for (const segment of value.split(".")) {
     if (!isStyleName(segment)) {
-      throw usageError(
-        "range",
-        "ERR_INVALID_ARG_VALUE",
-        `${name} contains the unknown style "${segment}" in "${value}"`,
+      throw valueError(name, `a chain of built-in style names`, `"${value}"`);
+    }
+  }
+}
+
+/**
+ * Checks the custom border glyphs: one cell wide, with `""` allowed for the edge
+ * fills. The column separators of a `"simple"` table (`vertical`, `cross`) are
+ * joined between cells rather than framing them, so any string is accepted there.
+ */
+function checkChars(chars: unknown, border: unknown): void {
+  if (chars === undefined) return;
+  if (typeof chars !== "object" || chars === null || Array.isArray(chars)) {
+    throw typeError("chars", "an object", chars);
+  }
+  for (const name of Object.keys(CHARS_NONE)) {
+    const value = ownValue(chars, name);
+    if (value === undefined) continue;
+    const subject = `chars.${name}`;
+    if (typeof value !== "string") throw typeError(subject, "a string", value);
+    const fill = EDGE_FILLS.has(name);
+    if (fill && value === "") continue;
+    if (border === "simple" && (name === "vertical" || name === "cross")) continue;
+    if (stringWidth(renderSafe(value)) !== 1) {
+      throw valueError(
+        subject,
+        `a string one cell wide${fill ? " or an empty string" : ""}`,
+        JSON.stringify(value),
       );
     }
   }
 }
 
-/** Validates `columns` and converts every entry to a {@link ColumnSpec}. */
-function resolveColumns(columns: TableOptions["columns"]): ColumnSpec[] | undefined {
+/** Validates `columns` and converts every entry to a {@link ResolvedColumn}. */
+function resolveColumns(columns: unknown): ResolvedColumn[] | undefined {
   if (columns === undefined) return undefined;
-  if (!Array.isArray(columns)) {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", "columns must be an array");
-  }
-  return columns.map((entry: unknown, index) => {
+  if (!Array.isArray(columns)) throw typeError("columns", "an array", columns);
+  return columns.map((entry: unknown, index): ResolvedColumn => {
+    const subject = `columns[${index}]`;
     if (typeof entry === "string") return { key: entry };
-    const spec = entry as ColumnSpec | null | undefined;
-    if (typeof spec !== "object" || spec === null || typeof spec.key !== "string") {
-      throw usageError(
-        "type",
-        "ERR_INVALID_ARG_TYPE",
-        `columns[${index}] must be a string or a ColumnSpec with a string key`,
-      );
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw typeError(subject, "a string or a ColumnSpec", entry);
     }
-    checkInteger(`columns[${index}].width`, spec.width, 1);
-    checkInteger(`columns[${index}].maxWidth`, spec.maxWidth, 1, true);
+    const spec = entry as ResolvedColumn;
+    if (spec.key !== undefined && typeof spec.key !== "string") {
+      throw typeError(`${subject}.key`, "a string", spec.key);
+    }
+    if (spec.label !== undefined && typeof spec.label !== "string") {
+      throw typeError(`${subject}.label`, "a string", spec.label);
+    }
+    if (spec.align !== undefined) {
+      if (typeof spec.align !== "string")
+        throw typeError(`${subject}.align`, "a string", spec.align);
+      if (!ALIGNS.includes(spec.align)) {
+        throw valueError(
+          `${subject}.align`,
+          `one of ${ALIGNS.map((a) => `"${a}"`).join(", ")}`,
+          `"${spec.align}"`,
+        );
+      }
+    }
+    checkInteger(`${subject}.width`, spec.width, 1);
+    checkInteger(`${subject}.maxWidth`, spec.maxWidth, 1, true);
     return spec;
   });
 }
 
 /** Validates every option that has a closed or numeric domain, before any rendering. */
-function validateOptions(options: TableOptions): void {
+function validateOptions(options: TableOptions<object>): void {
   if (options.border !== undefined) {
-    if (typeof options.border !== "string") {
-      throw usageError("type", "ERR_INVALID_ARG_TYPE", "border must be a string");
-    }
+    if (typeof options.border !== "string") throw typeError("border", "a string", options.border);
     if (!BORDER_NAMES.has(options.border)) {
-      throw usageError(
-        "range",
-        "ERR_INVALID_ARG_VALUE",
-        `Unknown border "${options.border}". Valid borders: ${[...BORDER_NAMES].join(", ")}`,
+      throw valueError(
+        "border",
+        `one of ${[...BORDER_NAMES].map((b) => `"${b}"`).join(", ")}`,
+        `"${options.border}"`,
       );
     }
   }
@@ -356,27 +448,57 @@ function validateOptions(options: TableOptions): void {
   checkInteger("paddingLeft", options.paddingLeft, 0, false, true);
   checkInteger("paddingRight", options.paddingRight, 0, false, true);
   checkInteger("gap", options.gap, 0, false, true);
+  checkBoolean("header", options.header);
+  checkBoolean("rowSeparators", options.rowSeparators);
+  if (options.ellipsis !== undefined && typeof options.ellipsis !== "string") {
+    throw typeError("ellipsis", "a string", options.ellipsis);
+  }
+  checkChars(options.chars, options.border);
 }
 
 /**
  * Renders tabular data as a formatted string.
  *
- * Accepts either an array of arrays or an array of objects. Supports configurable
+ * Accepts either an array of arrays or an array of objects (plain objects,
+ * interface-typed values and class instances alike). Supports configurable
  * borders, per-column alignment and widths, header styling, and custom border
  * characters. The result is returned, never written: `options.stream` only
  * decides whether colour escape codes are included.
  *
+ * @typeParam T - The row type: an array for positional rows, an object for keyed rows.
  * @param data - The data to render, either as rows of arrays or rows of objects.
  * @param options - Table rendering options.
  * @returns The formatted table string.
- * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown border or style name, or a width, maxWidth, gap or padding outside its range.
- * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a value of the wrong type, including a `columns` entry that is not a string or a `ColumnSpec`.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a value of the wrong type, including a `columns` entry that is not a string or a `ColumnSpec`, or an object-row `ColumnSpec` without a string `key`.
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown border, align or style name, a width, maxWidth, gap or padding outside its range, or a `chars` glyph that is not one cell wide.
+ *
+ * @example
+ * ```ts
+ * table(
+ *   [
+ *     { name: "Ann", age: 31 },
+ *     { name: "Bob", age: 4 },
+ *   ],
+ *   { border: "rounded", columns: ["name", { key: "age", align: "right" }] },
+ * );
+ * ```
  */
-export function table(
-  data: readonly (readonly unknown[])[] | readonly Record<string, unknown>[],
-  options: TableOptions = {},
-): string {
-  validateOptions(options);
+export function table<T extends object>(data: readonly T[], options: TableOptions<T> = {}): string {
+  if (!Array.isArray(data)) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "data" argument of table() must be an array. Received ${describeReceived(data)}`,
+    );
+  }
+  if (typeof options !== "object" || options === null) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "options" argument of table() must be an object. Received ${describeReceived(options)}`,
+    );
+  }
+  validateOptions(options as TableOptions<object>);
   const columnSpecs = resolveColumns(options.columns);
 
   const { header = true } = options;
@@ -385,18 +507,16 @@ export function table(
   const colorizer = createColorizer(options.stream ?? process.stdout);
 
   // Normalize to string[][]
-  const { rows, columns, specs } = normalizeData(data, options.header !== false, columnSpecs);
+  const { rows, columns, specs } = normalizeData(
+    data as readonly unknown[],
+    options.header !== false,
+    columnSpecs,
+  );
 
   if (rows.length === 0 && columns.length === 0) return "";
 
-  const layout = resolveLayout(options);
-  const { colWidths, cellWidths, labelWidths } = calculateWidths(
-    rows,
-    columns,
-    specs,
-    header,
-    layout,
-  );
+  const layout = resolveLayout(options as TableOptions<object>);
+  const { colWidths, cellWidths, labelWidths } = calculateWidths(rows, columns, specs, header);
 
   // Truncate cells. Grapheme segmentation is the dominant cost of rendering a
   // non-ASCII table, so the widths measured above are carried through instead of
@@ -508,10 +628,10 @@ function cellToString(value: unknown): string {
  * settings, one entry per column, resolved by position.
  */
 function normalizeData(
-  data: readonly (readonly unknown[])[] | readonly Record<string, unknown>[],
+  data: readonly unknown[],
   headerProvided: boolean,
-  columnSpecs: ColumnSpec[] | undefined,
-): { rows: string[][]; columns: string[]; specs: ColumnSpec[] } {
+  columnSpecs: ResolvedColumn[] | undefined,
+): { rows: string[][]; columns: string[]; specs: ResolvedColumn[] } {
   if (data.length === 0) return { rows: [], columns: [], specs: [] };
 
   // Array of arrays
@@ -526,7 +646,7 @@ function normalizeData(
     // are given (matching the object-array branch, which never drops a row).
     const consumeFirstRowAsHeader = headerProvided && columnSpecs === undefined;
     const rawColumns =
-      columnSpecs?.map((spec) => cellToString(spec.label ?? spec.key)) ??
+      columnSpecs?.map((spec) => cellToString(spec.label ?? spec.key ?? "")) ??
       (consumeFirstRowAsHeader ? (arrayData[firstDefinedIndex] ?? []).map(cellToString) : []);
     const rawRows = arrayData.map((row, index) =>
       consumeFirstRowAsHeader && index === firstDefinedIndex
@@ -540,7 +660,7 @@ function normalizeData(
     for (const row of normalizedRows) colCount = Math.max(colCount, row.length);
     const specs = Array.from(
       { length: colCount },
-      (_, index): ColumnSpec => columnSpecs?.[index] ?? { key: String(index) },
+      (_, index): ResolvedColumn => columnSpecs?.[index] ?? {},
     );
     const columns = headerProvided
       ? Array.from({ length: colCount }, (_, index) => rawColumns[index] ?? "")
@@ -555,6 +675,14 @@ function normalizeData(
   // keys present only on later rows are not silently dropped.
   const objData = data as readonly Record<string, unknown>[];
   let specs = columnSpecs;
+  const keyless = specs?.findIndex((spec) => spec.key === undefined) ?? -1;
+  if (keyless !== -1) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "columns[${keyless}].key" option of table() must be a string for object rows. Received undefined`,
+    );
+  }
   if (!specs) {
     const seen = new Set<string>();
     specs = [];
@@ -570,7 +698,7 @@ function normalizeData(
   }
   const labels = specs.map((spec) => cellToString(spec.label ?? spec.key));
   const rows = Array.from(objData, (obj) =>
-    (specs as ColumnSpec[]).map((spec) => cellToString(ownValue(obj, spec.key))),
+    (specs as ResolvedColumn[]).map((spec) => cellToString(ownValue(obj, spec.key as string))),
   );
 
   return { rows, columns: labels, specs };
@@ -585,9 +713,8 @@ function normalizeData(
 function calculateWidths(
   rows: string[][],
   labels: string[],
-  specs: ColumnSpec[],
+  specs: ResolvedColumn[],
   header: boolean,
-  layout: TableLayout,
 ): { colWidths: number[]; cellWidths: number[][]; labelWidths: number[] } {
   let colCount = Math.max(labels.length, specs.length);
   for (const row of rows) colCount = Math.max(colCount, row.length);
@@ -619,12 +746,8 @@ function calculateWidths(
     if (maxWidth !== undefined && Number.isFinite(maxWidth)) {
       widths[i] = Math.min(widths[i], maxWidth, MAX_RENDER_WIDTH);
     }
-    // width is the total column width including padding; the content width is
-    // what remains, and never drops below one cell.
-    if (width !== undefined) {
-      const contentWidth = Math.min(width, MAX_RENDER_WIDTH) - layout.padLeft - layout.padRight;
-      widths[i] = Math.max(contentWidth, 1);
-    }
+    // width fixes the content width; padding is added around it when rendering.
+    if (width !== undefined) widths[i] = Math.min(width, MAX_RENDER_WIDTH);
   }
 
   return { colWidths: widths, cellWidths, labelWidths };
@@ -685,7 +808,7 @@ function padCell(
 /**
  * Builds an alignment resolver that reads each column's {@link ColumnSpec.align}.
  */
-function buildAlignFn(specs: ColumnSpec[]): (i: number) => "left" | "right" | "center" {
+function buildAlignFn(specs: ResolvedColumn[]): (i: number) => "left" | "right" | "center" {
   return (i) => specs[i]?.align ?? "left";
 }
 
@@ -704,9 +827,6 @@ function renderNone(
 ): string {
   const lines: string[] = [];
   const pad = " ".repeat(gap);
-  // Width calculation already charged every explicit ColumnSpec.width for the
-  // left and right padding, so the renderer has to put it back; otherwise the
-  // column comes out narrower than the caller asked for.
   const pl = " ".repeat(padLeft);
   const pr = " ".repeat(padRight);
   const cell = (text: string, i: number, width: number | undefined) =>
@@ -738,7 +858,7 @@ function renderSimple(
   const middle = bc(chars?.vertical ?? " | ");
   const separator = chars ? chars.horizontal : "-";
   const separatorMiddle = chars?.cross ?? "-|-";
-  // Same contract as the other modes: padding charged to the width is rendered,
+  // Same contract as the other modes: padding is rendered around the content,
   // border glyphs go through the resolved border colorizer, and a non-compact
   // table separates its data rows.
   const pl = " ".repeat(padLeft);

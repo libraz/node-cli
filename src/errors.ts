@@ -497,6 +497,25 @@ export type UsageErrorCode =
   | "ERR_PLUGIN_FAILED";
 
 /**
+ * Describes a rejected value the way Node's argument errors do, for the tail of
+ * a `Received ...` message: its type for a type error, the value itself for a
+ * range error.
+ *
+ * @internal
+ */
+export function describeReceived(value: unknown, kind: "type" | "range" = "type"): string {
+  if (kind === "range") return inspect(value, { depth: 0, breakLength: Number.POSITIVE_INFINITY });
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "function") return `function ${value.name || "(anonymous)"}`;
+  if (typeof value === "object") {
+    const name = (value as { constructor?: { name?: unknown } }).constructor?.name;
+    return typeof name === "string" && name !== "" ? `an instance of ${name}` : "type object";
+  }
+  return `type ${typeof value} (${inspect(value, { breakLength: Number.POSITIVE_INFINITY })})`;
+}
+
+/**
  * Creates an error for programmer misuse, carrying a {@link UsageErrorCode}.
  *
  * @param kind - `"type"` yields a `TypeError`, `"range"` a `RangeError`, and

@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import { usageError } from "../errors.js";
+import { describeReceived, usageError } from "../errors.js";
 
 // ── ANSI codes ──
 
@@ -88,6 +88,17 @@ export function isTTY(value: unknown): boolean {
   );
 }
 
+/** Throws the `ERR_INVALID_ARG_TYPE` error for a non-string `text` argument. */
+function assertText(fn: string, name: string, value: unknown): asserts value is string {
+  if (typeof value !== "string") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "${name}" argument of ${fn}() must be a string. Received ${describeReceived(value)}`,
+    );
+  }
+}
+
 /**
  * Determines whether color output is enabled.
  *
@@ -96,6 +107,10 @@ export function isTTY(value: unknown): boolean {
  * forces it on, taking precedence over the `TERM=dumb` / non-TTY disable checks
  * per the de-facto standard. Finally the target stream's TTY status is consulted.
  * When no stream is given, `process.stdout` is used.
+ *
+ * When this is false, every style is dropped, modifiers such as `bold` and
+ * `underline` included: `NO_COLOR` and `setColorEnabled(false)` stop all styling,
+ * not only colours.
  *
  * @param stream - Optional output stream to evaluate. Defaults to `process.stdout`.
  * @returns Whether color escape codes should be emitted.
@@ -119,9 +134,28 @@ export function isColorEnabled(stream?: Writable): boolean {
  * An explicit boolean overrides TTY/environment detection; `"auto"` returns to
  * detection (TTY, NO_COLOR, FORCE_COLOR, TERM variables).
  *
+ * With `false` (or `NO_COLOR`) every style is dropped, modifiers such as `bold`
+ * included.
+ *
  * @param value - `true` or `false` to force color on or off, `"auto"` to detect.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `value` is neither a boolean nor a string.
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `value` is a string other than `"auto"`.
  */
 export function setColorEnabled(value: boolean | "auto"): void {
+  if (typeof value !== "boolean" && typeof value !== "string") {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "value" argument of setColorEnabled() must be true, false or "auto". Received ${describeReceived(value)}`,
+    );
+  }
+  if (typeof value === "string" && value !== "auto") {
+    throw usageError(
+      "range",
+      "ERR_INVALID_ARG_VALUE",
+      `The "value" argument of setColorEnabled() must be true, false or "auto". Received ${describeReceived(value)}`,
+    );
+  }
   _enabled = value === "auto" ? null : value;
 }
 
@@ -172,10 +206,14 @@ export type Colorizer = { readonly [K in StyleName]: ColorFn };
 /**
  * True when `name` is one of the built-in style names. Callers that resolve a
  * style chosen by option (table borders and headers, bar colour) check here so
- * inherited members such as `toString` never resolve.
+ * inherited members such as `toString` never resolve. Any other value, including
+ * a non-string, yields false.
+ *
+ * @param value - The value to test.
+ * @returns Whether `value` is a {@link StyleName}.
  */
-export function isStyleName(name: string): name is StyleName {
-  return Object.hasOwn(styles, name);
+export function isStyleName(value: unknown): value is StyleName {
+  return typeof value === "string" && Object.hasOwn(styles, value);
 }
 
 /**
@@ -255,7 +293,26 @@ function templateTag(isEnabled: () => boolean): ColorTag {
   return (strings, ...values) => formatTemplate(isEnabled(), strings, values);
 }
 
-/** A tagged template literal that applies `{styleName text}` markup. */
+/**
+ * A tagged template literal that applies `{styleName text}` markup.
+ *
+ * Markup rules:
+ * - `{style text}` styles `text`; chain styles with dots, as in `{bold.red text}`.
+ * - Markup nests, up to 64 levels.
+ * - A brace that does not start with a known style name and a space, or that is
+ *   never closed, stays literal text.
+ * - Interpolated `${values}` are converted with `String()` and inserted
+ *   verbatim; they are never parsed as markup.
+ * - With colour disabled the markup is removed and plain text is returned.
+ *
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when markup nests deeper than 64 levels.
+ *
+ * @example
+ * ```ts
+ * const tag: ColorTag = createColorTag(process.stderr);
+ * tag`{bold.red Error}: ${message}`;
+ * ```
+ */
 export type ColorTag = (strings: TemplateStringsArray, ...values: unknown[]) => string;
 
 /**
@@ -263,12 +320,14 @@ export type ColorTag = (strings: TemplateStringsArray, ...values: unknown[]) => 
  * enablement is tied to a specific output stream.
  *
  * Use `{styleName text}` syntax inside the template to apply styles.
- * Dot-separated style names are supported for chaining. A brace that does not
- * start with a known style name is kept as literal text; markup nested deeper
- * than 64 levels throws a `RangeError` with code `ERR_INVALID_ARG_VALUE`.
+ * Dot-separated style names are supported for chaining, and markup nests. A
+ * brace that does not start with a known style name followed by a space, or that
+ * is never closed, is kept as literal text. Interpolated values are inserted
+ * verbatim and never parsed as markup.
  *
  * @param stream - The output stream the text will be written to.
  * @returns A template tag that emits escapes only when color is enabled for `stream`.
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when markup nests deeper than 64 levels (thrown by the returned tag).
  *
  * @example
  * ```ts
@@ -284,10 +343,16 @@ export function createColorTag(stream: Writable): ColorTag {
  * Tagged template literal for inline color formatting, bound to `process.stdout`.
  * Use {@link createColorTag} to bind another stream.
  *
+ * Use `{styleName text}` syntax to apply styles; dot-separated names chain
+ * (`{bold.red text}`) and markup nests. A brace that does not start with a known
+ * style name followed by a space, or that is never closed, stays literal text.
+ * Interpolated values are inserted verbatim and never parsed as markup.
+ *
+ * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when markup nests deeper than 64 levels.
+ *
  * @example
  * ```ts
- * colorTag`Status: {green OK}`;
- * colorTag`{bold.red Error}: something went wrong`;
+ * colorTag`Status: {green OK}, {bold.red ${count} failed}`;
  * ```
  */
 export const colorTag: ColorTag = templateTag(() => isColorEnabled());
@@ -468,6 +533,7 @@ const stringTerminator = "\x1b\\";
  * @returns The input string with all ANSI escape sequences removed.
  */
 export function stripAnsi(text: string): string {
+  assertText("stripAnsi", "text", text);
   return text.replace(ansiRegex, "");
 }
 
@@ -488,8 +554,10 @@ export interface AnsiSegment {
  *
  * @param text - The string to split.
  * @returns The segments in input order; concatenating their `text` reproduces the input.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `text` is not a string.
  */
-export function splitAnsi(text: string): AnsiSegment[] {
+export function splitAnsi(text: string): readonly AnsiSegment[] {
+  assertText("splitAnsi", "text", text);
   const segments: AnsiSegment[] = [];
   let last = 0;
   // matchAll copies the regex, so the shared lastIndex is left untouched.
@@ -528,9 +596,9 @@ function parseSgrParameters(body: string): number[][] {
 /** Options for {@link sanitizeTerminalText}. */
 export interface SanitizeTerminalTextOptions {
   /** Collapse newlines to spaces. Defaults to true. */
-  singleLine?: boolean;
+  singleLine?: boolean | undefined;
   /** Keep complete OSC 8 hyperlinks. Defaults to true. */
-  allowHyperlinks?: boolean;
+  allowHyperlinks?: boolean | undefined;
 }
 
 /**
@@ -540,11 +608,33 @@ export interface SanitizeTerminalTextOptions {
  * clearing, title changes, and every other escape sequence are removed. Visible
  * C0/C1 controls are either collapsed to spaces in single-line mode or dropped.
  * Any SGR style or OSC 8 hyperlink the text leaves open is closed at the end.
+ *
+ * @param text - The untrusted text.
+ * @param options - Newline and hyperlink handling.
+ * @returns The sanitized text.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `text` is not a string, or `options` or one of its flags has the wrong type.
  */
 export function sanitizeTerminalText(
   text: string,
   options: SanitizeTerminalTextOptions = {},
 ): string {
+  assertText("sanitizeTerminalText", "text", text);
+  if (typeof options !== "object" || options === null) {
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "options" argument of sanitizeTerminalText() must be an object. Received ${describeReceived(options)}`,
+    );
+  }
+  for (const flag of ["singleLine", "allowHyperlinks"] as const) {
+    if (options[flag] !== undefined && typeof options[flag] !== "boolean") {
+      throw usageError(
+        "type",
+        "ERR_INVALID_ARG_TYPE",
+        `The "${flag}" option of sanitizeTerminalText() must be a boolean. Received ${describeReceived(options[flag])}`,
+      );
+    }
+  }
   const { singleLine = true, allowHyperlinks = true } = options;
   const sanitized = splitAnsi(text)
     .map((segment) => {
@@ -615,8 +705,10 @@ export function renderSafe(text: string, options: { singleLine?: boolean } = {})
  *
  * @param text - The string to measure.
  * @returns The visual column width of the string.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `text` is not a string.
  */
 export function stringWidth(text: string): number {
+  assertText("stringWidth", "text", text);
   const stripped = stripAnsi(text);
   if (/^[\x20-\x7e]*$/.test(stripped)) return stripped.length;
   let width = 0;
@@ -659,8 +751,24 @@ function getSegmenter(): Intl.Segmenter | null {
   return _segmenter;
 }
 
-/** Splits visible text into user-perceived grapheme clusters. */
-export function splitGraphemes(text: string): string[] {
+/**
+ * Splits visible text into user-perceived grapheme clusters.
+ *
+ * The input must not contain escape sequences: an escape is split like any other
+ * text, so its bytes would count as graphemes. Split with {@link splitAnsi}
+ * first, then split only the segments whose `ansi` is false.
+ *
+ * @param text - Visible text without escape sequences.
+ * @returns The grapheme clusters in input order.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `text` is not a string.
+ *
+ * @example
+ * ```ts
+ * splitAnsi(input).flatMap((s) => (s.ansi ? [s.text] : splitGraphemes(s.text)));
+ * ```
+ */
+export function splitGraphemes(text: string): readonly string[] {
+  assertText("splitGraphemes", "text", text);
   return [...iterateGraphemes(text)];
 }
 
@@ -779,19 +887,25 @@ export function closeAnsiState(text: string): string {
  * @param width - Maximum display width in columns: a positive integer, or `Infinity` for no limit.
  * @param ellipsis - Marker appended when the text is cut. Defaults to `"…"`.
  * @returns The text, cut to `width` columns when it is wider.
- * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `width` is not a number.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `text` or `ellipsis` is not a string, or `width` is not a number.
  * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `width` is 0 or negative, NaN, or fractional.
  */
 export function truncateAnsi(text: string, width: number, ellipsis = "…"): string {
+  assertText("truncateAnsi", "text", text);
   if (typeof width !== "number") {
-    throw usageError("type", "ERR_INVALID_ARG_TYPE", "truncateAnsi width must be a number");
+    throw usageError(
+      "type",
+      "ERR_INVALID_ARG_TYPE",
+      `The "width" argument of truncateAnsi() must be a number. Received ${describeReceived(width)}`,
+    );
   }
+  assertText("truncateAnsi", "ellipsis", ellipsis);
   if (width === Number.POSITIVE_INFINITY) return closeAnsiState(text);
   if (!Number.isInteger(width) || width <= 0) {
     throw usageError(
       "range",
       "ERR_INVALID_ARG_VALUE",
-      `truncateAnsi width must be a positive integer or Infinity, received ${width}`,
+      `The "width" argument of truncateAnsi() must be a positive integer or Infinity. Received ${width}`,
     );
   }
   if (stringWidth(text) <= width) return closeAnsiState(text);

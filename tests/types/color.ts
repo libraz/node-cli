@@ -1,5 +1,6 @@
 import type { Writable } from "node:stream";
 import {
+  type AnsiSegment,
   type ColorFn,
   type Colorizer,
   color,
@@ -13,11 +14,14 @@ import {
   type StyleSpec,
   sanitizeTerminalText,
   setColorEnabled,
+  splitAnsi,
+  splitGraphemes,
   truncateAnsi,
 } from "../../src/index.js";
 
 declare const stream: Writable;
 declare const dynamicName: string;
+declare const unknownValue: unknown;
 
 // Known styles resolve to chainable functions.
 const red: ColorFn = color.red;
@@ -50,6 +54,12 @@ if (isStyleName(dynamicName)) {
   const name: StyleName = dynamicName;
   const fn: ColorFn = color[name];
   void fn;
+}
+
+// isStyleName takes any value and narrows it.
+if (isStyleName(unknownValue)) {
+  const name: StyleName = unknownValue;
+  void name;
 }
 
 // StyleSpec checks the first two links and leaves the rest to run time.
@@ -120,3 +130,17 @@ const clean: string = sanitizeTerminalText("x", options);
 void clean;
 // @ts-expect-error unknown option
 sanitizeTerminalText("x", { multiLine: true });
+
+// splitAnsi and splitGraphemes return readonly arrays.
+const segments: readonly AnsiSegment[] = splitAnsi("x");
+const graphemes: readonly string[] = splitGraphemes("x");
+void [segments, graphemes];
+// @ts-expect-error the segment list is readonly
+segments.push({ ansi: false, text: "y" });
+// @ts-expect-error the grapheme list is readonly
+graphemes.push("y");
+// @ts-expect-error a readonly array is not assignable to a mutable one
+const mutableSegments: AnsiSegment[] = splitAnsi("x");
+// @ts-expect-error a readonly array is not assignable to a mutable one
+const mutableGraphemes: string[] = splitGraphemes("x");
+void [mutableSegments, mutableGraphemes];

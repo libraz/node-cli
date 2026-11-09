@@ -717,3 +717,79 @@ describe("c (template tag) interpolation", () => {
     }
   });
 });
+
+describe("isStyleName accepts any value", () => {
+  it.each([undefined, null, 1, {}, [], Symbol("x")])("returns false for %s", (value) => {
+    expect(isStyleName(value)).toBe(false);
+  });
+});
+
+describe("string function argument validation", () => {
+  const fns: [string, (value: never) => unknown][] = [
+    ["stringWidth", stringWidth],
+    ["stripAnsi", stripAnsi],
+    ["sanitizeTerminalText", sanitizeTerminalText],
+    ["truncateAnsi", (value) => truncateAnsi(value, 3)],
+    ["splitAnsi", splitAnsi],
+    ["splitGraphemes", splitGraphemes],
+  ];
+  describe.each(fns)("%s", (name, fn) => {
+    it.each([undefined, null, 1, {}, ["a"]])("rejects the non-string %s", (value) => {
+      const error = catchError(() => fn(value as never));
+      expect(error).toBeInstanceOf(TypeError);
+      expect(error).toMatchObject({ code: "ERR_INVALID_ARG_TYPE" });
+      expect((error as Error).message).toContain(
+        `The "text" argument of ${name}() must be a string`,
+      );
+    });
+    it("accepts the empty string", () => {
+      expect(() => fn("" as never)).not.toThrow();
+    });
+  });
+
+  it("rejects a non-string truncateAnsi ellipsis", () => {
+    const error = catchError(() => truncateAnsi("hello", 3, 1 as never));
+    expect(error).toMatchObject({ code: "ERR_INVALID_ARG_TYPE" });
+  });
+
+  it("rejects malformed sanitizeTerminalText options", () => {
+    expect(catchError(() => sanitizeTerminalText("x", null as never))).toMatchObject({
+      code: "ERR_INVALID_ARG_TYPE",
+    });
+    expect(
+      catchError(() => sanitizeTerminalText("x", { singleLine: "no" } as never)),
+    ).toMatchObject({
+      code: "ERR_INVALID_ARG_TYPE",
+    });
+    expect(() => sanitizeTerminalText("x", { singleLine: undefined })).not.toThrow();
+  });
+});
+
+describe("setColorEnabled argument validation", () => {
+  afterEach(() => {
+    setColorEnabled("auto");
+  });
+
+  it.each([true, false, "auto"] as const)("accepts %s", (value) => {
+    expect(() => setColorEnabled(value)).not.toThrow();
+  });
+  it.each([null, undefined, 1, 0, {}])("rejects the non-boolean %s with a TypeError", (value) => {
+    const error = catchError(() => setColorEnabled(value as never));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({ code: "ERR_INVALID_ARG_TYPE" });
+  });
+  it.each(["on", "", "AUTO", "true"])("rejects the string %s with a RangeError", (value) => {
+    const error = catchError(() => setColorEnabled(value as never));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error).toMatchObject({ code: "ERR_INVALID_ARG_VALUE" });
+  });
+  it("leaves the previous setting after a rejected value", () => {
+    setColorEnabled(true);
+    catchError(() => setColorEnabled("on" as never));
+    expect(color.red("x")).toBe("\x1b[31mx\x1b[39m");
+  });
+  it("drops modifiers as well as colours when disabled", () => {
+    setColorEnabled(false);
+    expect(color.bold.underline("x")).toBe("x");
+  });
+});

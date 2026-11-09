@@ -25,12 +25,55 @@ const spec: ColumnSpec = {
 };
 void table([], { columns: ["a", spec] });
 void table([], { columns: ["a", "b"] as const });
-// @ts-expect-error a spec needs a key
-void table([], { columns: [{ label: "Name" }] });
+// @ts-expect-error a spec for object rows needs a key
+void table([{ name: "a" }], { columns: [{ label: "Name" }] });
 // @ts-expect-error the old header field is now label
 void table([], { columns: [{ key: "a", header: "A" }] });
 // @ts-expect-error align is a closed set
 void table([], { columns: [{ key: "a", align: "middle" }] });
+
+// Array rows have no key: a spec without one is accepted, one with a key is not.
+void table([["a"]], { columns: [{ label: "Name", align: "right" }, "b"] });
+// @ts-expect-error array rows are matched by position and take no key
+void table([["a"]], { columns: [{ key: "x" }] });
+// @ts-expect-error array rows are matched by position and take no key
+void table([["a"]], { columns: [{ key: "x", label: "Name" }] });
+
+// Object rows check column names against the row type.
+interface Person {
+  name: string;
+  age: number;
+}
+declare const people: readonly Person[];
+void table(people, { columns: ["name", { key: "age", align: "right" }] });
+// @ts-expect-error not a property of Person
+void table(people, { columns: ["nmae"] });
+// @ts-expect-error not a property of Person
+void table(people, { columns: [{ key: "nmae" }] });
+class Point {
+  x = 1;
+  y = 2;
+}
+void table([new Point()], { columns: ["x", { key: "y" }] });
+const typedSpec: ColumnSpec<Person> = { key: "name", width: 4 };
+const typedOptions: TableOptions<Person> = { columns: [typedSpec] };
+void typedOptions;
+// @ts-expect-error not a property of Person
+const badSpec: ColumnSpec<Person> = { key: "id" };
+void badSpec;
+// @ts-expect-error array specs take no key
+const arraySpec: ColumnSpec<string[]> = { key: "x" };
+void arraySpec;
+const keylessSpec: ColumnSpec<string[]> = { label: "x" };
+void keylessSpec;
+// The default type arguments keep the loose declaration working.
+const loose: TableOptions = { columns: ["anything", { key: "else" }] };
+const looseSpec: ColumnSpec = { key: "anything" };
+void [loose, looseSpec];
+// @ts-expect-error data must be an array of objects or arrays
+void table(["a", "b"]);
+// @ts-expect-error data must be an array
+void table(42);
 
 // The new option set.
 const options: TableOptions = {
