@@ -13,6 +13,7 @@ import type {
   OptionSchemaInput,
   OptionValue,
 } from "../types.js";
+import { OPTION_TYPES } from "../types.js";
 import {
   NAME_PATTERN,
   parseDefinitionString,
@@ -29,6 +30,32 @@ function rejectArgument(name: string, method: string, expectation: string, value
     "ERR_INVALID_ARG_TYPE",
     `The "${name}" argument of CommandBuilder.${method}() must be ${expectation}. Received ${describeReceived(value)}`,
   );
+}
+
+/** Returns the first way an `OptionSchema` member is malformed, or undefined. */
+function schemaViolation(schema: Record<string, unknown>): string | undefined {
+  const { type, description, hidden, required, parse, validate, completer, choices } = schema;
+  if (type !== undefined && !(OPTION_TYPES as readonly unknown[]).includes(type)) {
+    return `has an unknown type ${JSON.stringify(type) ?? String(type)}; expected one of: ${OPTION_TYPES.join(", ")}`;
+  }
+  if (description !== undefined && typeof description !== "string") {
+    return "description must be a string";
+  }
+  if (hidden !== undefined && typeof hidden !== "boolean") return "hidden must be a boolean";
+  if (required !== undefined && typeof required !== "boolean") return "required must be a boolean";
+  if (parse !== undefined && typeof parse !== "function") return "parse must be a function";
+  if (validate !== undefined && typeof validate !== "function") {
+    return "validate must be a function";
+  }
+  if (
+    completer !== undefined &&
+    typeof completer !== "function" &&
+    !(Array.isArray(completer) && completer.every((c) => typeof c === "string"))
+  ) {
+    return "completer must be an array of strings or a function";
+  }
+  if (choices !== undefined && !Array.isArray(choices)) return "choices must be an array";
+  return undefined;
 }
 
 /** Rejects a handler argument that is not a function. */
@@ -134,6 +161,8 @@ export class CommandBuilder<
    *
    * @param text - The description text.
    * @returns This builder instance for chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `text` is not a string.
+   * @throws {Error} `ERR_COMMAND_REMOVED` when the command was removed.
    */
   description(text: string): this {
     if (typeof text !== "string") rejectArgument("text", "description", "a string", text);
@@ -148,6 +177,8 @@ export class CommandBuilder<
    *
    * @param hidden - Whether the command is hidden. Defaults to true.
    * @returns This builder instance for chaining.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `hidden` is not a boolean.
+   * @throws {Error} `ERR_COMMAND_REMOVED` when the command was removed.
    */
   hidden(hidden = true): this {
     if (typeof hidden !== "boolean") rejectArgument("hidden", "hidden", "a boolean", hidden);
@@ -179,6 +210,9 @@ export class CommandBuilder<
    * placeholder. It is optional unless it has a `default`, is `required`, or is
    * a boolean. `default` and `validate` are typed by that value type.
    *
+   * A command that binds `-h` to its own option keeps `--help` as the way to
+   * ask for help; `-h` then selects the option, not the help output.
+   *
    * Repeated call: the same canonical name replaces the previous definition
    * in place, and its type replaces the previous one; a new name adds an
    * option. The returned builder carries the new type while the receiver keeps
@@ -199,7 +233,15 @@ export class CommandBuilder<
    * @param flags - The option flags string.
    * @param schema - Optional schema describing the option's type, default value, etc.
    * @returns This builder, typed with the added option.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `flags` is not a string, or
+   *   `schema` is neither undefined nor an object (`null`, an array and a string
+   *   are rejected).
+   * @throws {Error} `ERR_COMMAND_REMOVED` when the command was removed.
    * @throws {Error} `ERR_INVALID_DEFINITION` for malformed flags or names, a
+   *   schema member of the wrong type (an unknown `type`, a non-string
+   *   `description`, a non-boolean `hidden` or `required`, a non-function
+   *   `parse` or `validate`, a `completer` that is neither an array of strings
+   *   nor a function, `choices` that is not an array), a
    *   schema `alias` that is not one character, a placeholder that disagrees
    *   with `type`, `required` with a `default`, `choices` that are empty, of
    *   another type than the value, non-finite or beyond the safe-integer range,
@@ -219,6 +261,13 @@ export class CommandBuilder<
     schema?: S & CheckedOptionSchema<F, S, A, O, T, C, R>,
   ): CommandBuilder<A, AddOption<O, F, S, OptionValue<F, T, C, R>>> {
     this.assertRegistered();
+    if (typeof flags !== "string") rejectArgument("flags", "option", "a string", flags);
+    if (
+      schema !== undefined &&
+      (typeof schema !== "object" || schema === null || Array.isArray(schema))
+    ) {
+      rejectArgument("schema", "option", "an object", schema);
+    }
     const { long, aliases, longAliases, takesValue, valueName } = parseOptionFlags(flags);
 
     // Names come first: every later message names the option by them.
@@ -245,6 +294,13 @@ export class CommandBuilder<
           "ERR_INVALID_DEFINITION",
           `Option alias "-${alias}" must be exactly one character; write a long alias as "--${alias}"`,
         );
+      }
+    }
+
+    if (schema !== undefined) {
+      const reason = schemaViolation(schema as Record<string, unknown>);
+      if (reason !== undefined) {
+        throw usageError("state", "ERR_INVALID_DEFINITION", `Option "--${long}" ${reason}`);
       }
     }
 

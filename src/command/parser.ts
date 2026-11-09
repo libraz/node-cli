@@ -308,12 +308,18 @@ function splitAtPipes(input: string): string[] {
   return segments;
 }
 
+/** The hint for a value-taking option whose next token looks like an option; empty at the end of argv. */
+function valueHint(nextToken: string | undefined, name: string): string {
+  return nextToken === undefined ? "" : `; use --${name}=<value> for values starting with "-"`;
+}
+
 /**
  * Splits one command, without a pipeline, into argv tokens: single quotes,
  * double quotes and backslash escapes, delimited by unquoted whitespace. A `|`
- * is an ordinary character here, while `CLI.execLine()` splits a line at an
- * unquoted `|` first, so `exec(tokenize(line))` differs from `execLine(line)`
- * when the line contains one.
+ * is an ordinary character here, as are `<` and `>`, while `CLI.execLine()`
+ * splits a line at an unquoted `|` first and rejects a standalone `<` or `>`
+ * with a `ParseError`, so `exec(tokenize(line))` differs from `execLine(line)`
+ * when the line contains one of them.
  *
  * @param input - The raw input string to tokenize.
  * @returns The tokens.
@@ -721,7 +727,7 @@ function scanTokens(
           i += 2;
         } else {
           throw new InvalidOptionError(
-            `Option --${name} expects a value; use --${name}=<value> for values starting with "-"`,
+            `Option --${name} expects a value${valueHint(nextToken, name)}`,
             { optionName: name, usage },
           );
         }
@@ -782,7 +788,7 @@ function scanTokens(
             i += 2;
           } else {
             throw new InvalidOptionError(
-              `Option -${chars} expects a value; use --${name}=<value> for values starting with "-"`,
+              `Option -${chars} expects a value${valueHint(nextToken, name)}`,
               { optionName: name, usage },
             );
           }
