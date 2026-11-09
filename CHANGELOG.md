@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-11-09
 
 Major release. The public interface is renamed and reshaped so that one concept has one name, one job has one form, and one kind of failure has one error behaviour. The old forms are removed without deprecated aliases; `docs/en/migration-v2.md` shows each change as before and after code.
 
@@ -635,6 +635,7 @@ These correct previously buggy behavior and may be observable:
 Initial public feature set: interactive shell, subcommands, tab completion,
 color, tables, progress, prompts, logger, events, plugins, and pipes.
 
+[2.0.0]: https://github.com/libraz/node-cli/compare/v1.4.2...v2.0.0
 [1.4.2]: https://github.com/libraz/node-cli/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/libraz/node-cli/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/libraz/node-cli/compare/v1.3.3...v1.4.0
