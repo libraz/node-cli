@@ -1,6 +1,12 @@
 import type { CommandRegistry } from "../command/registry.js";
 import type { CommandRouter } from "../command/router.js";
-import { presentError } from "../errors.js";
+import {
+  describeReceived,
+  isCancellationError,
+  presentError,
+  toError,
+  usageError,
+} from "../errors.js";
 import { isTTY } from "../output/color.js";
 import { inputExhausted, type LineReader, openLineReader } from "../output/line-reader.js";
 import { releaseAll, runWithProgressScope } from "../output/progress.js";
@@ -11,6 +17,68 @@ import { History } from "./history.js";
 
 /** Milliseconds a SIGTERM leaves cancelled work to clean up before the shell exits. */
 const SIGTERM_GRACE_MS = 200;
+
+/** History policies a mode accepts. */
+const MODE_HISTORY_POLICIES = ["session", "none"] as const;
+
+/** Throws the usage error for one rejected argument or option, in Node's message form. */
+function reject(
+  kind: "type" | "range",
+  name: string,
+  noun: "argument" | "option",
+  subject: string,
+  expectation: string,
+  value: unknown,
+): never {
+  throw usageError(
+    kind,
+    kind === "type" ? "ERR_INVALID_ARG_TYPE" : "ERR_INVALID_ARG_VALUE",
+    `The "${name}" ${noun} of ${subject} must be ${expectation}. Received ${describeReceived(value, kind)}`,
+  );
+}
+
+/** Validates the options of {@link Shell.enterMode} before the shell changes state. */
+function checkModeOptions(options: unknown): void {
+  const subject = "Shell.enterMode()";
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    reject("type", "options", "argument", subject, "an object", options);
+  }
+  const { prompt, action, banner, completer, history } = options as Record<string, unknown>;
+  if (typeof prompt !== "string") reject("type", "prompt", "option", subject, "a string", prompt);
+  if (typeof action !== "function") {
+    reject("type", "action", "option", subject, "a function", action);
+  }
+  if (banner !== undefined && typeof banner !== "string") {
+    reject("type", "banner", "option", subject, "a string", banner);
+  }
+  if (
+    completer !== undefined &&
+    typeof completer !== "function" &&
+    !(Array.isArray(completer) && completer.every((c) => typeof c === "string"))
+  ) {
+    reject("type", "completer", "option", subject, "an array of strings or a function", completer);
+  }
+  if (history !== undefined && typeof history !== "string") {
+    reject(
+      "type",
+      "history",
+      "option",
+      subject,
+      `one of: ${MODE_HISTORY_POLICIES.join(", ")}`,
+      history,
+    );
+  }
+  if (history !== undefined && !(MODE_HISTORY_POLICIES as readonly unknown[]).includes(history)) {
+    reject(
+      "range",
+      "history",
+      "option",
+      subject,
+      `one of: ${MODE_HISTORY_POLICIES.join(", ")}`,
+      history,
+    );
+  }
+}
 
 /** Handler invoked with each line of input within a mode. */
 export type ModeAction = (input: string, ctx: ModeContext) => void | Promise<void>;
@@ -28,7 +96,7 @@ export interface ModeOptions {
    * can cancel cooperatively. A second Ctrl-C force-quits the process.
    */
   action: ModeAction;
-  /** Banner printed once when entering the mode. */
+  /** Banner printed once when entering the mode. Defaults to no banner: omitting it prints nothing. */
   banner?: string | undefined;
   /**
    * Tab-completion candidates inside the mode: a static list, or a
@@ -45,9 +113,18 @@ export interface ModeOptions {
  * The running interactive shell as a command action sees it through `ctx.shell`.
  */
 export interface Shell {
-  /** Changes the prompt; inside a mode the change applies after leaving it. */
+  /**
+   * Changes the prompt; inside a mode the change applies after leaving it.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `text` is not a string.
+   */
   setPrompt(text: string): this;
-  /** Enters a mode sub-REPL that routes every line to the mode's action. */
+  /**
+   * Enters a mode sub-REPL that routes every line to the mode's action.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `options` is not an object, `prompt` is not
+   * a string, `action` is not a function, `banner` is not a string, or `completer` is not an
+   * array of strings or a function.
+   * @throws {RangeError} ERR_INVALID_ARG_VALUE when `history` is neither `"session"` nor `"none"`.
+   */
   enterMode(options: ModeOptions): this;
   /** Leaves the current mode and returns to the command prompt. */
   exitMode(): this;
@@ -423,8 +500,11 @@ export class InteractiveShell implements Shell {
         },
       );
     } catch (err) {
-      // Only an interrupt or SIGTERM aborts this controller.
-      this.reportError(err, controller.signal.aborted);
+      // Only an interrupt or SIGTERM aborts this controller; a failure after
+      // that is still a failure unless it is the cancellation itself.
+      const cancelled = isCancellationError(err, controller.signal);
+      if (!cancelled) await this.router.emit("error", toError(err));
+      this.reportError(err, cancelled);
     } finally {
       this.modeController = undefined;
     }
@@ -455,8 +535,11 @@ export class InteractiveShell implements Shell {
    * the change applies after exiting the mode.
    *
    * @param text - The new prompt string.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `text` is not a string.
    */
   setPrompt(text: string): this {
+    if (typeof text !== "string")
+      reject("type", "text", "argument", "Shell.setPrompt()", "a string", text);
     this.promptStr = text;
     if (this.reader && !this.mode) {
       this.reader.rl.setPrompt(text);
@@ -471,8 +554,13 @@ export class InteractiveShell implements Shell {
    *
    * @param options - The mode options.
    * @returns The shell, so calls chain.
+   * @throws {TypeError} ERR_INVALID_ARG_TYPE when `options` is not an object, `prompt` is not
+   * a string, `action` is not a function, `banner` is not a string, or `completer` is not an
+   * array of strings or a function.
+   * @throws {RangeError} ERR_INVALID_ARG_VALUE when `history` is neither `"session"` nor `"none"`.
    */
   enterMode(options: ModeOptions): this {
+    checkModeOptions(options);
     this.mode = options;
     this.modeHistory = [];
     if (options.banner) {
