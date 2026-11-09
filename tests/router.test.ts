@@ -349,13 +349,13 @@ describe("top-level flags", () => {
       const viaFlag = await run([flag, "deploy"]);
       const viaHelp = await run(["help", "deploy"]);
       expect(viaFlag.failure).toBeUndefined();
-      expect(viaFlag.output).toContain("Usage: deploy <env> [options]");
+      expect(viaFlag.output).toContain("Usage: app deploy <env> [options]");
       expect(viaFlag.output).toBe(viaHelp.output);
     },
   );
 
   it("follows the help command for --help with several words", async () => {
-    expect((await run(["--help", "db", "migrate"])).output).toContain("Usage: db migrate");
+    expect((await run(["--help", "db", "migrate"])).output).toContain("Usage: app db migrate");
     const missing = await run(["--help", "db", "nope"]);
     expect(missing.failure).toMatchObject({ code: "COMMAND_NOT_FOUND" });
   });

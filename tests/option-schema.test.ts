@@ -344,7 +344,7 @@ describe("command validate failures", () => {
     expect(err).toMatchObject({ code: "VALIDATION_FAILED", exitCode: 64, cause });
     expect((err as ValidationError).optionName).toBeUndefined();
     expect((err as ValidationError).value).toBeUndefined();
-    expect((err as Error).message).toMatch(/^prod is locked\n\n {2}Usage: deploy <env>/);
+    expect((err as Error).message).toMatch(/^prod is locked\n\n {2}Usage: test deploy <env>/);
   });
 
   it("wraps a non-Error throw with its rendered message", async () => {

@@ -211,7 +211,7 @@ describe("raised through execLine", () => {
   });
 
   it("carries the command usage on every resolution failure", async () => {
-    const usage = "\n\n  Usage: deploy <env> [options]";
+    const usage = "\n\n  Usage: test deploy <env> [options]";
     const cases: [string, string][] = [
       ["deploy", "MISSING_ARGUMENT"],
       ["deploy prod extra --tag t", "EXTRA_ARGUMENT"],

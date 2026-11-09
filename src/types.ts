@@ -18,6 +18,9 @@ export interface ArgDef {
 
 // ── Option ──
 
+/** The built-in `OptionSchema.type` names; the `type` union is derived from it. */
+export const OPTION_TYPES = ["string", "number", "boolean", "string[]", "number[]"] as const;
+
 /**
  * Schema that describes the constraints and behavior of a command option.
  *
@@ -39,7 +42,7 @@ export interface OptionSchema {
    * The expected value type of the option. Defaults to `"string"` when the
    * flags carry a value placeholder and `"boolean"` when they do not.
    */
-  type?: "string" | "number" | "boolean" | "string[]" | "number[]" | undefined;
+  type?: (typeof OPTION_TYPES)[number] | undefined;
   /**
    * Extra one-character short names (`"p"` or `"-p"`). A long alias is written
    * in the flags string instead (`"--colour, --color"`). Defaults to none.
@@ -125,7 +128,8 @@ export type Action<
 /**
  * A completion provider that returns candidates for the word under the cursor
  * (`ctx.current`). May be synchronous or asynchronous; it is cut off when
- * `ctx.signal` aborts at the completion deadline.
+ * `ctx.signal` aborts at the completion deadline. A throw or rejection yields
+ * no candidates.
  */
 export type Completer = (ctx: CompletionContext) => readonly string[] | Promise<readonly string[]>;
 
@@ -142,8 +146,8 @@ export type CommandValidator<
 
 /**
  * A handler invoked when a running command is interrupted: Ctrl-C, an aborted
- * exec signal, or SIGTERM in the shell. It is not awaited; a rejection is
- * reported through the `error` event.
+ * exec signal, or SIGTERM in the shell. It is not awaited; a throw or rejection
+ * is reported through the `error` event.
  */
 export type CancelHandler<
   A extends object = Record<string, unknown>,
@@ -434,20 +438,30 @@ export type CheckedOptionSchema<
 
 /**
  * Map of CLI lifecycle event names to their handler signatures.
+ *
+ * Showing help or the version is not a command execution, so no spelling of it
+ * (`help`, `--help`, `-h`, `<cmd> --help`, a group without an action,
+ * `--version`, `-V`) fires `beforeExecute`, `afterExecute` or `commandError`.
+ * A `help` command the application registers itself is an ordinary command.
  */
 export interface CLIEventMap {
   /**
    * Fired before a command action is executed. A throw is reported through
    * `error` and the action still runs, unless it is a cancellation of
-   * `ctx.signal`, which cancels the command.
+   * `ctx.signal`, which cancels the command. Not fired for help or the
+   * version (see {@link CLIEventMap}).
    */
   beforeExecute: (ctx: CommandContext) => void | Promise<void>;
-  /** Fired after a command action completes successfully. */
+  /**
+   * Fired after a command action completes successfully. A throw is reported
+   * through `error`. Not fired for help or the version (see {@link CLIEventMap}).
+   */
   afterExecute: (ctx: CommandContext) => void | Promise<void>;
   /**
    * Fired when a resolved command fails during argument validation, option
    * resolution, custom validation, or its action handler. A cancellation is
-   * not a failure and does not fire it.
+   * not a failure and does not fire it, and neither does help or the version
+   * (see {@link CLIEventMap}). A throw is reported through `error`.
    */
   commandError: (error: Error, ctx: CommandContext) => void | Promise<void>;
   /**
@@ -455,7 +469,8 @@ export interface CLIEventMap {
    * occur before a command is resolved (e.g. command-not-found). Always fires
    * for command failures in addition to {@link CLIEventMap.commandError}, and
    * once for a failed asynchronous plugin initialization (`ERR_PLUGIN_FAILED`).
-   * A cancellation does not fire it.
+   * A cancellation does not fire it. A throw from an `error` handler is written
+   * to the execution's stderr as `Error in error handler: <message>`.
    */
   error: (error: Error) => void | Promise<void>;
   /**
@@ -465,8 +480,13 @@ export interface CLIEventMap {
    * ends or receives SIGTERM. `CLI.exec()` and `CLI.execLine()` never fire it. A process ended by a signal the
    * CLI does not handle (SIGTERM or SIGHUP in direct mode, SIGHUP in the shell)
    * runs neither this event nor cancel handlers.
+   *
+   * `exitCode` is the code `start()` resolves to: the failure's code, 130 or 143
+   * for a force quit or SIGTERM, otherwise `process.exitCode` (0 when unset).
+   * Only the first emission runs, so a later force quit does not change it. A
+   * throw is reported through `error`.
    */
-  exit: () => void | Promise<void>;
+  exit: (exitCode: number) => void | Promise<void>;
 }
 
 /**
@@ -523,15 +543,22 @@ export interface CommandContext<
    * This is a null-prototype record.
    */
   readonly options: O;
-  /** The original raw input string. */
+  /**
+   * The input as one string: the typed line (in a pipeline, this stage's
+   * segment), or `argv.join(" ")` for argv input, which is lossy; use
+   * `rawArgv` to recover the elements.
+   */
   readonly rawInput: string;
   /**
-   * The exact argv elements when the input was an array (`start()`, or `exec()`
-   * with an array); `null` when the input was a string. Unlike `rawInput`, this
-   * is reversible.
+   * The exact argv elements for `start()` and `exec()`; `null` for a command
+   * line (`execLine()` or the interactive shell). Unlike `rawInput`, this is
+   * reversible.
    */
   readonly rawArgv: readonly string[] | null;
-  /** The resolved command path (e.g. ["git", "commit"]). */
+  /**
+   * The canonical path of the resolved command, without the CLI name and with
+   * aliases replaced by their real names (e.g. `["db", "migrate"]`).
+   */
   readonly commandPath: readonly string[];
   /** The interactive shell instance, or null if running non-interactively. */
   readonly shell: Shell | null;
@@ -581,23 +608,35 @@ export interface PluginContext {
    * definition the same way as `cli.command()`. The same path merges into the
    * existing command; the returned builder types only what is declared
    * through it.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `definition` is not a string.
+   * @throws {Error} `ERR_INVALID_DEFINITION` for a malformed definition or a
+   *   command or argument name outside the name rule.
    */
   command<D extends string>(definition: D): CommandBuilderFor<D>;
   /**
-   * Registers an event listener. A repeated call adds another listener. An
-   * unknown event name throws a `RangeError` (`ERR_INVALID_ARG_VALUE`), a
-   * non-function handler a `TypeError` (`ERR_INVALID_ARG_TYPE`).
+   * Registers an event listener. A repeated call adds another listener.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown event name.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `handler` is not a function.
    */
   on<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
-  /** Removes a previously registered event listener. */
+  /**
+   * Removes a previously registered event listener.
+   * @throws {RangeError} `ERR_INVALID_ARG_VALUE` for an unknown event name.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `handler` is not a function.
+   */
   off<K extends keyof CLIEventMap>(event: K, handler: CLIEventMap[K]): this;
-  /** Sets the fallback handler. A repeated call replaces the previous handler. */
+  /**
+   * Sets the fallback handler. A repeated call replaces the previous handler.
+   * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `handler` is not a function.
+   */
   fallback(handler: FallbackHandler): this;
 }
 
 /**
- * A plugin body. A synchronous plugin runs inside `use()`; an asynchronous one
- * is awaited before the first command runs.
+ * A plugin body. A synchronous plugin runs inside `use()`, and its throw
+ * propagates from `use()`; an asynchronous one is awaited before the first
+ * command runs, and its rejection fails every later run with
+ * `ERR_PLUGIN_FAILED`.
  */
 export type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
@@ -613,7 +652,10 @@ export interface CompletionContext {
   readonly fullLine: string;
   /** The current word (token) under the cursor; `""` at a word boundary. */
   readonly current: string;
-  /** The resolved command path up to the current input. */
+  /**
+   * The canonical path of the command resolved up to the current input,
+   * without the CLI name and with aliases replaced by their real names.
+   */
   readonly commandPath: readonly string[];
   /**
    * Positional arguments typed so far, keyed by their camelCase name: a raw
@@ -650,16 +692,24 @@ export interface CLIOptions {
   name: string;
   /**
    * The version string printed by `--version` and `-V`. Defaults to none, in
-   * which case both flags are unknown options.
+   * which case both flags are unknown options. A non-string throws a
+   * `TypeError` (`ERR_INVALID_ARG_TYPE`).
    */
   version?: string | undefined;
-  /** The interactive prompt string. Defaults to `"> "`. */
+  /**
+   * The interactive prompt string. Defaults to `"> "`. A non-string throws a
+   * `TypeError` (`ERR_INVALID_ARG_TYPE`).
+   */
   prompt?: string | undefined;
-  /** A short description shown in the help header. Defaults to none. */
+  /**
+   * A short description shown in the help header. Defaults to none. A
+   * non-string throws a `TypeError` (`ERR_INVALID_ARG_TYPE`).
+   */
   description?: string | undefined;
   /**
    * Banner text displayed when the interactive shell starts. Defaults to
-   * `"<name> v<version>"`, or `"<name>"` without a version. Set to "" to suppress.
+   * `"<name> v<version>"`, or `"<name>"` without a version. Set to "" to
+   * suppress. A non-string throws a `TypeError` (`ERR_INVALID_ARG_TYPE`).
    */
   banner?: string | undefined;
   /**

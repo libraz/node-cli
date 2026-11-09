@@ -38,7 +38,9 @@ export class HelpGenerator {
    * Generates the top-level help index listing all available commands.
    *
    * @param options.interactive - Whether the index is shown inside the
-   *   interactive shell, which adds the shell's own commands. Defaults to false.
+   *   interactive shell, which adds the shell's own commands. Outside it, a
+   *   named CLI adds a usage line and names the program in the footer.
+   *   Defaults to false.
    * @returns A formatted multi-line string with command names and descriptions.
    */
   generateIndex(options: { interactive?: boolean } = {}): string {
@@ -66,6 +68,8 @@ export class HelpGenerator {
     if (name || description) {
       lines.push("");
     }
+    const program = this.programName(options);
+    if (program) lines.push(`Usage: ${program} <command> [options]`, "");
 
     lines.push("Available commands:", "");
 
@@ -86,7 +90,7 @@ export class HelpGenerator {
     appendAlignedEntries(lines, optionEntries);
     lines.push("");
     if (shellLabel) lines.push(shellLabel);
-    lines.push('Type "help <command>" for more information.');
+    lines.push(this.moreInformation("", options));
 
     return lines.join("\n");
   }
@@ -99,10 +103,13 @@ export class HelpGenerator {
    *
    * @param commandPath - The sequence of command/subcommand names
    *   (e.g. `["remote", "add"]`).
+   * @param options.interactive - Whether the help is shown inside the
+   *   interactive shell. Outside it, the usage line and the footer of a named
+   *   CLI start with the program name. Defaults to false.
    * @returns A formatted multi-line help string, or an "Unknown command"
    *   message if the path cannot be resolved.
    */
-  generateCommand(commandPath: string[]): string {
+  generateCommand(commandPath: string[], options: { interactive?: boolean } = {}): string {
     // Resolve the way dispatch would: a runnable command that takes positional
     // arguments swallows every following token, so its subcommands have no help
     // page to show even though the registry still holds them.
@@ -118,7 +125,7 @@ export class HelpGenerator {
     const lines: string[] = [];
 
     // Usage line — use the canonical command path so aliases resolve to the real name.
-    lines.push(`Usage: ${formatUsage(this.registry.getCommandPath(command), command)}`);
+    lines.push(`Usage: ${this.formatUsageFor(command, options)}`);
 
     // Description
     if (command.description) {
@@ -151,7 +158,9 @@ export class HelpGenerator {
     if (!bindsHelp.short) helpForms.push("-h");
     if (!bindsHelp.long) helpForms.push("--help");
     if (helpForms.length > 0) {
-      optionEntries.push([helpForms.join(", "), "Show help for this command"]);
+      // A lone --help takes the short-flag indent the other long-only entries get.
+      const flags = helpForms.length === 1 && bindsHelp.short ? "    --help" : helpForms.join(", ");
+      optionEntries.push([flags, "Show help for this command"]);
     }
     if (optionEntries.length > 0) {
       lines.push("", "Options:");
@@ -171,10 +180,38 @@ export class HelpGenerator {
       });
       lines.push("", "Commands:");
       appendAlignedEntries(lines, subEntries);
-      lines.push("", `Type "help ${commandPath.join(" ")} <command>" for more information.`);
+      lines.push("", this.moreInformation(`${commandPath.join(" ")} `, options));
     }
 
     return lines.join("\n");
+  }
+
+  /**
+   * Formats a command's usage string as the help shows it: prefixed with the
+   * program name outside the interactive shell when the CLI has a name.
+   *
+   * @param command - The command definition; its canonical path is used.
+   * @param options.interactive - Whether the usage is shown inside the
+   *   interactive shell. Defaults to false.
+   * @returns The usage string, without the `Usage: ` label.
+   */
+  formatUsageFor(command: CommandDefinition, options: { interactive?: boolean } = {}): string {
+    const usage = formatUsage(this.registry.getCommandPath(command), command);
+    const program = this.programName(options);
+    return program ? `${program} ${usage}` : usage;
+  }
+
+  /** The program name that prefixes direct-run help, or undefined in the shell or without a name. */
+  private programName(options: { interactive?: boolean }): string | undefined {
+    return options.interactive ? undefined : this.metadata.name || undefined;
+  }
+
+  /** The footer pointing at `help`, for the commands beneath `prefix` (empty or ending in a space). */
+  private moreInformation(prefix: string, options: { interactive?: boolean }): string {
+    const program = this.programName(options);
+    return program
+      ? `Run "${program} help ${prefix}<command>" for more information.`
+      : `Type "help ${prefix}<command>" for more information.`;
   }
 }
 

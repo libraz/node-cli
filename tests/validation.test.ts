@@ -110,7 +110,7 @@ describe("command validate failure shape", () => {
       code: "VALIDATION_FAILED",
       exitCode: 64,
       cause,
-      usage: "deploy <env> [options]",
+      usage: "test deploy <env> [options]",
     });
   });
 

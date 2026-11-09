@@ -32,6 +32,7 @@ import { progress } from "../src/output/progress.js";
 import { maskInput, prompt } from "../src/output/prompt.js";
 import { table } from "../src/output/table.js";
 import { ShellCompleter } from "../src/shell/completion.js";
+import type { Shell } from "../src/shell/repl.js";
 import type { CommandContext } from "../src/types.js";
 import {
   createMockStdin,
@@ -810,12 +811,24 @@ describe("logging with non-string messages", () => {
 // ── Shell commands the help footer advertises ──
 
 describe("help for the shell's own commands", () => {
-  it("describes exit and quit instead of failing as unknown", async () => {
+  it("describes exit and quit inside the shell only", async () => {
     for (const name of ["exit", "quit"]) {
       const cli = createCLI({ name: "test" });
+      const router = (cli as unknown as { router: CommandRouter }).router;
+      const inShell = createMockStdout();
+      await router.execute(`help ${name}`, {
+        shell: {} as Shell,
+        stdout: inShell,
+        stderr: createMockStdout(),
+      });
+      expect(inShell.getOutput()).toContain(`Usage: ${name}`);
+
       const out = createMockStdout();
-      await cli.execLine(`help ${name}`, { stdout: out, stderr: out });
-      expect(out.getOutput()).toContain(`Usage: ${name}`);
+      const error = await cli
+        .execLine(`help ${name}`, { stdout: out, stderr: out })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(CommandNotFoundError);
+      expect(error).toHaveProperty("input", name);
     }
   });
 

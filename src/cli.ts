@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { CommandBuilder, type CommandBuilderFor } from "./command/builder.js";
 import { CommandRegistry, visibleSubcommands } from "./command/registry.js";
-import { CommandRouter } from "./command/router.js";
+import { CommandRouter, markBuiltinAction } from "./command/router.js";
 import {
   CancelledError,
   CommandNotFoundError,
@@ -39,6 +39,14 @@ function reject(
     kind === "type" ? "ERR_INVALID_ARG_TYPE" : "ERR_INVALID_ARG_VALUE",
     `The "${name}" ${noun} of ${subject} must be ${expectation}. Received ${describeReceived(value, kind)}`,
   );
+}
+
+/** Validates an optional string option of `createCLI()`. */
+function checkOptionalString(value: unknown, name: string): string | undefined {
+  if (value !== undefined && typeof value !== "string") {
+    reject("type", name, "option", "createCLI()", "a string", value);
+  }
+  return value;
 }
 
 /** Rejects a callback argument that is not a function. */
@@ -170,8 +178,9 @@ export class CLI {
    * a type only.
    * @param options - Configuration options for the CLI application.
    * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a non-object `options`, a
-   *   non-string `name`, a non-number `historySize`, a non-function
-   *   `historyFilter`, or an empty or non-string `historyFile`.
+   *   non-string `name`, `version`, `prompt`, `description` or `banner`, a
+   *   non-number `historySize`, a non-function `historyFilter`, or an empty or
+   *   non-string `historyFile`.
    * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `name` is empty or does
    *   not match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`, or `historySize` is not a
    *   non-negative safe integer.
@@ -181,9 +190,10 @@ export class CLI {
       reject("type", "options", "argument", "createCLI()", "an object", options);
     }
     this.name = checkName(options.name);
-    this.version = options.version;
-    this.promptStr = options.prompt ?? "> ";
-    this.bannerStr = options.banner;
+    this.version = checkOptionalString(options.version, "version");
+    this.promptStr = checkOptionalString(options.prompt, "prompt") ?? "> ";
+    const description = checkOptionalString(options.description, "description");
+    this.bannerStr = checkOptionalString(options.banner, "banner");
     this.historyFile = resolveHistoryFile(options.historyFile, this.name);
     this.historySizeLimit = checkHistorySize(options.historySize);
     this.historyFilterFn = checkHistoryFilter(options.historyFilter);
@@ -193,7 +203,7 @@ export class CLI {
     this.helpGenerator = new HelpGenerator(this.registry, {
       name: this.name,
       version: this.version,
-      description: options.description,
+      description,
     });
     this.router.setHelpGenerator(this.helpGenerator);
     this.router.setVersion(this.version);
@@ -367,8 +377,11 @@ export class CLI {
    * Programmatically executes a command from argv, as if typed by the user. The
    * elements are used as is: nothing is tokenized and `|` is an ordinary
    * character, so untrusted data belongs here rather than in a command line
-   * for {@link CLI.execLine}. `[]` resolves without doing anything. A failure
-   * rejects the returned promise.
+   * for {@link CLI.execLine}. A leading `"--"` ends the options before the
+   * command and is removed once before the command is resolved, so
+   * `exec(["--", "greet", "x"])` runs `greet x`. An argv with no command left
+   * (`[]`, only empty strings, or a lone `"--"`) resolves without doing
+   * anything, even with a fallback. A failure rejects the returned promise.
    *
    * Cancellation goes through `options.signal` only; the process's SIGINT is
    * left to the host. An already-aborted signal rejects before anything runs,
@@ -395,8 +408,10 @@ export class CLI {
   /**
    * Programmatically executes a shell-language command line, as if typed at
    * the prompt: the line is tokenized (single quotes, double quotes and
-   * backslashes) and split at `|` into a pipeline. `""` resolves without doing
-   * anything. A failure rejects the returned promise. Untrusted data must not
+   * backslashes) and split at `|` into a pipeline. A leading `--` is removed
+   * once before the command is resolved, and a line with no command left (`""`
+   * or `"--"`) resolves without doing anything, even with a fallback. A
+   * failure rejects the returned promise. Untrusted data must not
    * be interpolated into the line (a `|` in it starts another command); pass
    * it through `exec([...])` instead. Cancellation behaves as for
    * {@link CLI.exec}; every stage of a pipeline shares the signal.
@@ -404,8 +419,9 @@ export class CLI {
    * @param options - Optional input/output streams and cancellation signal.
    * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `line` is not a string, or
    *   a stream or the signal in `options` has the wrong type.
-   * @throws {ParseError} `PARSE_FAILED` for an unclosed quote, unless a
-   *   fallback handler takes the line.
+   * @throws {ParseError} `PARSE_FAILED` for an unclosed quote, an empty or
+   *   trailing pipe segment, or a standalone `<`/`>` redirection operator,
+   *   unless a fallback handler takes the line.
    * @throws {CancelledError} `CANCELLED` when the signal aborts the execution.
    * @example
    * ```ts
@@ -431,8 +447,10 @@ export class CLI {
    * otherwise prints the help index. Errors are reported to stderr rather than
    * rejected.
    * @param argv - Command-line arguments. Defaults to `process.argv.slice(2)`.
-   * @returns The exit code, which is also set on `process.exitCode`. After an
-   *   interactive session, the value `process.exitCode` holds then (0 if unset).
+   * @returns The code the process will exit with: the failure's code after a
+   *   failed or interrupted direct-mode command (which is also set on
+   *   `process.exitCode`), otherwise the current `process.exitCode` (0 when
+   *   unset). A successful command leaves `process.exitCode` unchanged.
    * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `argv` is not an array of strings.
    * @throws {Error} `ERR_ALREADY_STARTED` when called a second time.
    * @example
@@ -561,30 +579,39 @@ export class CLI {
         }
         return names.filter((name) => name.startsWith(current));
       })
-      .action((ctx) => {
-        const commandParts = ctx.args.command as string[] | undefined;
+      .action(
+        markBuiltinAction((ctx) => {
+          const commandParts = ctx.args.command as string[] | undefined;
+          const interactive = ctx.shell != null;
 
-        if (!commandParts || commandParts.length === 0) {
-          ctx.stdout.write(`${helpGenerator.generateIndex({ interactive: ctx.shell != null })}\n`);
-          return;
-        }
+          if (!commandParts || commandParts.length === 0) {
+            ctx.stdout.write(`${helpGenerator.generateIndex({ interactive })}\n`);
+            return;
+          }
 
-        // Unknown target: report on stderr with a non-zero exit, matching how a
-        // bare unrecognized command is surfaced (not a silent stdout + exit 0).
-        // The path is resolved the way dispatch would, so help never renders a
-        // page for a subcommand the parser could not reach. The shell's own
-        // commands have no registry entry, yet the generated help footer
-        // advertises them, so they must resolve here too.
-        const match = registry.matchCommandPath(commandParts);
-        if (
-          match?.consumed !== commandParts.length &&
-          !(commandParts.length === 1 && isShellCommand(commandParts[0]))
-        ) {
-          throw new CommandNotFoundError(commandParts.join(" "));
-        }
+          // Resolve the way dispatch would, so help never renders a page for a
+          // subcommand the parser could not reach, and report a miss the way the
+          // router does: the deepest match's canonical path plus the first
+          // unmatched word, with the commands visible there. The shell's own
+          // commands have no registry entry, yet the shell's help footer
+          // advertises them, so they resolve there and only there.
+          const match = registry.matchCommandPath(commandParts);
+          const shellCommand =
+            interactive && commandParts.length === 1 && isShellCommand(commandParts[0]);
+          if (match?.consumed !== commandParts.length && !shellCommand) {
+            const consumed = match?.consumed ?? 0;
+            const parent = match ? registry.getCommandPath(match.command) : [];
+            const visible = match ? visibleSubcommands(match.command) : registry.visibleTopLevel();
+            const available = visible.map((command) => command.name).sort();
+            throw new CommandNotFoundError(
+              [...parent, commandParts[consumed]].join(" "),
+              available.length > 0 ? { available } : {},
+            );
+          }
 
-        ctx.stdout.write(`${helpGenerator.generateCommand(commandParts)}\n`);
-      });
+          ctx.stdout.write(`${helpGenerator.generateCommand(commandParts, { interactive })}\n`);
+        }),
+      );
   }
 }
 
@@ -592,9 +619,13 @@ export class CLI {
  * Factory function that creates and returns a new CLI instance.
  * @param options - Configuration options for the CLI application; `name` is required.
  * @returns A new CLI instance.
- * @throws {TypeError} `ERR_INVALID_ARG_TYPE` when `name` is not a string.
+ * @throws {TypeError} `ERR_INVALID_ARG_TYPE` for a non-object `options`, a
+ *   non-string `name`, `version`, `prompt`, `description` or `banner`, a
+ *   non-number `historySize`, a non-function `historyFilter`, or an empty or
+ *   non-string `historyFile`.
  * @throws {RangeError} `ERR_INVALID_ARG_VALUE` when `name` is empty or does not
- *   match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`.
+ *   match `/^[A-Za-z0-9][A-Za-z0-9._-]*$/`, or `historySize` is not a
+ *   non-negative safe integer.
  * @example
  * ```ts
  * const cli = createCLI({ name: "mytool", version: "1.0.0" });

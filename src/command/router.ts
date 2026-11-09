@@ -30,7 +30,7 @@ import type {
   FallbackHandler,
   MutableCommandContext,
 } from "../types.js";
-import { parse, splitPipes, toCamelKey, tokenize } from "./parser.js";
+import { parse, scanWords, splitPipes, toCamelKey, tokenize } from "./parser.js";
 import { type CommandRegistry, visibleSubcommands } from "./registry.js";
 
 /**
@@ -92,6 +92,35 @@ function isFlagToken(token: string): boolean {
 function normalizeFlag(token: string): string {
   if (token.startsWith("--")) return token.split("=", 1)[0];
   return token.slice(0, 2);
+}
+
+type AnyFunction = (...args: never[]) => unknown;
+
+/** Action functions of the framework's own commands (the built-in `help`). */
+const builtinActions = new WeakSet<AnyFunction>();
+
+/**
+ * Marks `fn` as the action of a framework command: showing help is not a
+ * command execution, so the router fires no command events for it. The mark
+ * is on the function, so an application that replaces the action loses it.
+ *
+ * @param fn - The action function to mark.
+ * @returns The same function.
+ */
+export function markBuiltinAction<F extends AnyFunction>(fn: F): F {
+  builtinActions.add(fn);
+  return fn;
+}
+
+/** True when `fn` was marked by {@link markBuiltinAction}. */
+export function isBuiltinAction(fn: unknown): boolean {
+  return typeof fn === "function" && builtinActions.has(fn as AnyFunction);
+}
+
+/** The part of a command line after its first word, or `""` when it has only one. */
+function afterFirstWord(line: string): string {
+  const second = scanWords(line).words[1];
+  return second ? line.slice(second.start) : "";
 }
 
 /** A cancellation as the one class callers see: unchanged, or wrapped once with the signal's reason. */
@@ -237,10 +266,14 @@ export class CommandRouter {
   /**
    * Emits `exit` once for this router. Every path that ends a session calls
    * this; a later call (a force quit racing a settling action, a SIGTERM during
-   * shell teardown) shares the first emission instead of running listeners again.
+   * shell teardown) shares the first emission instead of running listeners
+   * again, so the first call's code is the one listeners receive.
+   *
+   * @param code - The exit code to report. Defaults to `process.exitCode` at
+   *   the time of the call, or 0 when it is unset.
    */
-  emitExit(): Promise<void> {
-    this.exitEmission ??= this.emit("exit");
+  emitExit(code?: number): Promise<void> {
+    this.exitEmission ??= this.emit("exit", code ?? Number(process.exitCode ?? 0));
     return this.exitEmission;
   }
 
@@ -257,7 +290,7 @@ export class CommandRouter {
     const teardown = Promise.resolve()
       .then(cleanup)
       .catch(() => {})
-      .then(() => this.emitExit())
+      .then(() => this.emitExit(code))
       .catch(() => {});
     // Not unref'd: a hung listener with nothing else pending must still end in
     // `code`, not in a natural exit with whatever code was set.
@@ -535,13 +568,16 @@ export class CommandRouter {
       cancellationScope,
       expectedCancellation,
     } = options;
+    // The input as given; a leading `--` removed below stays in the raw forms.
+    const rawInput = typeof input === "string" ? input : input.join(" ");
+    const rawArgv = typeof input === "string" ? null : [...input];
     // No command is resolved for a fallback, so it gets the execution's own streams and signal.
     const fallbackContext = (): FallbackContext => ({
       stdin,
       stdout,
       stderr,
       signal: signal ?? new AbortController().signal,
-      rawArgv: typeof input === "string" ? null : [...input],
+      rawArgv: rawArgv && [...rawArgv],
     });
     // Check for pipe chains (only for string input)
     if (typeof input === "string") {
@@ -580,6 +616,11 @@ export class CommandRouter {
       await this.emit("error", error);
       throw error;
     }
+    // A leading `--` ends the options before the command; it is not a command name.
+    if (tokens[0] === "--") {
+      tokens = tokens.slice(1);
+      input = typeof input === "string" ? afterFirstWord(input) : tokens;
+    }
     if (this.version !== undefined && tokens.length === 1) {
       if (tokens[0] === "--version" || tokens[0] === "-V") {
         stdout.write(`${this.version}\n`);
@@ -587,9 +628,10 @@ export class CommandRouter {
       }
     }
     // Top-level --help / -h: bare, the index; followed by words, `help <words>`.
+    const interactive = shell != null;
     if (this.helpGenerator && (tokens[0] === "--help" || tokens[0] === "-h")) {
       if (tokens.length === 1) {
-        stdout.write(`${this.helpGenerator.generateIndex({ interactive: shell != null })}\n`);
+        stdout.write(`${this.helpGenerator.generateIndex({ interactive })}\n`);
         return;
       }
       await this.executeInternal(["help", ...tokens.slice(1)], options);
@@ -600,25 +642,26 @@ export class CommandRouter {
     // option-syntax failures on a known command honor the documented
     // commandError contract even though parse() cannot return a partial result.
     const preliminaryMatch = this.registry.matchCommandPath(tokens);
-    // Every resolution error carries the usage line of the matched command; the
-    // canonical path keeps it identical to the help output.
+    // Every resolution error carries the usage line of the matched command,
+    // identical to the one its help shows.
     const usage = preliminaryMatch
-      ? formatUsage(
+      ? (this.helpGenerator?.formatUsageFor(preliminaryMatch.command, { interactive }) ??
+        formatUsage(
           this.registry.getCommandPath(preliminaryMatch.command),
           preliminaryMatch.command,
-        )
+        ))
       : undefined;
     let result: ReturnType<typeof parse>;
     try {
       result = parse(input, this.registry, { usage });
     } catch (err) {
       const error = toError(err);
-      if (preliminaryMatch) {
+      if (preliminaryMatch && !isBuiltinAction(preliminaryMatch.command.action)) {
         const command = preliminaryMatch.command;
         const ctx = this.createContext({
           command,
-          rawInput: typeof input === "string" ? input : input.join(" "),
-          rawArgv: typeof input === "string" ? null : [...input],
+          rawInput,
+          rawArgv,
           shell,
           stdin,
           stdout,
@@ -633,13 +676,13 @@ export class CommandRouter {
 
     // Empty input
     if (result.commandPath.length === 0) {
-      const rawInput = typeof input === "string" ? input : input.join(" ");
-      if (rawInput.trim().length > 0) {
+      const remaining = typeof input === "string" ? input : input.join(" ");
+      if (remaining.trim().length > 0) {
         if (this.catchHandler) {
           await this.runCatchHandler(this.catchHandler, rawInput, fallbackContext());
           return;
         }
-        const first = tokens[0] ?? rawInput.trim().split(/\s+/)[0];
+        const first = tokens[0] ?? remaining.trim().split(/\s+/)[0];
         let err: Error;
         if (this.version !== undefined && (first === "--version" || first === "-V")) {
           err = new ExtraArgumentError(tokens.slice(1));
@@ -667,17 +710,15 @@ export class CommandRouter {
     // current child count does not change that: a group registered before its
     // children, or a placeholder that has none yet, is still a group.
     if (!command.action && result.extraArgs?.length) {
-      const rawInput = typeof input === "string" ? input : input.join(" ");
       if (this.catchHandler) {
         await this.runCatchHandler(this.catchHandler, rawInput, fallbackContext());
         return;
       }
       const path = [...this.registry.getCommandPath(command), result.extraArgs[0]].join(" ");
-      const err = new CommandNotFoundError(path, {
-        available: visibleSubcommands(command)
-          .map((sub) => sub.name)
-          .sort(),
-      });
+      const available = visibleSubcommands(command)
+        .map((sub) => sub.name)
+        .sort();
+      const err = new CommandNotFoundError(path, available.length > 0 ? { available } : {});
       await this.emit("error", err);
       throw err;
     }
@@ -685,7 +726,7 @@ export class CommandRouter {
     // Check --help flag
     if (result.builtInHelp) {
       if (this.helpGenerator) {
-        const helpText = this.helpGenerator.generateCommand(result.commandPath);
+        const helpText = this.helpGenerator.generateCommand(result.commandPath, { interactive });
         stdout.write(`${helpText}\n`);
       }
       return;
@@ -694,7 +735,7 @@ export class CommandRouter {
     // Group command with no action → show help
     if (!command.action && (!result.extraArgs || result.extraArgs.length === 0)) {
       if (this.helpGenerator) {
-        const helpText = this.helpGenerator.generateCommand(result.commandPath);
+        const helpText = this.helpGenerator.generateCommand(result.commandPath, { interactive });
         stdout.write(`${helpText}\n`);
       }
       return;
@@ -707,8 +748,8 @@ export class CommandRouter {
     const ctx = this.createContext({
       command,
       args: result.args,
-      rawInput: result.rawInput,
-      rawArgv: result.rawArgv,
+      rawInput,
+      rawArgv,
       shell,
       stdin,
       stdout,
@@ -719,6 +760,8 @@ export class CommandRouter {
     // A command whose signal is already aborted never starts, so it has nothing to cancel.
     if (signal?.aborted) throw new CancelledError({ cause: signal.reason });
 
+    // Showing help is not a command execution, so it fires no command events.
+    const builtin = isBuiltinAction(command.action);
     const activeEntry = { command, ctx, controller };
     this.active.add(activeEntry);
     cancellationScope?.add(activeEntry);
@@ -764,20 +807,21 @@ export class CommandRouter {
         }
       }
 
-      await this.emit("beforeExecute", ctx);
+      if (!builtin) await this.emit("beforeExecute", ctx);
 
       await command.action(ctx);
-      await this.emit("afterExecute", ctx);
+      if (!builtin) await this.emit("afterExecute", ctx);
     } catch (err) {
       const error = toError(err);
       const expected = expectedCancellation?.();
+      // The raw value decides cancellation, so a non-Error signal reason still matches by identity.
       const isExpectedCancellation =
         expected !== undefined &&
-        (error === expected || isPipelineStop(error) || isCancellationError(error, ctx.signal));
+        (error === expected || isPipelineStop(err) || isCancellationError(err, ctx.signal));
       if (isExpectedCancellation) throw error;
       // A cancellation is not a failure: no events, and one class for the caller.
-      if (isCancellationError(error, ctx.signal)) throw asCancelled(error, ctx.signal);
-      await this.emit("commandError", error, ctx);
+      if (isCancellationError(err, ctx.signal)) throw asCancelled(err, ctx.signal);
+      if (!builtin) await this.emit("commandError", error, ctx);
       await this.emit("error", error);
       throw error;
     } finally {
