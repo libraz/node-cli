@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-11-23
+
+A metadata release. The runtime code, the type declarations and the exported surface are identical to 2.0.0.
+
+### Changed
+
+- The npm package lists more search keywords: `cli-framework`, `argument-parser`, `subcommands`, `tab-completion`, `autocomplete`, `progress-bar` and `spinner`.
+
 ## [2.0.0] - 2026-11-10
 
 Major release. The public interface is renamed and reshaped so that one concept has one name, one job has one form, and one kind of failure has one error behaviour. The old forms are removed without deprecated aliases; `docs/en/migration-v2.md` shows each change as before and after code.
@@ -645,6 +653,7 @@ These correct previously buggy behavior and may be observable:
 Initial public feature set: interactive shell, subcommands, tab completion,
 color, tables, progress, prompts, logger, events, plugins, and pipes.
 
+[2.0.1]: https://github.com/libraz/node-cli/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/libraz/node-cli/compare/v1.4.2...v2.0.0
 [1.4.2]: https://github.com/libraz/node-cli/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/libraz/node-cli/compare/v1.4.0...v1.4.1
