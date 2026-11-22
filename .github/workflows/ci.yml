@@ -57,9 +57,9 @@ jobs:
 
       # The npm the publish workflow uses, so its git-install smoke runs here first.
       - if: matrix.node == 26
-        run: npm install -g npm@12.2.2
+        run: npm install -g npm@12.2.3
       - run: corepack enable
-      - run: corepack prepare yarn@4.18.1 --activate
+      - run: corepack prepare yarn@4.19.0 --activate
 
       # v6.1.0
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
